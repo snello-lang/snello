@@ -14,11 +14,7 @@ import (
 // element, and an elided composite literal its type. It is a hint, not
 // a check; the caller decides whether the result fits.
 func (c *Checker) expr(e ast.Expr, expected Type) operand {
-	c.depth++
 	op := c.exprInternal(e, expected)
-	if c.depth--; c.depth == 0 {
-		c.temps = c.temps[:0] // what the full expression lent is given back
-	}
 
 	if op.typ == Typ[Invalid] {
 		return invalidOperand // reported where the type went wrong; never again
@@ -121,12 +117,6 @@ func (c *Checker) ident(e *ast.Ident, expected Type) operand {
 			return invalidOperand // declared with an error
 		}
 
-		if !c.noUse || c.inner {
-			c.flowUse(obj, e.Pos()) // a use keeps what the variable holds lent; assigning the whole variable is not one
-		}
-
-		c.capture(obj, byRef)
-		c.checkUseVar(e, obj)
 		return operand{variable, c.refine(obj.typ), obj, nil}
 	case *Const:
 		c.checkConst(obj) // a top-level constant is checked the first time it is needed
@@ -260,7 +250,6 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 				}
 
 				c.recordUse(e.Sel, f)
-				c.checkUse(e)
 				c.markPart(e, e.X, x) // row().name lives in the row the statement holds
 				return operand{m, f.typ, f, nil}
 			}
@@ -352,7 +341,6 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 
 	if f != nil {
 		c.recordUse(e.Sel, f)
-		c.checkUse(e)
 		return operand{m, f.typ, f, nil}
 	}
 
@@ -386,8 +374,6 @@ func (c *Checker) receiver(e *ast.SelectorExpr, x operand, sig *Signature) {
 		c.takeValue(e.X, x, sig.recv.typ)
 		return
 	}
-
-	c.checkUse(e.X)
 
 	if r.mut && x.mode == borrowed {
 		c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut through a ref "+c.throughWhat(e.X))
@@ -662,35 +648,28 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 	switch t := base.Underlying().(type) {
 	case *Slice:
 		c.intIndex(e.Index)
-		c.checkUse(e)
 		c.markPart(e, e.X, x) // row().tags[0] lives in the row the statement holds
 		return operand{m, t.elem, nil, nil}
 	case *Array:
 		c.intIndex(e.Index)
-		c.checkUse(e)
 		c.markPart(e, e.X, x)
 		return operand{m, t.elem, nil, nil}
 	case *Map:
 		if c.noUse { // m[k] = v: the map keeps the key, taken as it is evaluated, before the value
-			typing := c.typingPlace
-			c.typingPlace = false
-			c.assign(c.indexOperand(e.Index, t.key), t.key, e.Index.Pos(), "map key")
-			c.typingPlace = typing
+			c.assign(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
 			if wasInner { // m[k].f = v writes part of an entry a missing key makes whole from the zero value
 				c.zeroWrite(e, t)
 			}
 		} else {
-			c.fits(c.indexOperand(e.Index, t.key), t.key, e.Index.Pos(), "map key")
+			c.fits(c.operandOf(e.Index, t.key), t.key, e.Index.Pos(), "map key")
 			c.zeroRead(e, t)
 		}
 
-		c.checkUse(e)
 		c.markPart(e, e.X, x)
 		return operand{m, t.value, nil, nil}
 	case *Basic:
 		if t.kind == String {
 			c.intIndex(e.Index)
-			c.checkUse(e)
 			c.stringByte = e
 			return operand{value, aliases[0], nil, nil} // a byte, by that name
 		}
@@ -703,7 +682,7 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 // intIndex checks an index expression, which may be of any integer
 // type, including a declared one such as NodeID.
 func (c *Checker) intIndex(e ast.Expr) {
-	op := c.indexOperand(e, Typ[Int])
+	op := c.operandOf(e, Typ[Int])
 	if op.mode != invalid && !hasInfo(valueType(op), IsInteger) {
 		c.errorf(e.Pos(), "index must be an integer, not "+op.typ.String())
 	}
@@ -870,7 +849,6 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 			t = r.elem // a borrow of a borrow is a borrow of the value
 		}
 
-		c.lend(e.X, e.Op == token.MUT)
 		c.lentMode = x.mode
 		if isMut(x.typ) {
 			c.lentMode = mutBorrowed // a mut borrow lent on lends the place it borrows
@@ -893,7 +871,6 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 			return invalidOperand
 		}
 
-		c.maybeMove(x, valueType(x)) // &x moves x to the heap
 		return operand{value, NewPointer(valueType(x)), nil, nil}
 	case token.MUL:
 		x := c.operandOf(e.X, nil) // reaching through p reads p, even to write what it holds
@@ -990,11 +967,7 @@ func (c *Checker) binary(e *ast.BinaryExpr, expected Type) operand {
 		}
 
 		if e.Op == token.LAND || e.Op == token.LOR {
-			f := c.forkAt()
-			c.branchEnd(&f) // the left decides, and the right is never evaluated
 			y = c.expr(e.Y, hintOf(x))
-			c.branchEnd(&f)
-			c.joinAt(&f, true)
 		} else {
 			y = c.expr(e.Y, hintOf(x))
 		}
@@ -1067,13 +1040,11 @@ func (c *Checker) operatorCall(e *ast.BinaryExpr, x operand, fn *Func) operand {
 // up, since it is not the borrower's to give. The operand is read
 // first, as any use is.
 func (c *Checker) takeValue(xe ast.Expr, x operand, recv Type) {
-	c.checkUse(xe)
 	if isBorrow(x.typ) && !IsCopy(readType(x)) {
 		c.errorf(xe.Pos(), "cannot move "+exprText(xe)+" out of a borrow")
 		return
 	}
 
-	c.maybeMove(x, recv)
 }
 
 // coalesce checks x ?? else. x is an option or a Result, possibly
@@ -1112,18 +1083,9 @@ func (c *Checker) coalesce(e *ast.CoalesceExpr) operand {
 	} else if through != nil {
 		result = NewRef(result, through.mut)
 		m = value
-		if through.mut {
-			c.accessExpr(e.X, mutAccess, e.X.Pos()) // the inside is lent mut, from what x holds
-		}
-	} else if c.fromPlace(e.X, m) && !IsCopy(result) {
-		c.move(e.X, variable) // the value inside leaves the place
 	}
 
-	f := c.forkAt()
-	c.branchEnd(&f) // the path with a value moves nothing
 	c.elseValue(e.Else, result)
-	c.branchEnd(&f)
-	c.joinAt(&f, true)
 	return operand{m, result, nil, nil}
 }
 
@@ -1139,9 +1101,7 @@ func (c *Checker) elseValue(n ast.Node, t Type) {
 			c.errorf(n.Pos(), "the block after ?? must return, break or continue, or end in a value of type "+t.String())
 		}
 	case ast.Stmt:
-		if c.stmt(n) {
-			c.dead = true
-		}
+		c.stmt(n)
 	}
 }
 
@@ -1158,17 +1118,6 @@ func (c *Checker) try(e *ast.TryExpr) operand {
 	}
 
 	xt, _ := deref(x)
-	if c.fromPlace(e.X, x.mode) && !isBorrow(x.typ) && !IsCopy(xt) {
-		c.move(e.X, variable) // the value inside leaves the place
-	}
-
-	f := c.forkAt()
-	c.branchEnd(&f) // the path with a value goes on
-	c.flowReturnDrops(e.Question)
-	c.dead = true // the other returns
-	c.branchEnd(&f)
-	c.joinAt(&f, true)
-
 	switch want := c.sig.results.Underlying().(type) {
 	case *Option:
 		if o, ok := xt.Underlying().(*Option); ok {
@@ -1244,9 +1193,7 @@ func (c *Checker) passError(e *ast.TryExpr, from, to Type) {
 
 	switch len(holders) {
 	case 1:
-		if c.info != nil {
-			c.info.Wraps[e] = holders[0]
-		}
+		c.info.Wraps[e] = holders[0]
 	case 0:
 		c.errorf(e.Question, head+": no variant of "+n.String()+" holds "+article(from.String()))
 	default:
@@ -1280,58 +1227,26 @@ func isVowel(c byte) bool { c |= 0x20; return c == 'a' || c == 'e' || c == 'i' |
 // the enclosing scopes like any name.
 func (c *Checker) funcLit(e *ast.FuncLit) operand {
 	sig := c.typ(e.Type).(*Signature)
-	outer, regions, dead := c.sig, c.regions, c.dead
-	c.sig, c.regions, c.dead = sig, nil, false
-	c.enclosing = append(c.enclosing, outer) // a parameter of the function around the closure may be kept from inside it
-	c.closures = append(c.closures, closure{pos: e.Pos()})
-	temps, typing := c.temps, c.typingPlace
-	c.temps, c.typingPlace = nil, false // the body runs when the closure is called, not while the call around it is lending, nor where the place around it is stored
-	mark := len(c.moved)
-	c.floors = append(c.floors, floor{mark: mark})
-	outerFlow := c.flow
-	c.flow = c.newFlow(e.Pos()) // the body is a graph of its own: it runs when the closure is called
-	c.flow.parent = outerFlow
+	outer, loops := c.sig, c.loops
+	c.sig, c.loops = sig, nil                                                             // the body is a function of its own: no loop around the closure is open in it
+	c.enclosing = append(c.enclosing, outer)                                              // a parameter of the function around the closure may be kept from inside it
 	c.keepValues = append(c.keepValues, keepValue{sig: sig, pos: e.Pos(), closure: true}) // a closure is a value: it may keep no parameter
 	c.funcBody(sig, nil, e.Type.Params, e.Body)
-	c.solveFlow()
-	c.freeFlow(c.flow)
-	c.flow = outerFlow
-	c.floors = c.floors[:len(c.floors)-1]
-	c.moved = appendMoves(c.moved[:mark], c.moved[mark:]) // the body may never run: its moves count, as the captures do, but what it gives back does not
-	c.temps, c.typingPlace = temps, typing
-	if caps := c.closures[len(c.closures)-1].captures; caps != nil {
-		if c.captured == nil {
-			c.captured = make(map[*ast.FuncLit][]capture)
-		}
-
-		c.captured[e] = caps // the closure is a borrow of what it captures
-		for _, cap := range caps {
-			if cap.mode == byCopy || cap.mode == byMove {
-				c.hide(cap.v.typ, e.Pos(), "a closure") // the closure holds the value, and its type says nothing of it
-			}
-		}
-
-		if c.info != nil {
-			vars := make([]Capture, len(caps))
-			for i, cap := range caps {
-				vars[i] = Capture{cap.v, cap.mode == byCopy}
-			}
-
-			c.info.Captures[e] = vars
-		}
-	}
-
-	c.closures = c.closures[:len(c.closures)-1]
 	c.enclosing = c.enclosing[:len(c.enclosing)-1]
-	c.sig, c.regions, c.dead = outer, regions, dead
+	c.sig, c.loops = outer, loops
+	return operand{value, sig, nil, nil}
+}
+
+// closureAccesses records what the making of the closure e does to what
+// it captures: a borrow, ref or mut, or a move of each, at the closure's
+// position, and a read of each when it runs.
+func (c *Checker) closureAccesses(e *ast.FuncLit) {
 	for _, cap := range c.captured[e] {
 		b := cap.borrow(nil, e.Pos())
-		what := refAccess
+		what := borrowAccess(cap.mode == byMut)
 		switch cap.mode {
 		case byCopy:
 			continue
-		case byMut:
-			what = mutAccess
 		case byMove:
 			what = moveAccess // made here, the closure owns what it moves
 		}
@@ -1344,29 +1259,21 @@ func (c *Checker) funcLit(e *ast.FuncLit) operand {
 			c.flowUse(cap.v, e.Pos()) // the closure reads what it captures when it runs: a borrow variable captured keeps what it views lent, so capturing the viewed place mut collides, as it does outside
 		}
 	}
-
-	return operand{value, sig, nil, nil}
 }
 
 // ifExpr checks if c { a } else { b } as an expression: both branches
 // yield a value of one type, and a branch that leaves fits any type.
 func (c *Checker) ifExpr(e *ast.IfExpr, expected Type) operand {
 	c.condition(e.Cond)
-	f := c.forkAt()
 	a := c.blockValue(e.Then, expected)
-	c.maybeMove(a, a.typ) // the branch's value leaves with the if
-	c.branchEnd(&f)
 	var b operand
 	switch els := e.Else.(type) {
 	case *ast.BlockStmt:
 		b = c.blockValue(els, expected)
-		c.maybeMove(b, b.typ)
 	case *ast.IfExpr:
 		b = c.ifExpr(els, expected)
 	}
 
-	c.branchEnd(&f)
-	c.joinAt(&f, true)
 	return c.unify(a, b, e.If, "if")
 }
 
@@ -1376,7 +1283,7 @@ func (c *Checker) ifExpr(e *ast.IfExpr, expected Type) operand {
 // ends in an ordinary statement is ().
 func (c *Checker) blockValue(b *ast.BlockStmt, expected Type) operand {
 	c.openScope()
-	defer c.endScope(b.Rbrace)
+	defer c.closeScope()
 	if len(b.List) == 0 {
 		return operand{value, Unit, nil, nil}
 	}
@@ -1385,14 +1292,11 @@ func (c *Checker) blockValue(b *ast.BlockStmt, expected Type) operand {
 	c.stmts(b.List[:last])
 	if es, ok := b.List[last].(*ast.ExprStmt); ok {
 		op := c.expr(es.X, expected)
-		c.pin(es.X, op.typ)     // what takes the value finds the block's names after the block ends
-		c.maybeMove(op, op.typ) // the value leaves the block while its names are in scope, so that the end of the block drops no local the value is
-		op.expr = nil           // moved here: what takes the block's value takes a value made here
+		op.expr = nil // moved here: what takes the block's value takes a value made here
 		return op
 	}
 
 	if c.stmt(b.List[last]) {
-		c.dead = true
 		return operand{value, Typ[Never], nil, nil}
 	}
 

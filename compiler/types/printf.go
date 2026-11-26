@@ -84,8 +84,7 @@ func (c *Checker) printFormat(e *ast.CallExpr, name string, at int, args []opera
 func (c *Checker) named(e ast.Expr) Object {
 	switch e := unparen(e).(type) {
 	case *ast.Ident:
-		_, obj := c.scope.LookupParent(e.Name)
-		return obj
+		return c.refersTo(e)
 	case *ast.SelectorExpr:
 		if x, ok := e.X.(*ast.Ident); ok {
 			if _, obj := c.scope.LookupParent(x.Name); obj != nil {

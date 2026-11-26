@@ -162,6 +162,9 @@ var handledErrors = map[string]bool{
 	"closure-moves.snello":       true,
 	"use-after-close.snello":     true,
 	"move-in-loop.snello":        true,
+	"evaluation-order.snello":    true,
+	"moved-in-index.snello":      true,
+	"global-moved-init.snello":   true,
 	"move-out-of-slice.snello":   true,
 	"move-out-of-borrow.snello":  true,
 	"partial-move.snello":        true,
@@ -285,6 +288,8 @@ var handledErrors = map[string]bool{
 	"blank-package-var.snello": true,
 	// The blank name drops a guard as it is made.
 	"blank-guard.snello": true,
+	// A match guard runs whether or not its arm is taken: it may not move a value declared before it, and the value is moved after the match.
+	"move-in-guard.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {
@@ -341,8 +346,8 @@ func TestNegativePrograms(t *testing.T) {
 var errorPattern = regexp.MustCompile(`// ERROR "(.*)"\s*$`)
 
 // BenchmarkCheck resolves every example program that runs once per
-// iteration, with the parse done ahead of time, and reports
-// allocations.
+// iteration, with the parse done ahead of time and the record the
+// compiler keeps, and reports allocations.
 func BenchmarkCheck(b *testing.B) {
 	type parsed struct {
 		f    *ast.File
@@ -360,7 +365,7 @@ func BenchmarkCheck(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		for _, p := range files {
-			if _, err := conf.Check("", p.file, p.f, nil); err != nil {
+			if _, err := conf.Check("", p.file, p.f, &Info{}); err != nil {
 				b.Fatal(err)
 			}
 		}

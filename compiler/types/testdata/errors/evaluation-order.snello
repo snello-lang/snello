@@ -1,0 +1,48 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a statement is checked in the order the program evaluates it: a
+// compound assignment reaches its place a second time after its value,
+// a value chosen by an if is lent where its arms join, and an arm's
+// variable is dropped before the value leaves the arm. Fix: finish with
+// the borrow before the value changes its owner, or take the value out
+// of the arm by moving it.
+
+package p
+
+struct B { n int; name string }
+
+func pick2(b mut B, k int, m int) mut B { return b }
+
+func takenXs(xs []int) int { return 0 }
+
+func drained(v []string) string { return "" }
+
+func growB(b mut B) int { return 1 }
+
+func pass(a ref string, b int) {}
+
+func cond() bool { return true }
+
+func drains(v []string) {
+	r := mut v[0]
+	*r += drained(v) // ERROR "cannot move v: v is borrowed by r"
+}
+
+func inArm(c bool) {
+	b := B{n: 0, name: "b"}
+	xs := []int{1}
+	pick2(mut b, if c { xs[0] += takenXs(xs); 2 } else { 3 }, 0).n = 1 // ERROR "use of moved value xs"
+}
+
+func again() {
+	b := B{n: 0, name: "b"}
+	r := mut b
+	r.n += growB(mut b) // ERROR "cannot borrow b as mut: b is already borrowed as mut by r"
+}
+
+func chosen() {
+	z := "z"
+	pass(if cond() { t := "b".Clone(); ref t } else { ref z }, 1) // ERROR "cannot keep a borrow of t: t is dropped at the end of its block"
+}

@@ -742,11 +742,7 @@ func isFloat32(t Type) bool {
 
 // recordValue records the value of a constant expression, which the
 // backends write in its place.
-func (c *Checker) recordValue(x ast.Expr, v Constant) {
-	if c.info != nil {
-		c.info.Values[x] = v
-	}
-}
+func (c *Checker) recordValue(x ast.Expr, v Constant) { c.info.Values[x] = v }
 
 // collectConsts notes every top-level constant of the package's files,
 // in the order of the files and of their declarations, each checked

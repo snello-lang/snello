@@ -36,10 +36,8 @@ const (
 // and its receiver must be Send; its arguments are checked as they are
 // evaluated (spawnArg).
 func (c *Checker) spawned(e *ast.CallExpr, f operand, sig *Signature) {
-	if lit, ok := unparen(e.Fun).(*ast.FuncLit); ok {
-		c.spawnCaptures(lit, e.Pos())
-	} else {
-		c.kept(f, "spawned", e.Fun.Pos())
+	if !isFuncLit(e.Fun) {
+		c.kept(f, "spawned", e.Fun.Pos()) // a closure written here moves what it captures into the task instead, where it is lowered
 	}
 
 	if sig.recv != nil {
@@ -113,33 +111,6 @@ func (c *Checker) taskHandle(pos token.Pos) *Named {
 
 	named, _ := obj.typ.(*Named)
 	return named
-}
-
-// spawnCaptures moves the variables a spawned closure captures into
-// the task, at the spawn: a capture the closure only reads or changes,
-// a borrow anywhere else, is a move here, and the variable is dead in
-// the function afterwards; a Copy value is copied in, as it is for any
-// closure, and a value the closure already moved stays moved. Each
-// must be Send, which a borrow variable never is, so what is moved
-// here is always an owned variable. The body was checked before the
-// spawn, and the borrows it takes of a capture are of the task's own
-// value, in the task's frame; the move is therefore checked against
-// the borrows live after the closure, where the body's are over and
-// the function's own still count.
-func (c *Checker) spawnCaptures(lit *ast.FuncLit, pos token.Pos) {
-	caps := c.captured[lit]
-	for i := range caps {
-		cap := &caps[i]
-		if !c.taken(cap.v.name, cap.v.typ, pos) || cap.mode == byCopy || cap.mode == byMove {
-			continue
-		}
-
-		cap.mode = byMove
-		c.capture(cap.v, byMove) // a closure around the spawn moves it too, as move does
-		p := place{cap.v, ""}
-		c.access(&ast.Ident{NamePos: pos, Name: cap.v.name}, p, moveAccess, pos) // named for the message
-		c.moved = append(c.moved, move{p, pos, false})
-	}
 }
 
 // spawnArg checks an argument of a spawned call: the task owns it, so

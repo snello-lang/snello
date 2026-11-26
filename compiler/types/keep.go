@@ -239,11 +239,7 @@ func (c *Checker) keepArg(op operand, i int, pos token.Pos) bool {
 	}
 
 	for _, v := range c.keptParams(op) {
-		c.keepEdges = append(c.keepEdges, keepEdge{v, p, callee, pos})
-	}
-
-	if what := c.borrowsWhat(op, pos); what != "" {
-		c.keepCalls = append(c.keepCalls, keepCall{p, callee, what, pos})
+		c.keepEdges = append(c.keepEdges, keepEdge{v, p, callee, pos}) // a closure that borrows given here is refused by the borrow pass, which knows what it borrows
 	}
 
 	return true
@@ -269,7 +265,7 @@ func (c *Checker) borrowsWhat(op operand, pos token.Pos) string {
 		}
 
 		if id, ok := unparen(e).(*ast.Ident); ok {
-			if v, ok := c.resolve(id.Name).(*Var); ok && isSignature(v.typ) {
+			if v, ok := c.refersTo(id).(*Var); ok && isSignature(v.typ) {
 				if b := c.heldBy(v, pos); b != nil {
 					what = "closure " + v.name + " captures " + b.v.name + " by borrow"
 				}

@@ -1,0 +1,21 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a match guard runs whether or not its arm is taken, so it may
+// not move a value declared before it; the value is gone after the
+// match all the same. Fix: lend it to the guard with ref.
+
+package p
+
+func take(s string) int { return 0 }
+
+func main() {
+    s := "hello"
+    n := 1
+    r := match n {
+        1 if take(s) > 0 => 1,            // ERROR "cannot move s in a match guard: it runs whether or not its arm is taken; lend it with ref"
+        _ => 2,
+    }
+    print(r + len(s))                     // ERROR "use of moved value s"
+}

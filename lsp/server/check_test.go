@@ -22,12 +22,10 @@ import (
 )
 
 // examplesDir is where the example programs are, from this package's
-// directory, pendingExample the one that waits for a library and so
-// does not compile, and stdCheckoutDir the standard library's sources
-// in the checkout.
+// directory, and stdCheckoutDir the standard library's sources in the
+// checkout.
 const (
 	examplesDir    = "../../examples"
-	pendingExample = "cli-grep"
 	stdCheckoutDir = "../../std"
 )
 
@@ -53,23 +51,8 @@ func TestExamples(t *testing.T) {
 		}
 
 		s.checkAll()
-		got := messagesOf(s.reports)
-		if filepath.Base(dir) != pendingExample {
-			if len(got) > 0 {
-				t.Errorf("%s: %d diagnostics, want none:\n%s", dir, len(got), strings.Join(got, "\n"))
-			}
-
-			continue
-		}
-
-		var want []string
-		for _, e := range compilerErrors(t, dir) {
-			want = append(want, e.Msg)
-		}
-
-		slices.Sort(want)
-		if len(want) == 0 || !slices.Equal(got, want) {
-			t.Errorf("%s: diagnostics %q, want the compiler's %q", dir, got, want)
+		if got := messagesOf(s.reports); len(got) > 0 {
+			t.Errorf("%s: %d diagnostics, want none:\n%s", dir, len(got), strings.Join(got, "\n"))
 		}
 	}
 }
@@ -312,23 +295,6 @@ func sourceNames(t testing.TB, dir string) []string {
 	return append(files, tests...)
 }
 
-// compilerErrors returns the errors snello check DIR reports.
-func compilerErrors(t *testing.T, dir string) scanner.ErrorList {
-	t.Helper()
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = importer.CheckDir(abs, &types.Info{}, importer.Options{})
-	var list scanner.ErrorList
-	if err != nil && !errors.As(err, &list) {
-		t.Fatalf("%s: %v, want a list of errors", dir, err)
-	}
-
-	return list
-}
-
 // writeModule writes a module of files, by their slashed paths under
 // its root, into a new directory, and returns the directory.
 func writeModule(t testing.TB, files map[string]string) string {
@@ -375,4 +341,21 @@ func messagesOf(reports map[string][]report) []string {
 
 	slices.Sort(messages)
 	return messages
+}
+
+// compilerErrors returns the errors snello check DIR reports.
+func compilerErrors(t *testing.T, dir string) scanner.ErrorList {
+	t.Helper()
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = importer.CheckDir(abs, &types.Info{}, importer.Options{})
+	var list scanner.ErrorList
+	if err != nil && !errors.As(err, &list) {
+		t.Fatalf("%s: %v, want a list of errors", dir, err)
+	}
+
+	return list
 }

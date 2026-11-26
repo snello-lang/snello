@@ -1055,8 +1055,6 @@ func (c *Checker) superCall(e *ast.SelectorExpr) operand {
 	c.recordUse(e.X.(*ast.Ident), recv)
 	c.recordType(e.X, recv.typ) // the backend converts the receiver as for any call
 	c.recordUse(e.Sel, fn)
-	c.flowUse(recv, e.X.Pos())
-	c.capture(recv, byRef)
 	c.receiver(e, operand{variable, recv.typ, recv, e.X}, fn.typ.(*Signature)) // with the expression, so a value receiver moves
 	return operand{value, fn.typ, fn, nil}
 }

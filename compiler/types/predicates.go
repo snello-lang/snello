@@ -107,6 +107,16 @@ func isChan(t Type) bool {
 	return ok
 }
 
+// chanOf is the channel type t is, itself or behind a borrow, or nil.
+func chanOf(t Type) *Chan {
+	if t == nil {
+		return nil
+	}
+
+	c, _ := stripRef(t).Underlying().(*Chan)
+	return c
+}
+
 // IsCopy reports whether assigning a value of type t copies it rather
 // than moving it. The property is computed from structure, never
 // declared: numbers, bool and ref borrows are Copy; strings, error,

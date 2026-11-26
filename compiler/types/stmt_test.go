@@ -178,11 +178,16 @@ func TestAssignOrder(t *testing.T) {
 		"trait Tagged {\n\tvar tag int?\n\tfunc (t mut Self) Reset() { t.tag = None }\n}\nfunc clearTag<T: Tagged>(x mut T) { x.tag = None }\n" +
 		"struct B { n int; name string }\nfunc pick(b mut B, k int) mut B { return b }\nfunc pickT(b mut B, s string) mut B { return b }\nfunc pick2(b mut B, k int, m int) mut B { return b }\nfunc pickf(b mut B, f func()) mut B { return b }\n" +
 		"func (n mut Node) First() mut Node { return n }\nfunc countedN(n Node) int { return 0 }\nfunc rows(xs mut []int) mut []int { return xs }\nfunc takenXs(xs []int) int { return 0 }\nfunc takenB(b B) int { return 0 }\n" +
-		"struct HI { r ref int }\nfunc pickHI(h mut HI, k int) mut HI { return h }\nfunc growI(v mut []int) int { return 0 }\n"
+		"struct HI { r ref int }\nfunc pickHI(h mut HI, k int) mut HI { return h }\nfunc growI(v mut []int) int { return 0 }\n" +
+		"func growB(b mut B) int { return 1 }\nfunc pass(a ref string, b int) {}\nfunc cond() bool { return true }\n"
 	tests := []struct {
 		src  string
 		want []string
 	}{
+		{"func f(v []string) { r := mut v[0]; *r += drained(v) }", []string{"cannot move v: v is borrowed by r"}},
+		{"func f(c bool) { b := B{n: 0, name: \"b\"}; xs := []int{1}; pick2(mut b, if c { xs[0] += takenXs(xs); 2 } else { 3 }, 0).n = 1 }", []string{"use of moved value xs"}},
+		{"func f() { b := B{n: 0, name: \"b\"}; r := mut b; r.n += growB(mut b) }", []string{"cannot borrow b as mut: b is already borrowed as mut by r"}},
+		{"func f() { z := \"z\"; pass(if cond() { t := \"b\".Clone(); ref t } else { ref z }, 1) }", []string{"cannot keep a borrow of t: t is dropped at the end of its block"}},
 		{"func f(v []string) { r := mut v[0]; *r = drained(v) }", []string{", used at "}}, // the place's use follows the value, though it stands before it, and is no loop's next pass
 		{"func f(v []string) { r := mut v[0]; n := \"\"; *r, n = \"z\", drained(v); print(n) }", []string{"cannot move v: v is borrowed by r"}},
 		{"func f(p *Node) { *p = eaten(p) }", []string{"use of moved value p"}},

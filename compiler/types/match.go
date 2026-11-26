@@ -43,53 +43,23 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 	b := borrowOf(m)
 	result := operand{value, Typ[Never], nil, nil}
 	rows := make([][]pat, 0, len(e.Arms))
-	f := c.forkAt()
-	if x.mode == variable {
-		c.watch(e.X) // an arm may assign it before another binds a part by value and moves it under the fork
-	}
-
-	consumed := false
 	outer := c.scope
-	var holder *Var // what the arms' bindings that hold a borrow borrow, when the scrutinee lends a temporary: match ref mk() or match mk().First()
-	if tmp := c.borrowOfTemporary(e.X); tmp != nil {
-		holder = c.flowTemporary(tmp)
-	}
-
 	for _, arm := range e.Arms {
-		armScope := c.openScope()
-		c.bindsOwned = false
+		c.openScope()
 		c.copies = !isBorrow(x.typ) // a borrow variable binds borrows; a place reached through one copies what is Copy
 		p := c.pattern(arm.Pat, scrutinee, b)
-		c.resolvingIn(outer, func() { // match o { Some(o) => ... } binds a new o out of the old
-			c.bindThrough(arm.Pat, e.X, b)
-			c.lendTemporary(armScope, holder, arm.Pat.Pos())
-			if c.bindsOwned && !consumed && c.fromPlace(e.X, x.mode) {
-				c.flowIn(f.from, func() { c.moveBefore(e.X, variable, &f) }) // a part bound by value leaves the place, on every arm, before any; a temporary's part may not leave it
-				consumed = true
-			}
-		})
+		c.refuseMutMapBinding(e.X, b, outer)
 
-		guard := -1
 		if arm.Guard != nil {
-			c.guard(arm.Guard, arm.Arrow, e.Conds)
-			guard = c.flowGuard() // a guard that fails goes on to the next arm
+			c.condition(arm.Guard) // a value moved in a guard is refused by the move pass, which meets the guard in the form
 		} else {
 			rows = appendRows(rows, p)
 		}
 
 		v := c.node(arm.Body, expected)
-		if x, ok := arm.Body.(ast.Expr); ok {
-			c.pin(x, v.typ) // the arm's bindings are gone by the time the match's value is taken
-		}
-
-		c.maybeMove(v, v.typ) // the arm's value leaves with the match
 		result = c.unify(result, v, arm.Arrow, "match")
-		c.endScope(nodeEnd(arm.Body))
-		c.branchEnd(&f)
-		c.flowGuardFails(guard, armScope, arm.Arrow) // a guard that fails drops what the pattern bound, and goes on to the next arm
+		c.closeScope()
 	}
-
-	c.joinAt(&f, true)
 
 	if e.Conds {
 		c.lastArm(e)
@@ -102,28 +72,18 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 	return result
 }
 
-// guard checks an arm's guard, or the condition of an arm of a match
-// with no value. It runs whether or not its arm is taken, the next arm
-// tried when it fails, so it may move nothing it did not make: a value
-// declared before it and moved by it would be gone for the arms after
-// it, which the paths of the match do not see. It reads, and lends with
-// ref, as any condition does; a name the guard declares itself, in a
-// closure, a block or a match inside it, between the guard's start and
-// the arm's =>, is its own to move, and the names an arm's pattern
-// binds are declared before its guard.
-func (c *Checker) guard(g ast.Expr, arrow token.Pos, cond bool) {
-	mark := len(c.moved)
-	c.condition(g)
-	what := "a match guard"
+// guardWhat names what a guard is in a message: a match guard, or the
+// condition of an arm of a match with no value.
+func guardWhat(cond bool) string {
 	if cond {
-		what = "the condition of a match arm"
+		return "the condition of a match arm"
 	}
 
-	for _, m := range c.moved[mark:] {
-		if own := m.v.Pos() >= g.Pos() && m.v.Pos() < arrow; !m.revived && !own {
-			c.errorf(m.pos, "cannot move "+m.text()+" in "+what+": it runs whether or not its arm is taken; lend it with ref")
-		}
-	}
+	return "a match guard"
+}
+
+func guardMovedMessage(text, what string) string {
+	return "cannot move " + text + " in " + what + ": it runs whether or not its arm is taken; lend it with ref"
 }
 
 // lastArm checks the arms of a match with no value: the arm _, for when
@@ -243,7 +203,6 @@ func (c *Checker) identPat(p *ast.IdentPat, t Type, b *Ref) pat {
 	}
 
 	if b == nil && !IsCopy(t) {
-		c.bindsOwned = true
 		if c.dropOwner != nil {
 			c.errorf(p.Name.Pos(), "cannot bind "+p.Name.Name+" by value out of a value of "+c.dropOwner.String()+", which implements Drop and reads its parts when the value goes; match on a borrow of it")
 		}

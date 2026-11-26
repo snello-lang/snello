@@ -107,9 +107,7 @@ func build(dir, name, backend string, src []byte, debug bool, bindings []lower.B
 // pendingExamples are the programs without an expected output yet, and
 // what each waits for. A program that gains its output comes off the
 // list; one that loses it, by a misnamed fixture, is noticed.
-var pendingExamples = map[string]string{
-	"cli-grep": "regexp, a later library",
-}
+var pendingExamples = map[string]string{}
 
 // beside returns the path of the file of a program with another
 // extension, which lies beside it: tree/tree-arena.out for

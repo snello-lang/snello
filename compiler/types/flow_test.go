@@ -5,6 +5,7 @@
 package types
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -316,4 +317,68 @@ func TestPathWithin(t *testing.T) {
 			t.Errorf("pathWithin(%q, %q) = %v, want %v", tt.p, tt.q, got, tt.want)
 		}
 	}
+}
+
+// String writes the graph for a test: each block's events in order, a
+// loan by its holder and the place lent, a copy by what takes what,
+// an access by what it does to which place, a drop by its variable.
+func (f *flow) String() string {
+	var b strings.Builder
+	for bi := range f.blocks {
+		blk := &f.blocks[bi]
+		b.WriteString("b" + strconv.Itoa(bi) + ":")
+		for _, s := range blk.succs {
+			b.WriteString(" ->b" + strconv.Itoa(s))
+		}
+
+		b.WriteString("\n")
+		for _, ev := range blk.events {
+			b.WriteString("  " + f.eventString(ev) + "\n")
+		}
+	}
+
+	return b.String()
+}
+
+func (f *flow) eventString(ev flowEvent) string {
+	name := func(v *Var) string {
+		if v == nil {
+			return "?"
+		}
+
+		if v.name == "" {
+			return "(t" + strconv.Itoa(int(v.pos)) + ")"
+		}
+
+		return v.name
+	}
+	switch ev.kind {
+	case evUse:
+		return "use " + name(ev.v)
+	case evLoan:
+		l := f.loans[ev.i]
+		return "loan " + strconv.Itoa(ev.i) + ": " + name(l.holder) + joinPath("", l.hpath) + " <- " + joinPath(name(l.v), l.place.path) + mutText(l.mut)
+	case evCopy:
+		cp := f.copies[ev.i]
+		return "copy " + strconv.Itoa(ev.i) + ": " + joinPath(name(cp.to), cp.toPath) + " <- " + joinPath(name(cp.from), cp.path)
+	case evAssign:
+		return "assign " + joinPath(name(ev.v), ev.path)
+	case evAccess:
+		a := f.accesses[ev.i]
+		return "access " + strconv.Itoa(int(a.what)) + " " + joinPath(name(a.p.v), a.p.path)
+	case evDrop:
+		return "drop " + name(ev.v)
+	case evReturn:
+		return "return " + name(ev.v)
+	}
+
+	return "?"
+}
+
+func mutText(mut bool) string {
+	if mut {
+		return " mut"
+	}
+
+	return ""
 }

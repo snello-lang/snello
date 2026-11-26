@@ -35,8 +35,10 @@ type passedArg struct {
 // holds no borrow; otherwise also the borrow the rule for returned
 // borrows ties it to (callSource).
 type passedTo struct {
-	args []ast.Expr
-	only bool
+	args     []ast.Expr
+	only     bool
+	all      []passedArg  // every argument, with its declared and instance types, for the stores the call makes
+	borrowed []*TypeParam // the type parameters whose arguments hold a borrow
 }
 
 // A binding is a type parameter of a declaration and what it stands for
@@ -75,26 +77,34 @@ func (c *Checker) passBorrows(e *ast.CallExpr, fn *Func, inst *Signature) bool {
 	c.ownedParts(inst, e.Lparen)
 	args := passedArgs(e, decl, inst)
 	only := !holdsBorrow(decl.results)
+	passed := passedTo{only: only, all: args, borrowed: borrowed}
 	if only || reachesAny(decl.results, borrowed) {
-		passed := passedTo{only: only}
 		for _, a := range args {
 			if holdsBorrow(a.inst) && !isFuncLit(a.x) { // a closure given to the call borrows nothing it keeps, and returns no borrow of what it captures
 				passed.args = append(passed.args, a.x)
 			}
 		}
-
-		if c.passed == nil {
-			c.passed = make(map[*ast.CallExpr]passedTo)
-		}
-
-		c.passed[e] = passed
 	}
 
+	if c.passed == nil {
+		c.passed = make(map[*ast.CallExpr]passedTo)
+	}
+
+	c.passed[e] = passed
 	for _, p := range borrowed {
 		c.storesInto(e, args, p)
 	}
 
 	return only
+}
+
+// passStores records what the arguments of the generic call e lent mut
+// take of what the others hold, as the typing found them.
+func (c *Checker) passStores(e *ast.CallExpr) {
+	passed := c.passed[e]
+	for _, p := range passed.borrowed {
+		c.storesInto(e, passed.all, p)
+	}
 }
 
 // storesInto gives each argument of the call e lent mut, whose

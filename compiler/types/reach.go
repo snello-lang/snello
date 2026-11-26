@@ -98,7 +98,7 @@ func (p reachPart) name() string {
 // reach walks from each call of the package's own code whose type
 // arguments are all known.
 func (c *Checker) reach(fs []*ast.File) {
-	if c.info == nil || c.info.Arms == nil && !c.refuses || len(c.errors) > 0 { // the questions are asked of a program that checked and reflects, or refuses: every reflecting function matches on a type, and the tables are the build's
+	if c.info.Arms == nil && !c.refuses || len(c.errors) > 0 { // the questions are asked of a program that checked and reflects, or refuses: every reflecting function matches on a type, and the tables are the build's
 		return
 	}
 

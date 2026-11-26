@@ -10,7 +10,7 @@ Snello is a programming language: Go's syntax and concurrency, memory safety wit
 
 1. `_docs/design/01-language-design.md`: every decision and why.
 2. `_docs/design/00-syntax-conventions.md`: the syntax the examples use.
-3. `_docs/design/02-` to `04-`: the memory model notes; `10-borrow-checking.md`: how the checker decides where a borrow is live, along a function's paths.
+3. `_docs/design/02-` to `04-`: the memory model notes; `10-borrow-checking.md`: how the checker decides where a borrow is live, along a function's paths; `16-ownership-on-a-lowered-form.md`: the form in evaluation order the move and borrow passes are to run on, and why.
 4. `_docs/design/05-standard-library.md`: what the language predeclares, where every other name comes from, and the signature rules.
 5. `_docs/design/06-tasks-and-channels.md`: the runtime interface the compiler emits for tasks and channels, and the scheduler behind it.
 6. `_docs/design/07-lowering.md`: the shape of every value and the point of every release, as both backends must agree on them; what the LLVM backend changes and why.
