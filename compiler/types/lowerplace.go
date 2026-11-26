@@ -25,17 +25,17 @@ func (l *lowering) place(e ast.Expr, indexed bool) Operand {
 		return p
 	}
 
-	switch x := e.(type) {
+	switch x := e.(type) { // a part of a value made here is reached on from the value, which is made once and never moved out of
 	case *ast.ParenExpr:
 		return l.place(x.X, indexed)
 	case *ast.SelectorExpr:
-		return l.baseValue(x.X).sub(x.Sel.Name)
+		return l.root(x.X).sub(x.Sel.Name)
 	case *ast.UnaryExpr:
 		if x.Op == token.MUL {
-			return l.baseValue(x.X).sub("*")
+			return l.root(x.X).sub("*")
 		}
 	case *ast.IndexExpr:
-		base := l.baseValue(x.X) // what is indexed before the index, as the program evaluates them
+		base := l.root(x.X) // what is indexed before the index, as the program evaluates them
 		if !indexed {
 			l.value(x.Index, nil)
 		}
@@ -107,7 +107,7 @@ func (l *lowering) placeOf(e ast.Expr) (Operand, bool) {
 		}
 
 		if p, ok := l.placeOf(x.X); ok {
-			return p.sub(l.throughBorrow(x.X, x.Sel.Name)), true
+			return l.through(p, x.X, x.Sel.Name), true
 		}
 	case *ast.UnaryExpr:
 		if x.Op == token.MUL {
@@ -117,11 +117,7 @@ func (l *lowering) placeOf(e ast.Expr) (Operand, bool) {
 		}
 	case *ast.IndexExpr:
 		if p, ok := l.placeOf(x.X); ok {
-			return p.sub(l.throughBorrow(x.X, "[]")), true
-		}
-	case *ast.SliceExpr:
-		if p, ok := l.placeOf(x.X); ok {
-			return p.sub(l.throughBorrow(x.X, "[]")), true
+			return l.through(p, x.X, "[]"), true
 		}
 	case *ast.PartExpr:
 		if p, ok := l.placeOf(x.X); ok {
@@ -132,16 +128,21 @@ func (l *lowering) placeOf(e ast.Expr) (Operand, bool) {
 	return Operand{}, false
 }
 
-// throughBorrow is the path part of a field or element reached from
-// base, through the deref a borrow or a pointer goes through when base
-// is one.
-func (l *lowering) throughBorrow(base ast.Expr, part string) string {
+// through is the field or element part of the place p, which base
+// names, reached through the deref a borrow or a pointer goes through
+// when base is one; the path is written in one piece.
+func (l *lowering) through(p Operand, base ast.Expr, part string) Operand {
+	deref := ""
 	switch l.typeOf(base).(type) {
 	case *Ref, *Pointer:
-		return "*." + part
+		deref = "*."
 	}
 
-	return part
+	if p.Path == "" {
+		return Operand{Var: p.Var, Temp: p.Temp, Path: deref + part}
+	}
+
+	return Operand{Var: p.Var, Temp: p.Temp, Path: p.Path + "." + deref + part}
 }
 
 // isPkgSelector reports whether a selector names a package's member.
@@ -154,7 +155,12 @@ func (l *lowering) isPkgSelector(sel *ast.SelectorExpr) bool {
 // through a borrow or through an element; a temporary is owned.
 func (l *lowering) kindOf(p Operand) placeKind {
 	if p.IsTemp() {
-		return placeOwned
+		if p.Temp == NoTemp {
+			return placeOwned
+		}
+
+		kind, _ := placeKindOf(l.f.Temps[p.Temp].Type, p.Path) // a part of a value made here, reached through a borrow it is or holds, or an element
+		return kind
 	}
 
 	kind, _ := placeKindOf(l.f.Vars[p.Var].typ, p.Path)
@@ -163,13 +169,7 @@ func (l *lowering) kindOf(p Operand) placeKind {
 
 // Types.
 
-func (l *lowering) typeOf(e ast.Expr) Type {
-	if l.c.info == nil {
-		return nil
-	}
-
-	return l.c.info.Types[e]
-}
+func (l *lowering) typeOf(e ast.Expr) Type { return l.c.info.Types[e] }
 
 // channel evaluates the channel an operation is on, read and never
 // moved: every operation on a channel goes through a borrow of it.

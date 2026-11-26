@@ -55,7 +55,7 @@ type Form struct {
 	succs    []int         // what every block's Succs slice into
 	closures []closureForm // the closures written in the body, whose passes run under the body's
 	kept     []keptUse     // the closure values the body puts where a closure that borrows may not go
-	reached  []bool        // per block, whether control can reach it from the first: what it cannot is lowered for the emitters and checked by no pass
+	order    []int         // the blocks control can reach from the first, each before the blocks it goes on to unless an edge goes back: what control cannot reach is lowered for the emitters and checked by no pass
 }
 
 // A keptUse is a value of a function type the body puts where a closure
@@ -85,11 +85,12 @@ type closureForm struct {
 type TempInfo struct {
 	Expr    ast.Expr
 	Type    Type
-	Origin  int  // the owned temporary this one is, or is a borrow of a part of, or a call's result borrows from: itself for a value made here
-	Loop    bool // a borrow a range loop holds of what it ranges over, for every pass
-	Bound   bool // a binding or a loop variable takes a part of it, or of a borrow of it: it is held until its statement drops it
-	Given   bool // a call or a defer takes it, or a statement with several values stores it: what it lends is lent until then
-	Carried bool // made of a value that reads a variable its statement stores: it holds what the value lends before any store
+	Origin  int    // the owned temporary this one is, or is a borrow of a part of, or a call's result borrows from: itself for a value made here
+	Loop    bool   // a borrow a range loop holds of what it ranges over, for every pass
+	Bound   bool   // a binding or a loop variable takes a part of it, or of a borrow of it: it is held until its statement drops it
+	Given   bool   // a call or a defer takes it, or a statement with several values stores it: what it lends is lent until then
+	Carried bool   // made of a value that reads a variable its statement stores: it holds what the value lends before any store
+	Named   string // for a borrow made for a construct that holds it, what a message calls the holder: the arm written for each variant
 }
 
 // A FormBlock is a straight run of instructions and the blocks control
@@ -243,33 +244,33 @@ func (f *Form) argsString(args []Operand) string {
 	return "(" + strings.Join(parts, ", ") + ")"
 }
 
-// reach marks the blocks control can reach from the first, with work as
-// the scratch of blocks whose successors are still to be marked, which
-// it returns grown.
-func (f *Form) reach(work []int) []int {
-	f.reached = slices.Grow(f.reached[:0], len(f.Blocks))[:len(f.Blocks)]
-	clear(f.reached)
-	f.reached[0] = true
-	work = append(work[:0], 0)
+// reach orders the blocks control can reach from the first so that each
+// comes before the blocks it goes on to, an edge back to a loop's head
+// aside: a temporary is then made before it is used, whatever order the
+// lowering made the blocks in. work is scratch, returned grown.
+func (f *Form) reach(work []int, seen []bool) ([]int, []bool) {
+	n := len(f.Blocks)
+	f.order = slices.Grow(f.order[:0], n)
+	work, seen = slices.Grow(work[:0], 2*n), slices.Grow(seen[:0], n)[:n]
+	clear(seen)
+	seen[0] = true
+	work = append(work, 0, 0) // a block and the successor to go on to next, as the search goes down
 	for len(work) > 0 {
-		b := work[len(work)-1]
-		work = work[:len(work)-1]
-		for _, s := range f.Blocks[b].Succs {
-			if !f.reached[s] {
-				f.reached[s] = true
-				work = append(work, s)
-			}
+		b, next := work[len(work)-2], work[len(work)-1]
+		succs := f.Blocks[b].Succs
+		if next == len(succs) {
+			f.order = append(f.order, b) // every block it goes on to is ordered: the block comes before them once the order is reversed
+			work = work[:len(work)-2]
+			continue
+		}
+
+		work[len(work)-1]++
+		if s := succs[next]; !seen[s] {
+			seen[s] = true
+			work = append(work, s, 0)
 		}
 	}
 
-	return work
-}
-
-// eachForm calls fn with f and, after it, with every closure's form
-// written in it, at any depth.
-func (f *Form) eachForm(fn func(*Form)) {
-	fn(f)
-	for _, cf := range f.closures {
-		cf.form.eachForm(fn)
-	}
+	slices.Reverse(f.order)
+	return work, seen
 }

@@ -239,11 +239,7 @@ func (c *Checker) keepArg(op operand, i int, pos token.Pos) bool {
 	}
 
 	for _, v := range c.keptParams(op) {
-		c.keepEdges = append(c.keepEdges, keepEdge{v, p, callee, pos})
-	}
-
-	if what := c.borrowsWhat(op, pos); what != "" {
-		c.keepCalls = append(c.keepCalls, keepCall{p, callee, what, pos})
+		c.keepEdges = append(c.keepEdges, keepEdge{v, p, callee, pos}) // a closure that borrows given here is refused by the borrow pass, which knows what it borrows
 	}
 
 	return true

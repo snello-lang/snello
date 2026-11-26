@@ -197,7 +197,7 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 		if r, ok := want.(*Ref); ok && isBorrow(l.typeOf(arg)) { // a borrow variable passed on is lent again, not moved: a borrow of the variable for the call
 			if p, ok := l.placeOrPart(arg); ok {
 				l.emit(Instr{Op: OpRead, Place: p, Expr: arg, Pos: arg.Pos()})
-				l.argStack = append(l.argStack, l.lendFor(p, arg, r.mut))
+				l.argStack = append(l.argStack, l.lendFor(p, arg, NewRef(l.typeOf(arg), r.mut)))
 				continue
 			}
 		}
@@ -205,6 +205,7 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 		a := l.value(arg, want)
 		if want != nil && !isBorrow(want) || k.makes() || builtin != nil && builtin.id == BuiltinReplace && i == 1 || l.isBorrowTemp(a) {
 			l.take(a) // given by value, the callee or the variant owns it; a borrow made for the call ends when the call returns
+			l.takeParts(a)
 		}
 
 		l.argStack = append(l.argStack, a)
@@ -212,7 +213,7 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 
 	if recv != nil {
 		if r, ok := recv.typ.(*Ref); ok { // the receiver is lent last, after the arguments; a borrow variable is lent again
-			recvPlace = l.lendFor(recvPlace, recvExpr, r.mut)
+			recvPlace = l.lendFor(recvPlace, recvExpr, refOf(l.typeOf(recvExpr), r))
 		}
 	}
 
@@ -250,10 +251,10 @@ func (l *lowering) keepArg(arg ast.Expr, i int, k callee, param *Var, kept, spaw
 	}
 }
 
-// lendFor lends the place p, written as e, for the call: the loan ends
-// when the call returns.
-func (l *lowering) lendFor(p Operand, e ast.Expr, mut bool) Operand {
-	t := l.lend(p, e, mut)
+// lendFor lends the place p, written as e, for the call, as a borrow of
+// type ref: the loan ends when the call returns.
+func (l *lowering) lendFor(p Operand, e ast.Expr, ref *Ref) Operand {
+	t := l.lendAs(p, e, ref, e.Pos())
 	l.take(t)
 	return t
 }

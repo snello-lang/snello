@@ -66,6 +66,10 @@ func (l *lowering) value(e ast.Expr, want Type) Operand {
 		if x.High != nil {
 			l.value(x.High, Typ[Int])
 		}
+
+		if p, ok := l.placeOrPart(x.X); ok { // xs[i:j] is a borrow of xs, lent for the statement unless a call takes it
+			return l.lend(p, x.X, isMut(l.typeOf(e)))
+		}
 	}
 
 	if p, ok := l.placeOrPart(e); ok {
@@ -102,12 +106,11 @@ func (l *lowering) partOfValue(e ast.Expr) (Operand, bool) {
 			return Operand{}, false
 		}
 
-		base := l.root(x.X)
-		return base.sub(l.throughBorrow(x.X, x.Sel.Name)), true
+		return l.through(l.root(x.X), x.X, x.Sel.Name), true
 	case *ast.IndexExpr:
 		base := l.root(x.X) // what is indexed before the index, as the program evaluates them
 		l.value(x.Index, nil)
-		return base.sub(l.throughBorrow(x.X, "[]")), true
+		return l.through(base, x.X, "[]"), true
 	case *ast.UnaryExpr:
 		if x.Op == token.MUL {
 			return l.root(x.X).sub("*"), true
@@ -132,7 +135,7 @@ func (l *lowering) root(e ast.Expr) Operand {
 func (l *lowering) use(p Operand, e ast.Expr, want Type) Operand {
 	t := l.typeOf(e)
 	if r, ok := want.(*Ref); ok && !isBorrow(t) {
-		return l.lend(p, e, r.mut)
+		return l.lendAs(p, e, refOf(t, r), e.Pos())
 	}
 
 	if r, ok := t.(*Ref); ok && want != nil && !isBorrow(want) && !isAny(want) && !IsCopy(r.elem) { // a borrow given where the value is wanted: a move out of what it points to, which is refused
@@ -157,9 +160,25 @@ func (l *lowering) lend(p Operand, e ast.Expr, mut bool) Operand { return l.lend
 
 // lendAt is lend, the borrow made at pos.
 func (l *lowering) lendAt(p Operand, e ast.Expr, mut bool, pos token.Pos) Operand {
-	tmp := l.temp(NewRef(l.typeOf(e), mut), true, e)
+	return l.lendAs(p, e, NewRef(l.typeOf(e), mut), pos)
+}
+
+// refOf is the type of a borrow of a value of type t made where want,
+// a borrow, is wanted: want itself when it is of t, as it is in most
+// places, else a borrow of t with want's mutability.
+func refOf(t Type, want *Ref) *Ref {
+	if Identical(want.elem, t) {
+		return want
+	}
+
+	return NewRef(t, want.mut)
+}
+
+// lendAs is lendAt, the borrow made of the type ref.
+func (l *lowering) lendAs(p Operand, e ast.Expr, ref *Ref, pos token.Pos) Operand {
+	tmp := l.temp(ref, true, e)
 	l.derives(tmp, p)
-	l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: mut, Expr: e, Pos: pos})
+	l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: ref.mut, Expr: e, Pos: pos})
 	return tmp
 }
 
@@ -172,13 +191,15 @@ func (l *lowering) made(e ast.Expr, args []Operand, owned bool) Operand {
 
 // madeAt is made, the value made at pos.
 func (l *lowering) madeAt(e ast.Expr, args []Operand, owned bool, pos token.Pos) Operand {
+	t := l.temp(l.typeOf(e), owned, e)
 	for _, a := range args {
-		if !l.isBorrowTemp(a) {
+		if l.isBorrowTemp(a) {
+			l.parts = append(l.parts, lentPart{made: t.Temp, part: a.Temp}) // lent for a call that takes the value, else until the statement ends
+		} else {
 			l.take(a)
 		}
 	}
 
-	t := l.temp(l.typeOf(e), owned, e)
 	l.emit(Instr{Op: OpMake, To: t, Args: l.args(args...), Expr: e, Pos: pos})
 	return t
 }
@@ -377,28 +398,12 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 		form = l.c.lowerBody(sig, x.Body)
 		l.inner = l.c.lowering
 		l.c.lowering = outer
-		if compareForms { // checked once its body's form is built, under its body's graph
-			l.f.closures = append(l.f.closures, closureForm{form: form, sig: sig, pos: x.Pos()})
-			l.inner.f = nil // kept until then: the next closure gets a form of its own
-		}
+		l.f.closures = append(l.f.closures, closureForm{form: form, sig: sig, pos: x.Pos()}) // checked once its body's form is built, under its body's graph
+		l.inner.f = nil                                                                      // kept until then: the next closure gets a form of its own
 	}
 
 	spawned := l.spawning != nil && unparen(l.spawning.Fun) == x // the closure the spawn runs, whose captures move where it stands; a closure inside its arguments is not it
-
-	captures := l.c.captured[x]
-	if compareForms && form != nil {
-		got := formCaptures(form, x.Pos())
-		if spawned { // a spawned closure takes what it captures with it: a task has frames of its own
-			for i := range got {
-				if got[i].mode != byCopy {
-					got[i].mode = byMove
-				}
-			}
-		}
-
-		l.c.compareCaptures(x, got, captures)
-	}
-
+	captures := l.captures(x, form, spawned)
 	uses := l.firstUses(x, captures)
 	start := len(l.argStack)
 	for i, cap := range captures {
@@ -409,6 +414,10 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 			l.emit(Instr{Op: OpRead, Place: p, Capture: true, Expr: use, Pos: use.Pos()})
 			l.argStack = append(l.argStack, p)
 		case byRef, byMut:
+			if cap.mode == byMut && cap.reads {
+				l.emit(Instr{Op: OpRead, Place: p, Capture: true, Expr: use, Pos: use.Pos()}) // the closure reads the value when it runs: one moved before it is gone
+			}
+
 			tmp := l.temp(NewRef(cap.v.typ, cap.mode == byMut), false, use)
 			l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: cap.mode == byMut, Capture: true, Expr: use, Pos: use.Pos()})
 			l.argStack = append(l.argStack, tmp)
@@ -430,21 +439,68 @@ func (l *lowering) funcLit(x *ast.FuncLit) Operand {
 	return l.madeFrom(x, start, true)
 }
 
+// captures records what the closure x captures, read off its form, for the
+// typing's record and the emitters: a spawned closure takes what it
+// captures with it, as a task has frames of its own, so each capture that
+// is not copied in moves, when its type may cross to another task; and a
+// closure that holds a value, copied or moved, hides the type it holds.
+func (l *lowering) captures(x *ast.FuncLit, form *Form, spawned bool) []capture {
+	if form == nil {
+		return nil
+	}
+
+	c := l.c
+	caps := formCaptures(form, x.Pos())
+	for i := range caps {
+		cap := &caps[i]
+		if spawned && cap.mode != byCopy && c.taken(cap.v.name, cap.v.typ, l.spawning.Pos()) {
+			cap.mode = byMove
+		}
+
+		if cap.mode == byCopy || cap.mode == byMove {
+			c.hide(cap.v.typ, x.Pos(), "a closure") // the closure holds the value, and its type says nothing of it
+		}
+	}
+
+	if c.captured == nil {
+		c.captured = make(map[*ast.FuncLit][]capture)
+	}
+
+	c.captured[x] = caps
+	vars := make([]Capture, len(caps))
+	for i, cap := range caps {
+		vars[i] = Capture{cap.v, cap.mode == byCopy}
+	}
+
+	c.info.Captures[x] = vars
+	return caps
+}
+
 // formCaptures reads off a closure's form what the closure captures: each
 // variable of the form declared before the closure begins, with the
 // strongest use the body makes of it, moved, changed or lent mut, or
 // read, where a Copy value read is copied in. A variable a closure inside
 // the body captures counts as the body's own use of it.
 func formCaptures(f *Form, closure token.Pos) []capture {
-	modes := make([]captureMode, len(f.Vars))
+	modes, reads := make([]captureMode, len(f.Vars)), make([]bool, len(f.Vars))
 	for i := range modes {
 		modes[i] = byRef
 	}
 
 	for i := range f.Instrs {
 		in := &f.Instrs[i]
+		switch in.Op {
+		case OpRead, OpMove, OpBorrow, OpStore:
+		default:
+			continue // no place of its own
+		}
+
 		if in.Place.IsTemp() {
 			continue
+		}
+
+		if in.Op != OpStore {
+			reads[in.Place.Var] = true
 		}
 
 		switch {
@@ -458,7 +514,7 @@ func formCaptures(f *Form, closure token.Pos) []capture {
 	var caps []capture
 	for i, v := range f.Vars {
 		if v.pos != token.NoPos && !v.field && !v.global && v.pos < closure { // declared before the closure: captured
-			caps = append(caps, capture{v, captureModeOf(v, modes[i])})
+			caps = append(caps, capture{v, captureModeOf(v, modes[i]), reads[i]})
 		}
 	}
 
@@ -472,11 +528,8 @@ func movedIn(form *Form, v *Var) *Instr {
 		return nil
 	}
 
-	for b, blk := range form.Blocks {
-		if !form.reached[b] {
-			continue // a move control cannot reach moves nothing
-		}
-
+	for _, b := range form.order { // a move control cannot reach moves nothing
+		blk := form.Blocks[b]
 		for i := blk.From; i < blk.To; i++ {
 			if in := &form.Instrs[i]; in.Op == OpMove && !in.Place.IsTemp() && form.Vars[in.Place.Var] == v {
 				return in
@@ -651,6 +704,11 @@ func (l *lowering) matchExpr(x *ast.MatchExpr) Operand {
 		l.start(body)
 		l.openScope()
 		l.reachMut(x.X, scrutinee)
+		if _, parts := arm.Pat.(*ast.PartsPat); parts && !scrutinee.IsTemp() { // the arm written for each variant reads the variant it is written for: the value is lent to it for the arm
+			held := l.lend(scrutinee, x.X, false)
+			l.f.Temps[held.Temp].Named = "the arm written for each variant"
+		}
+
 		l.bind(arm.Pat, scrutinee)
 		if arm.Guard != nil {
 			l.guardOf(x, arm, i+1 < len(x.Arms), next)
@@ -710,7 +768,7 @@ func (l *lowering) armBody(arm *ast.MatchArm, result Operand) {
 // moved before the arms; any other place is read, its parts bound
 // through a borrow or copied; a value made here is held for the arms.
 func (l *lowering) scrutinee(x ast.Expr, bindsByValue bool) Operand {
-	if p, ok := l.placeOf(x); ok {
+	if p, ok := l.placeOrPart(x); ok { // a place, or a part of a value made here, which an arm's binding by value may not move out of
 		if t := l.typeOf(x); t != nil && !IsCopy(t) && !isBorrow(t) && l.kindOf(p) == placeOwned && bindsByValue {
 			l.emit(Instr{Op: OpMove, Place: p, Expr: x, Pos: x.Pos()})
 		} else {

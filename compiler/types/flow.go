@@ -15,16 +15,16 @@ import (
 )
 
 // The borrow pass decides where a borrow is live along the paths a
-// function can take, not by the order of its lines. As the checker
-// walks a function it records what happens in it, in blocks joined by
-// the edges control can take: the arms of an if, a match, a ?? or a
-// select, a loop's body back to its head and out of it, a break and a
-// continue. At the function's end three passes run over the blocks to a
-// fixed point, as the liveness pass of the Go compiler runs over its
-// SSA blocks: liveness, backwards, finds where a variable may still be
-// used before it is given another value or dropped; the loans in
-// effect, forwards, find which borrows a variable may hold at each
-// point; and the variables dropped, forwards, which may be gone there.
+// function can take, not by the order of its lines. The pass over a
+// body's form (formborrows.go) records what happens in it, in blocks
+// joined by the edges control can take, the form's own: the arms of an
+// if, a match, a ?? or a select, a loop's body back to its head and out
+// of it, a break and a continue. At the body's end three passes run over
+// the blocks to a fixed point: liveness, backwards, finds where a
+// variable may still be used before it is given another value or
+// dropped; the loans in effect, forwards, find which borrows a variable
+// may hold at each point; and the variables dropped, forwards, which may
+// be gone there.
 // A loan is live where it is in effect and its holder is live, and
 // every access, drop and new loan is checked against what is live where
 // it is made. A closure's body has a graph of its own.
@@ -125,8 +125,8 @@ type flowReturn struct {
 	part returnedPart // the part of v the borrow is of, which a body keeping a trait's word judges by (word.go)
 }
 
-// A flowError is an error found at the function's end, reported in the
-// order the walk met what it is about.
+// A flowError is an error found at the body's end, reported in the order
+// the pass met what it is about.
 type flowError struct {
 	seq    int
 	pos    token.Pos
@@ -137,12 +137,10 @@ type flowError struct {
 // A bitset is a set of small integers.
 type bitset []uint64
 
-// A loopSpan is the blocks of a loop: from its head, where each pass
-// begins, to the block after the loop, which is not in it, and the
-// block a pass ends in, a for's post statement, made before the body's
-// blocks though it runs after them. Blocks are made in the order of the
-// source, so a loop's are consecutive.
-type loopSpan struct{ head, cont, exit int }
+// A loopSpan is a loop of the graph, known by its head, the block each
+// pass begins in; the blocks it holds are those whose innermost loop is
+// it or one inside it, which loopOf records.
+type loopSpan struct{ head int }
 
 // A flow is the graph of one function's or closure's body.
 type flow struct {
@@ -155,17 +153,15 @@ type flow struct {
 	rets      []flowReturn
 	errs      []flowError
 	deferred  []*Var        // the holders of what deferred calls borrow, live until the function returns
-	fnScope   *Scope        // the scope of the body's parameters, the outermost a return drops
 	outside   map[*Var]*Var // what the caller owns behind each parameter that carries a borrow, and the parameter
 	held      map[*Var]bool // of those, each that stands for a borrow a parameter taken by value holds, in a body that keeps a trait's word (word.go)
-	temps     []*Var        // the holders standing for the temporaries the statements being checked bind borrows of, dropped where each statement ends
 	temporary map[*Var]bool // every such holder, for a message
 	parent    *flow         // for a closure's body, the graph of the body it is written in
-	ends      []int         // the ends of the branches of the open forks
-	breaks    []int         // the breaks of the open loops
 	loops     []loopSpan    // the blocks of each loop, for a message: a use reached by coming back round the loop is in its next pass
-	loopOf    []int         // for a graph built from a form, the head of the innermost loop each block is in, or -1: the loops' blocks are not consecutive there
-	outer     token.Pos     // for a closure's body, where the closure begins: a variable declared before it may be used after the body
+	loopOf    []int         // the head of the innermost loop each block is in, or -1
+	holders   []*Var        // the variables standing in the graph for temporaries and loops (newHolder), given back to spare when the graph is freed
+	spare     []*Var
+	outer     token.Pos // for a closure's body, where the closure begins: a variable declared before it may be used after the body
 	seq       int
 	back      bool         // an edge goes to a block made before its source, a loop: the passes iterate to a fixed point; without one, each block is reached from blocks made before it, and one pass in that order decides
 	vars      map[*Var]int // the variables the solver numbers, kept and emptied for each body solved
@@ -200,9 +196,10 @@ func (c *Checker) newFlow(outer token.Pos) *flow {
 func (c *Checker) freeFlow(f *flow) {
 	f.blocks = f.blocks[:0]
 	f.loans, f.accesses, f.drops, f.copies, f.rets, f.errs = f.loans[:0], f.accesses[:0], f.drops[:0], f.copies[:0], f.rets[:0], f.errs[:0]
-	f.ends, f.breaks, f.loops, f.seq = f.ends[:0], f.breaks[:0], f.loops[:0], 0
-	f.deferred, f.parent, f.fnScope, f.outside, f.held, f.back = f.deferred[:0], nil, nil, nil, nil, false
-	f.temps, f.temporary, f.loopOf = f.temps[:0], nil, f.loopOf[:0]
+	f.loops, f.seq = f.loops[:0], 0
+	f.deferred, f.parent, f.outside, f.held, f.back = f.deferred[:0], nil, nil, nil, false
+	f.temporary, f.loopOf = nil, f.loopOf[:0]
+	f.spare, f.holders = append(f.spare, f.holders...), f.holders[:0]
 	flows.Put(f)
 }
 
@@ -237,12 +234,7 @@ func (f *flow) edge(from, to int) {
 // control cannot reach.
 func (c *Checker) flowAdd(ev flowEvent) {
 	f := c.flow
-	if f == nil || c.dead {
-		return
-	}
-
-	if c.typingPlace { // the place an assignment writes is reached at the store: its events wait there (replay)
-		c.heldAccess = append(c.heldAccess, heldAccess{held: eventHeld, ev: ev})
+	if f == nil {
 		return
 	}
 
@@ -275,7 +267,7 @@ func (c *Checker) flowAssign(v *Var, path string) {
 // the call holds it until the function returns.
 func (c *Checker) flowLoan(b borrow) {
 	f := c.flow
-	if f == nil || c.dead {
+	if f == nil {
 		return
 	}
 
@@ -308,7 +300,7 @@ func (c *Checker) flowCopy(to, from *Var, path, toPath string, pos token.Pos) {
 
 func (c *Checker) flowCopyOf(cp flowCopy) {
 	f := c.flow
-	if f == nil || c.dead {
+	if f == nil {
 		return
 	}
 
@@ -322,7 +314,7 @@ func (c *Checker) flowCopyOf(cp flowCopy) {
 // stored.
 func (c *Checker) flowThrough(m *Var, prefix, path string, pos token.Pos) {
 	f := c.flow
-	if f == nil || c.dead {
+	if f == nil {
 		return
 	}
 
@@ -342,70 +334,6 @@ func (c *Checker) flowDeferred(pos token.Pos) *Var {
 	return v
 }
 
-// flowTemporary makes a holder standing for the temporary tmp, which a
-// match or an if-binding binds borrows of: each binding holds it, and it
-// is dropped where the statement ends, so that no borrow of it leaves
-// the statement, returned or kept: match ref mk() { A(xs) => return xs }
-// would outlive mk().
-func (c *Checker) flowTemporary(tmp ast.Expr) *Var {
-	f := c.flow
-	if f == nil || c.dead {
-		return nil
-	}
-
-	v := c.newHolder(tmp.Pos(), exprText(unparen(tmp)))
-	f.temps = append(f.temps, v)
-	c.holdsTemporary(v)
-	return v
-}
-
-// lendTemporary gives each variable of the scope s that holds a borrow,
-// a binding of a match's arm, a loan of the temporary's holder.
-func (c *Checker) lendTemporary(s *Scope, holder *Var, pos token.Pos) {
-	if holder == nil {
-		return
-	}
-
-	for _, obj := range s.elems {
-		if v, ok := obj.(*Var); ok && holdsBorrow(v.typ) {
-			c.flowLoan(borrow{holder: v, place: place{holder, ""}, pos: pos})
-		}
-	}
-}
-
-// tempMark is where the holders of the statement about to be checked
-// begin, for dropTemporaries.
-func (c *Checker) tempMark() int {
-	if c.flow == nil {
-		return 0
-	}
-
-	return len(c.flow.temps)
-}
-
-// dropTemporaries drops the holders made since mark where their
-// statement ends, at end.
-func (c *Checker) dropTemporaries(mark int, end token.Pos) {
-	c.dropTemporariesFor(mark, end, dropStatement)
-}
-
-// dropTemporariesFor drops the holders made since mark at end, for the
-// reason why.
-func (c *Checker) dropTemporariesFor(mark int, end token.Pos, why dropWhy) {
-	f := c.flow
-	if f == nil || len(f.temps) <= mark {
-		return
-	}
-
-	if !c.dead {
-		for _, v := range f.temps[mark:] {
-			c.flowDrop(v, end, why, false)
-		}
-	}
-
-	f.temps = f.temps[:mark]
-}
-
 // flowDrop records the drop of v at pos, for the reason why; runs says
 // the variable's Drop may read what it borrows, a use of it.
 func (c *Checker) flowDrop(v *Var, pos token.Pos, why dropWhy, runs bool) {
@@ -418,7 +346,7 @@ func (c *Checker) flowDrop(v *Var, pos token.Pos, why dropWhy, runs bool) {
 // flowAccess records an access to the place p, made by e at pos.
 func (c *Checker) flowAccess(e ast.Expr, p place, what access, pos token.Pos) {
 	f := c.flow
-	if f == nil || c.dead {
+	if f == nil {
 		return
 	}
 
@@ -441,7 +369,7 @@ func onlyReads(what access) bool { return what == readAccess || what == refAcces
 // flowReturn records a borrow returned out of v, of its part part.
 func (c *Checker) flowReturn(v *Var, pos token.Pos, part returnedPart) {
 	f := c.flow
-	if f == nil || c.dead {
+	if f == nil {
 		return
 	}
 
@@ -449,18 +377,6 @@ func (c *Checker) flowReturn(v *Var, pos token.Pos, part returnedPart) {
 	f.rets = append(f.rets, flowReturn{v, pos, f.seq, part})
 	c.flowAdd(flowEvent{kind: evReturn, i: len(f.rets) - 1})
 }
-
-// flowError keeps an error for the function's end; access says it is
-// an access's, which a later access at the same position replaces.
-func (c *Checker) flowError(pos token.Pos, msg string, access bool) {
-	f := c.flow
-	f.seq++
-	f.errs = append(f.errs, flowError{seq: f.seq, pos: pos, msg: msg, access: access})
-}
-
-// fromForm reports whether the graph was built from a form, whose
-// blocks loopOf says the loops of.
-func (f *flow) fromForm() bool { return len(f.loopOf) > 0 }
 
 // dropsHere reports whether v is dropped where its scope ends: a
 // variable of the body, not a field, a package variable or one the
@@ -486,7 +402,16 @@ func (c *Checker) holdsTemporary(v *Var) {
 // of the program holds, a temporary's or a loop's borrows, assigned at
 // pos.
 func (c *Checker) newHolder(pos token.Pos, name string) *Var {
-	v := NewVar(pos, name, Typ[Invalid])
+	f := c.flow
+	var v *Var
+	if n := len(f.spare); n > 0 { // a holder of a graph freed before, which nothing names once its graph is
+		v, f.spare = f.spare[n-1], f.spare[:n-1]
+		*v = Var{object: object{name: name, typ: Typ[Invalid], pos: pos}}
+	} else {
+		v = NewVar(pos, name, Typ[Invalid])
+	}
+
+	f.holders = append(f.holders, v)
 	c.flowAssign(v, "")
 	return v
 }
@@ -500,225 +425,6 @@ func (c *Checker) loopLoan(holder *Var, p place, mut bool, pos token.Pos) {
 // withoutDeref is the path without the * that ends it: the place a
 // borrow read through it is of.
 func withoutDeref(path string) string { return strings.TrimSuffix(strings.TrimSuffix(path, "*"), ".") }
-
-// dropScope records the drop of every variable s declares, at end, the
-// last declared first.
-func (c *Checker) dropScope(s *Scope, end token.Pos, why dropWhy) {
-	f := c.flow
-	if f == nil || c.dead || len(s.elems) == 0 {
-		return
-	}
-
-	mark := len(f.drops)
-	for _, obj := range s.elems {
-		if v, ok := obj.(*Var); ok && dropsHere(v) && !(isMut(v.typ) && c.isParam(v)) {
-			f.drops = append(f.drops, flowDrop{v: v, pos: end, why: why, runs: dropRuns(v.typ)}) // a mut parameter is the caller's, never dropped here
-		}
-	}
-
-	added := f.drops[mark:]
-	slices.SortFunc(added, func(a, b flowDrop) int { return int(b.v.pos) - int(a.v.pos) }) // the last declared first, as owners are dropped
-	for i := range added {
-		f.seq++
-		added[i].seq = f.seq
-		c.flowAdd(flowEvent{kind: evDrop, v: added[i].v, i: mark + i})
-	}
-}
-
-// flowLoopBody ends the test of the innermost loop and begins its body:
-// the way out leaves from the test, before any of the body.
-func (c *Checker) flowLoopBody() {
-	f := c.flow
-	if f == nil {
-		return
-	}
-
-	r := &c.regions[len(c.regions)-1]
-	r.test = f.cur
-	f.cur = f.newBlock(r.test)
-}
-
-// flowIn records what f does into the block b instead of the current
-// one: a match's move of its scrutinee, made before any arm.
-func (c *Checker) flowIn(b int, f func()) {
-	fl := c.flow
-	if fl == nil {
-		f()
-		return
-	}
-
-	cur := fl.cur
-	fl.cur = b
-	f()
-	fl.cur = cur
-}
-
-// flowGuard ends a match guard's block and begins the arm's body after
-// it, and makes the block the guard fails into, which it returns;
-// flowGuardFails fills that block, dropping what the arm's pattern
-// bound, and leads it on to the next arm, which runs when the guard is
-// false.
-func (c *Checker) flowGuard() int {
-	f := c.flow
-	if f == nil || c.dead {
-		return -1
-	}
-
-	g := f.cur
-	fails := f.newBlock(g)
-	f.cur = f.newBlock(g)
-	return fails
-}
-
-func (c *Checker) flowGuardFails(fails int, arm *Scope, pos token.Pos) {
-	f := c.flow
-	if f == nil || fails < 0 {
-		return
-	}
-
-	dead := c.dead
-	c.dead = false // the arm's body may have left; the way past its guard has not
-	c.flowIn(fails, func() { c.dropScope(arm, pos, dropBlock) })
-	c.dead = dead
-	f.edge(fails, f.cur)
-}
-
-// flowReturnDrops records the drops a return makes: every variable of
-// every open scope of the function, each after the deferred calls that
-// may borrow it run.
-func (c *Checker) flowReturnDrops(pos token.Pos) {
-	if f := c.flow; f != nil && f.fnScope != nil {
-		c.dropScopes(f.fnScope.parent, pos, dropExit)
-	}
-}
-
-// dropScopes records the drops of the scopes from the current one out
-// to floor, which is kept: what a break or continue leaves.
-func (c *Checker) dropScopes(floor *Scope, pos token.Pos, why dropWhy) {
-	for s := c.scope; s != nil && s != floor; s = s.parent {
-		c.dropScope(s, pos, why)
-	}
-}
-
-// flowFork starts the branches of a fork: each begins at the block the
-// fork is made in.
-func (c *Checker) flowFork(fk *fork) {
-	f := c.flow
-	if f == nil {
-		return
-	}
-
-	fk.from, fk.base, fk.held = f.cur, len(f.ends), len(c.heldAccess)
-	f.cur = f.newBlock(fk.from)
-}
-
-// flowBranchEnd ends one branch of a fork: it reaches the join unless
-// it left. A branch that leaves inside the place of an assignment never
-// reaches the store, so the events held for it, the drops of what it
-// leaves among them, are its own block's, recorded now.
-func (c *Checker) flowBranchEnd(fk *fork) {
-	f := c.flow
-	if f == nil {
-		return
-	}
-
-	if c.dead {
-		c.recordHeldEvents(fk.held)
-	} else {
-		f.ends = append(f.ends, f.cur)
-	}
-
-	f.cur = f.newBlock(fk.from)
-	fk.held = len(c.heldAccess)
-}
-
-// recordHeldEvents records the graph's events held from from on in the
-// current block, and keeps the rest held: the checks and accesses of
-// the place, which the store makes.
-func (c *Checker) recordHeldEvents(from int) {
-	f := c.flow
-	kept := c.heldAccess[:from]
-	for _, h := range c.heldAccess[from:] {
-		if h.held == eventHeld {
-			b := &f.blocks[f.cur]
-			b.events = append(b.events, h.ev)
-			continue
-		}
-
-		kept = append(kept, h)
-	}
-
-	c.heldAccess = kept
-}
-
-// flowJoin joins the branches of a fork; when they do not cover every
-// path, the way past them all joins too.
-func (c *Checker) flowJoin(fk *fork, complete bool) {
-	f := c.flow
-	if f == nil {
-		return
-	}
-
-	if !complete {
-		f.ends = append(f.ends, f.cur)
-	}
-
-	f.cur = f.newBlock(f.ends[fk.base:]...)
-	f.ends = f.ends[:fk.base]
-}
-
-// flowLoop starts a loop: its head is where each pass begins.
-func (c *Checker) flowLoop(r *region) {
-	f := c.flow
-	if f == nil {
-		return
-	}
-
-	r.head = f.newBlock(f.cur)
-	r.test, r.cont, r.base, r.floor = r.head, r.head, len(f.breaks), c.scope
-	f.cur = r.head
-}
-
-// flowLoopEnd ends a loop: the end of its body goes round to its head,
-// through what a continue reaches, and the way out joins its breaks and,
-// for a loop with a condition, its test.
-func (c *Checker) flowLoopEnd(r *region) {
-	f := c.flow
-	if f == nil {
-		return
-	}
-
-	if !c.dead {
-		c.dropScopes(r.floor, r.end, dropPass)
-		f.edge(f.cur, r.cont)
-	}
-
-	exit := f.newBlock(f.breaks[r.base:]...)
-	f.loops = append(f.loops, loopSpan{r.head, r.cont, exit})
-	f.breaks = f.breaks[:r.base]
-	if !r.infinite {
-		f.edge(r.test, exit)
-	}
-
-	f.cur = exit
-}
-
-// flowBranch records a break or continue out of the loop r.
-func (c *Checker) flowBranch(r *region, tok token.Kind, pos token.Pos) {
-	f := c.flow
-	if f == nil || c.dead {
-		return
-	}
-
-	c.dropScopes(r.floor, pos, dropLeave)
-	if tok == token.CONTINUE {
-		f.edge(f.cur, r.cont)
-	} else {
-		f.breaks = append(f.breaks, f.cur)
-	}
-
-	f.cur = f.newBlock()
-}
 
 func (s bitset) has(i int) bool { return s[i/64]&(1<<(i%64)) != 0 }
 func (s bitset) set(i int)      { s[i/64] |= 1 << (i % 64) }
@@ -791,14 +497,7 @@ func (f *flow) heldFirst(v *Var) int {
 	return -1
 }
 
-// solveFlow runs the passes over the graph of the body just
-// walked and reports what collides, in the order the walk met it.
-func (c *Checker) solveFlow() {
-	c.solve()
-	c.reportFlow()
-}
-
-// solve runs the passes over the graph of the body just walked, leaving
+// solve runs the passes over the graph of the body just read, leaving
 // what collides in the graph's errors.
 func (c *Checker) solve() {
 	f := c.flow
@@ -860,14 +559,8 @@ func (c *Checker) solve() {
 	c.checkFlow(take(nl))
 }
 
-// reportFlow reports the errors the body's graph found, in the order
-// the walk met what they are about.
-func (c *Checker) reportFlow() {
-	c.eachFlowError(func(e flowError) { c.errorf(e.pos, e.msg) })
-}
-
 // eachFlowError calls report with each error the body's graph found, in
-// the order the walk met what they are about, two accesses at one
+// the order the pass met what they are about, two accesses at one
 // position being one seen twice, as the operand of a borrow is read and
 // then lent: the later, more specific message wins.
 func (c *Checker) eachFlowError(report func(flowError)) {
@@ -1324,8 +1017,8 @@ func (c *Checker) isBorrowedParam(v *Var) bool {
 // word.
 func (c *Checker) flowParams(sig *Signature) {
 	f := c.flow
-	if f == nil || !(c.hasMutParam(sig) || f.outer != token.NoPos || c.keepsWord()) {
-		return
+	if f == nil || sig == nil || !(c.hasMutParam(sig) || f.outer != token.NoPos || c.keepsWord()) {
+		return // a declaration's values have no parameters
 	}
 
 	for i := -1; i < len(sig.params); i++ {
@@ -1560,7 +1253,7 @@ func (c *Checker) firstUse(v *Var, bi, ei int) (token.Pos, bool, bool) {
 			if !seen[s] {
 				seen[s] = true
 				loop := q.loop
-				if s <= q.block {
+				if s <= q.block && f.isHead(s) { // a block may be made before one that goes on to it: only an edge to a head goes round
 					loop = f.loopAround(s, q.block)
 				}
 
@@ -1572,26 +1265,18 @@ func (c *Checker) firstUse(v *Var, bi, ei int) (token.Pos, bool, bool) {
 	return token.NoPos, false, false
 }
 
-// loopAround returns the innermost loop whose blocks hold both ends of
-// an edge from the block from back to the earlier block to, or -1: an
-// edge to the block a pass ends in goes on in the same pass, not round.
+// isHead reports whether block b is the head of a loop, where its passes
+// begin.
+func (f *flow) isHead(b int) bool {
+	return slices.ContainsFunc(f.loops, func(l loopSpan) bool { return l.head == b })
+}
+
+// loopAround returns the loop whose head the edge from the block from
+// goes back to, or -1: an edge to a block that is not a head goes on,
+// not round.
 func (f *flow) loopAround(to, from int) int {
-	if f.fromForm() { // an edge back to a head goes round that loop
-		for i, l := range f.loops {
-			if l.head == to {
-				return i
-			}
-		}
-
-		return -1
-	}
-
-	for i, l := range f.loops { // a loop ends before the loops around it, so the first found is the innermost
-		if l.head <= to && from < l.exit {
-			if to == l.cont && l.cont != l.head {
-				return -1
-			}
-
+	for i, l := range f.loops {
+		if l.head == to {
 			return i
 		}
 	}
@@ -1606,15 +1291,11 @@ func (f *flow) inLoop(loop, b int) bool {
 		return false
 	}
 
-	if f.fromForm() {
-		for h := b; h >= 0; h = f.loopOf[h] { // the block itself, its head, and the heads around it
-			if h == f.loops[loop].head {
-				return true
-			}
+	for h := b; h >= 0; h = f.loopOf[h] { // the block itself, its head, and the heads around it
+		if h == f.loops[loop].head {
+			return true
 		}
-
-		return false
 	}
 
-	return f.loops[loop].head <= b && b < f.loops[loop].exit
+	return false
 }

@@ -419,6 +419,10 @@ func (l *lowering) bind(p ast.Pattern, v Operand) {
 	switch p := p.(type) {
 	case *ast.IdentPat:
 		if bound, ok := l.c.info.Defs[p.Name].(*Var); ok {
+			if v.IsValue() {
+				l.f.Temps[l.f.Temps[v.Temp].Origin].Bound = true // the whole value bound: the binding holds the temporary until its statement drops it
+			}
+
 			l.declareStore(bound, v, p.Name)
 		}
 	case *ast.TuplePat:
@@ -526,7 +530,7 @@ func (l *lowering) rangeStmt(s *ast.RangeStmt) {
 // for the loop.
 func (l *lowering) rangeSource(x ast.Expr, pos token.Pos) Operand {
 	t := l.typeOf(x)
-	if p, ok := l.placeOf(x); ok && t != nil {
+	if p, ok := l.placeOrPart(x); ok && t != nil {
 		switch {
 		case isBorrow(t): // a borrow variable is lent again, for the loop
 			l.emit(Instr{Op: OpRead, Place: p, Expr: x, Pos: x.Pos()})
@@ -629,4 +633,44 @@ func (l *lowering) selectStmt(s *ast.SelectStmt) {
 	l.argStack = l.argStack[:start]
 	l.start(join)
 	l.dropOwned(s.Select)
+}
+
+// readsAny reports whether the value e carries a borrow out of a
+// variable one of the places lhs names. A name a declaration
+// introduces counts by its name: the value read the variable it
+// shadows.
+func (c *Checker) readsAny(e ast.Expr, lhs []ast.Expr) bool {
+	found := false
+	c.sources(e, func(src ast.Expr, _, _ bool) {
+		p, kind := c.placeOf(src)
+		if kind == notPlace {
+			return
+		}
+
+		for _, l := range lhs {
+			if c.namedVar(l) == p.v.name {
+				found = true
+			}
+		}
+	})
+
+	return found
+}
+
+// namedVar returns the name of the variable the place e is part of, or
+// "" when e is no place.
+func (c *Checker) namedVar(e ast.Expr) string {
+	if id, ok := e.(*ast.Ident); ok {
+		if isBlank(id) {
+			return ""
+		}
+
+		return id.Name
+	}
+
+	if p, kind := c.placeOf(e); kind != notPlace {
+		return p.v.name
+	}
+
+	return ""
 }

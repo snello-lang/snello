@@ -6,7 +6,6 @@ package types
 
 import (
 	"path/filepath"
-	"slices"
 	"strconv"
 
 	"github.com/snello-lang/snello/compiler/ast"
@@ -154,44 +153,26 @@ type Checker struct {
 	instances     []*Trait     // the operator traits written with an argument, Mul<f64>, one per argument type (stdtraits.go)
 	defaults      []traitDefault
 
-	// The move pass (move.go): the places moved on the current path,
-	// whether the path can reach this point, the loops and selects open
-	// here, and two flags for how a place is being read.
-	moved      []move
-	floors     []floor // the open branch sets, regions and closure bodies, innermost last (move.go)
-	dead       bool
-	regions    []region
-	loops      int                     // the loops open here, inside which a borrow made later in the body reaches an access made earlier
+	// How a place is being read while the typing walks a body, and what is
+	// open around the statement being checked.
+	loops      []bool                  // the loops open here, innermost last, true for a loop over a type's parts, which no break, continue, defer or select may be inside
 	noUse      bool                    // evaluating an assignment target, which is not a use
 	lentMode   mode                    // what the last ref or mut checked lent: a place, or a value made for it
 	stringByte ast.Expr                // the last byte of a string indexed, which mut may not lend
 	placeFor   bool                    // checking the place take or replace is given, which they refuse themselves when it is not one
 	inner      bool                    // evaluating the base of a selector, which the selector checks as a whole
-	bindsOwned bool                    // a pattern bound a non-Copy value by value
 	dropOwner  Type                    // the type with a Drop whose variant a pattern is inside, by value; nil for none
 	names      *Scope                  // while set, the scope the names of a pattern's value resolve in (resolve)
 	readOnly   map[*ast.SliceExpr]bool // the slices of a value reached through a ref borrow, which mut may not lend
 	copies     bool                    // the scrutinee is a place reached through a borrow, whose Copy parts a pattern copies
 
-	// The borrow pass (borrow.go, flow.go): the graph of the body being
-	// checked, which holds the borrows its variables hold and is solved
-	// at the body's end, with the graphs kept for reuse; and the borrows
-	// lent for the call or statement being checked.
-	flow        *flow
-	pinned      map[*ast.Ident]*Var // the variables a block's or an arm's value names, resolved while their scope is open (pin)
-	deferring   *ast.CallExpr       // the call a defer statement makes, whose signature deferSig records
-	deferSig    *Signature
-	temps       []borrow
-	depth       int          // of expression nesting; a lent borrow ends with the full expression
-	movedValues []ast.Expr   // the values of a statement of several whose moves are recorded where each was checked (values)
-	lowering    *lowering    // the scratch of the lowering of a body, reused across bodies (lowering.go)
-	borrowPass  *formBorrows // the scratch of the borrow pass over the form, reused across bodies
-	formPass    bool         // the passes over the form are running: what the recorders refuse goes to formErrs, and a name resolves through the uses the typing recorded
-	formErrs    []formError
-	captureErrs []formError  // where a closure's form and the walk disagree on what it captures, while both run (compareCaptures)
-	formKeeps   []keepCall   // the closures that borrow given to a parameter their callee may keep, as the form's pass found them, while both run (compareKeeps)
-	typingPlace bool         // typing the place an assignment writes before its value: an access to the place is held, and made at the store (target)
-	heldAccess  []heldAccess // the accesses held, in their order (replay)
+	// The passes over each body's form (form.go, formmoves.go,
+	// formborrows.go): the graph of the body whose borrows are being
+	// decided (flow.go), kept for reuse, and the scratch of the lowering
+	// and of the borrow pass.
+	flow       *flow
+	lowering   *lowering    // the scratch of the lowering of a body, reused across bodies (lowering.go)
+	borrowPass *formBorrows // the scratch of the borrow pass over the form, reused across bodies
 
 	// The keeping pass (keep.go): the function a call's arguments are
 	// checked for, and what is decided at the package's end.
@@ -219,9 +200,10 @@ type Checker struct {
 	// spawn statement is starting.
 	declared     bool
 	pending      []pendingStore
-	pendingOwned []pendingStore // the instances ownedParts was asked about then, elem the type
-	closures     []closure
-	captured     map[*ast.FuncLit][]capture
+	pendingOwned []pendingStore             // the instances ownedParts was asked about then, elem the type
+	captured     map[*ast.FuncLit][]capture // what each closure captures, read off its form when it is lowered
+	moves        formMoves                  // the move pass's scratch (formmoves.go)
+	spareForms   []*Form                    // the forms of closures checked, for the closures lowered next
 	spawning     *ast.CallExpr
 	variadic     []operand     // the variadic arguments of the call just checked, which a format is checked against
 	negated      *ast.BasicLit // the literal a minus sign is written before, while it is checked: its range is the negative numbers
@@ -295,38 +277,41 @@ func (conf *Config) CheckFiles(path string, files []*token.File, fs []*ast.File,
 		}
 	}
 
-	if info != nil {
-		if info.Defs == nil {
-			info.Defs = make(map[*ast.Ident]Object)
-		}
+	if info == nil {
+		info = &Info{} // the checker's own: the passes over each body's form read what the typing records
+		c.info = info
+	}
 
-		if info.Uses == nil {
-			info.Uses = make(map[*ast.Ident]Object)
-		}
+	if info.Defs == nil {
+		info.Defs = make(map[*ast.Ident]Object)
+	}
 
-		if info.Types == nil {
-			info.Types = make(map[ast.Expr]Type)
-		}
+	if info.Uses == nil {
+		info.Uses = make(map[*ast.Ident]Object)
+	}
 
-		if info.Moves == nil {
-			info.Moves = make(map[ast.Expr]bool)
-		}
+	if info.Types == nil {
+		info.Types = make(map[ast.Expr]Type)
+	}
 
-		if info.Instances == nil {
-			info.Instances = make(map[*ast.Ident]Instance)
-		}
+	if info.Moves == nil {
+		info.Moves = make(map[ast.Expr]bool)
+	}
 
-		if info.Captures == nil {
-			info.Captures = make(map[*ast.FuncLit][]Capture)
-		}
+	if info.Instances == nil {
+		info.Instances = make(map[*ast.Ident]Instance)
+	}
 
-		if info.Wraps == nil {
-			info.Wraps = make(map[*ast.TryExpr]*Variant)
-		}
+	if info.Captures == nil {
+		info.Captures = make(map[*ast.FuncLit][]Capture)
+	}
 
-		if info.Values == nil {
-			info.Values = make(map[ast.Expr]Constant)
-		}
+	if info.Wraps == nil {
+		info.Wraps = make(map[*ast.TryExpr]*Variant)
+	}
+
+	if info.Values == nil {
+		info.Values = make(map[ast.Expr]Constant)
 	}
 
 	c.checkFiles(fs)
@@ -486,14 +471,6 @@ func (c *Checker) restore(p walkPlace) {
 // one body, and its mistakes are one each. Error paths may allocate
 // freely.
 func (c *Checker) errorf(pos token.Pos, msg string) {
-	if c.formPass {
-		if !slices.Contains(c.formErrs, formError{pos, msg}) {
-			c.formErrs = append(c.formErrs, formError{pos, msg})
-		}
-
-		return
-	}
-
 	at := c.position(pos)
 	for _, e := range c.errors {
 		if e.Pos == at && e.Msg == msg {
@@ -543,10 +520,6 @@ func (c *Checker) declare(scope *Scope, ident *ast.Ident, obj Object) {
 		return
 	}
 
-	if v, ok := obj.(*Var); ok {
-		c.flowAssign(v, "") // a declaration gives the variable its value: what it held on a loop's last pass is let go
-	}
-
 	if old := scope.Insert(obj); old != nil {
 		msg := ident.Name + " redeclared in this block"
 		if old.Pos().IsValid() {
@@ -568,7 +541,7 @@ func (c *Checker) declare(scope *Scope, ident *ast.Ident, obj Object) {
 // names visible there recorded first, whatever it resolves to: they are
 // the scopes open now, and a local declared further on is not yet.
 func (c *Checker) lookup(ident *ast.Ident) Object {
-	if c.conf.At.IsValid() && ident.NamePos == c.conf.At && c.info != nil {
+	if c.conf.At.IsValid() && ident.NamePos == c.conf.At {
 		c.info.Visible = c.scope.Visible()
 	}
 
@@ -598,22 +571,12 @@ func (c *Checker) closeScope() {
 	c.scope = c.scope.parent
 }
 
-func (c *Checker) recordDef(ident *ast.Ident, obj Object) {
-	if c.info != nil {
-		c.info.Defs[ident] = obj
-	}
-}
+func (c *Checker) recordDef(ident *ast.Ident, obj Object) { c.info.Defs[ident] = obj }
 
-func (c *Checker) recordUse(ident *ast.Ident, obj Object) {
-	if c.info != nil {
-		c.info.Uses[ident] = obj
-	}
-}
+func (c *Checker) recordUse(ident *ast.Ident, obj Object) { c.info.Uses[ident] = obj }
 
 func (c *Checker) recordType(e ast.Expr, t Type) {
-	if c.info != nil {
-		c.info.Types[e] = t
-	}
+	c.info.Types[e] = t
 
 	if c.folding != nil {
 		c.folding[e] = t

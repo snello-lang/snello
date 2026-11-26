@@ -25,10 +25,7 @@ type spreadless int
 // call checks a conversion, a built-in, a variant constructor, or a
 // call of a function or method value.
 func (c *Checker) call(e *ast.CallExpr, expected Type) operand {
-	lent := len(c.temps)
-	op := c.callInner(e, expected)
-	c.temps = c.temps[:lent] // the call returned; what it lent is given back
-	return op
+	return c.callInner(e, expected)
 }
 
 func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
@@ -101,10 +98,6 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		tmp = c.args(e, sig)
 	}
 
-	if e == c.deferring {
-		c.deferSig = sig // what the deferred call borrows is held until the function returns (deferStmt)
-	}
-
 	passedOnly := false
 	if fn, ok := f.obj.(*Func); ok {
 		passedOnly = c.passBorrows(e, fn, sig) // a type argument that holds a borrow: what the call passes along
@@ -124,8 +117,7 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 			c.recordCall(n.orig.tparams, n.targs, e.Lparen, n.obj.name) // the method is an instance's, made per type argument
 		}
 
-		if r, ok := sig.recv.typ.(*Ref); ok {
-			c.lend(sel.X, r.mut) // the receiver is borrowed last, after the arguments
+		if _, ok := sig.recv.typ.(*Ref); ok {
 			if t := c.temporaryOf(sel.X); t != nil {
 				tmp = t
 			}
@@ -141,7 +133,6 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 	}
 
 	if diverges(f.obj) {
-		c.flowReturnDrops(e.Pos()) // a call that never returns ends the function: what every open block declares is dropped
 		return operand{value, Typ[Never], nil, nil}
 	}
 
@@ -225,7 +216,6 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
 	for i, arg := range e.Args {
 		if i >= fixed && kind == VariadicAny {
 			op := c.expr(arg, nil) // a variadic any parameter takes anything
-			c.keepLent(arg, op)
 			rest = append(rest, op)
 			continue
 		}
@@ -235,8 +225,6 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
 		if !c.fits(op, pt, arg.Pos(), "argument") {
 			continue
 		}
-
-		c.keepLent(arg, op)
 
 		if t := c.argEffects(e, arg, op, p, pt, at, packed); t != nil {
 			tmp = t
@@ -333,50 +321,6 @@ func (s *Signature) variadicArg() (VariadicKind, Type) {
 	return kind, elem
 }
 
-// keepLent keeps lent, until the call an argument is passed to returns,
-// what the argument borrows when it is a borrow another call returned:
-// that call gave back what it lent, but its result still points into
-// the source, so two(a.Get(), clear(mut a)) would change a under the
-// borrow passed beside it. A variable holds its own borrow, and ref x
-// lends for the call already, in a tuple or a struct's literal too:
-// (mut j, 1) and Counter{count: mut j} lend j once.
-func (c *Checker) keepLent(arg ast.Expr, op operand) {
-	if op.mode == invalid {
-		return
-	}
-
-	if mut, ok := borrowIn(op.typ); ok {
-		c.keepLentIn(arg, mut)
-	}
-}
-
-func (c *Checker) keepLentIn(arg ast.Expr, mut bool) {
-	switch x := unparen(arg).(type) {
-	case *ast.Ident, *ast.SelectorExpr, *ast.IndexExpr, *ast.UnaryExpr, *ast.FuncLit:
-		return
-	case *ast.TupleExpr:
-		for _, elt := range x.Elts {
-			c.keepLentIn(elt, mut)
-		}
-
-		return
-	case *ast.CompositeLit:
-		for _, elt := range x.Elts {
-			if kv, ok := elt.(*ast.KeyValueExpr); ok {
-				elt = kv.Value
-			}
-
-			c.keepLentIn(elt, mut)
-		}
-
-		return
-	}
-
-	for _, src := range c.borrowSources(arg) {
-		c.lend(src, mut)
-	}
-}
-
 // diverges reports whether a call of obj never returns: os.Exit, which
 // the library declares without a body and the compiler provides, ends
 // the program as panic does, and the checker knows it as it knows
@@ -411,7 +355,6 @@ func (c *Checker) genericVariant(e *ast.CallExpr, v *Variant, expected Type) ope
 	slots := varTypes(v.fields)
 	ops := c.evaluate(in, e.Args, slots, func(i int, op operand) {
 		c.kept(op, "stored", e.Args[i].Pos()) // a variant holds what it is given
-		c.maybeMove(op, slots[i])
 	})
 	targs, ok := c.complete(in, v.name, e.Fun)
 	if !ok {
@@ -458,13 +401,6 @@ func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var, 
 	if _, ok := pt.(*Ref); ok {
 		c.noteTemporary(arg, op)
 		tmp = c.temporaryOf(arg)
-	}
-
-	if r, ok := pt.(*Ref); ok && op.mode != value {
-		c.lend(arg, r.mut) // an owned place or a borrow variable is lent for the call
-	} else if !isMut(op.typ) {
-		c.lendCaptures(arg, arg.Pos()) // a closure lends what it captures for the call
-		c.maybeMove(op, pt)
 	}
 
 	return tmp
@@ -536,7 +472,7 @@ func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, obj Object, expec
 
 	c.recordCall(sig.tparams, targs, e.Lparen, name)
 
-	if id := calleeName(e.Fun); id != nil && c.info != nil {
+	if id := calleeName(e.Fun); id != nil {
 		c.info.Instances[id] = Instance{targs, inst}
 	}
 
@@ -606,7 +542,6 @@ func (c *Checker) conversion(e *ast.CallExpr, t Type) operand {
 		}
 
 		c.zeroConversion(e, v, t)
-		c.maybeMove(x, t) // the value itself, under another name: it moves, as an argument by value does
 	// A conversion between a string and its bytes or runes copies, so it reads a borrowed operand as well.
 	case isString(v) && isByteSlice(t), isByteSlice(v) && isString(t):
 	case isRune(v) && isString(t), isRuneSlice(v) && isString(t):
@@ -636,7 +571,6 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 		return invalidOperand
 	case BuiltinPanic:
 		c.exprs(e.Args)
-		c.flowReturnDrops(e.Pos()) // a panic runs the drops of what is still owned, as a return does
 		return operand{value, Typ[Never], nil, nil}
 	case BuiltinClose:
 		return c.closeCall(e)
@@ -644,10 +578,7 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 		return c.minCall(e, b)
 	}
 
-	for _, arg := range e.Args { // print
-		c.keepLent(arg, c.expr(arg, nil))
-	}
-
+	c.exprs(e.Args) // print
 	return operand{value, Unit, nil, nil}
 }
 
@@ -936,7 +867,6 @@ func (c *Checker) variantCall(e *ast.CallExpr, v *Variant, expected Type) operan
 
 	switch v {
 	case SomeVariant:
-		c.maybeMove(x, valueType(x)) // the value moves into the option
 		return operand{value, NewOption(valueType(x)), nil, nil}
 	case NoneVariant:
 		c.errorf(e.Lparen, "None takes no argument")

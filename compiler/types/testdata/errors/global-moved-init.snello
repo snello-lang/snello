@@ -1,0 +1,20 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a package variable is reached from every task, so its value is
+// never moved, in a package variable's own declaration as in a body: not
+// into another package variable, not into a call's argument, not into a
+// variant. Fix: clone it, or lend it with ref.
+
+package p
+
+var shared = "a".Clone()
+
+var direct = shared // ERROR "shared is a package variable, shared by every task"
+
+var viaCall = len2(shared) // ERROR "shared is a package variable, shared by every task"
+
+var viaSome = Some(shared) // ERROR "shared is a package variable, shared by every task"
+
+func len2(s string) int { return len(s) }

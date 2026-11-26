@@ -29,17 +29,12 @@ func (c *Checker) typeMatch(e *ast.MatchExpr, expected Type) operand {
 	tp := c.typeParamOf(e.X)
 	splitAlternatives(e)
 	result := operand{value, Typ[Never], nil, nil}
-	f := c.forkAt()
 	for _, arm := range e.Arms {
 		c.openScope()
 		known := c.matchArm(arm, tp)
 		want := c.refine(expected) // what the arm knows of the type parameter, in the type the match is to have
 		v := c.node(arm.Body, want)
-		if x, ok := arm.Body.(ast.Expr); ok {
-			c.pin(x, v.typ)
-		}
 
-		c.maybeMove(v, v.typ)
 		if expected != nil && v.mode != invalid && v.typ != Typ[Never] {
 			c.assign(v, want, arm.Arrow, "match arm")
 			v.typ = expected // the arm's value, read outside it, where one arm is compiled for each type
@@ -47,11 +42,9 @@ func (c *Checker) typeMatch(e *ast.MatchExpr, expected Type) operand {
 
 		result = c.unify(result, v, arm.Arrow, "match")
 		c.forget(known)
-		c.endScope(nodeEnd(arm.Body))
-		c.branchEnd(&f)
+		c.closeScope()
 	}
 
-	c.joinAt(&f, true)
 	return result
 }
 
@@ -217,7 +210,7 @@ func (c *Checker) matchArm(arm *ast.MatchArm, tp *TypeParam) armKnown {
 	case *ast.WildcardPat:
 	}
 
-	if c.info != nil {
+	{
 		if c.info.Arms == nil {
 			c.info.Arms = make(map[*ast.MatchArm]TypeArm)
 		}
@@ -530,13 +523,9 @@ func (c *Checker) partsLoop(s *ast.RangeStmt, call *ast.CallExpr, b *Builtin) {
 		c.recordDef(key, part)
 	}
 
-	c.enterRegion(true, false, s.For)
-	r := &c.regions[len(c.regions)-1]
-	r.parts = true
-	r.floor, r.end = c.scope.parent, s.Body.Rbrace
-	c.flowLoopBody()
+	c.enterLoop(true)
 	c.block(s.Body)
-	c.leaveRegion()
+	c.leaveLoop()
 }
 
 // partsOf returns what fields(x) or variants(x) goes through: a type
@@ -731,21 +720,17 @@ func (c *Checker) partsLit(e *ast.CompositeLit, tp *TypeParam) operand {
 		c.recordUse(elt.Key, part)
 	}
 
-	c.enterRegion(true, false, elt.For)
-	r := &c.regions[len(c.regions)-1]
-	r.parts = true
-	r.floor, r.end = c.scope.parent, nodeEnd(elt.Value)
-	c.flowLoopBody()
+	c.enterLoop(true)
 	if part != nil {
 		v := c.expr(elt.Value, part.typ)
 		c.assign(v, part.typ, elt.Value.Pos(), "field "+part.name)
-		c.maybeMove(v, part.typ)
 		c.kept(v, "stored", elt.Value.Pos())
 	} else {
 		c.expr(elt.Value, nil)
 	}
 
-	c.leaveRegion()
+	c.leaveLoop()
+
 	return operand{value, tp, nil, nil}
 }
 
@@ -819,41 +804,10 @@ func (c *Checker) variantMatch(e *ast.MatchExpr, expected Type) operand {
 		defer delete(c.held, part)
 	}
 
-	holder := c.holdMatched(e.X, pat.For)
-	c.enterRegion(true, false, pat.For)
-	r := &c.regions[len(c.regions)-1]
-	r.parts = true
-	r.floor, r.end = c.scope.parent, nodeEnd(e.Arms[0].Body)
-	c.flowLoopBody()
+	c.enterLoop(true)
 	v := c.node(e.Arms[0].Body, expected)
-	if holder != nil {
-		c.flowUse(holder, nodeEnd(e.Arms[0].Body)) // held to the end of the arm
-	}
-
-	c.leaveRegion()
+	c.leaveLoop()
 	return v
-}
-
-// holdMatched lends the variable a match written once per variant is on,
-// and what it borrows, to a holder for the arm: v.[f] reads the fields
-// of the variant the arm is written for, so nothing may give v another
-// value, lend it mut or move it while the arm runs.
-func (c *Checker) holdMatched(x ast.Expr, pos token.Pos) *Var {
-	p, kind := c.placeOf(x)
-	if kind == notPlace {
-		return nil
-	}
-
-	holder := NewVar(pos, "the arm written for each variant", Typ[Invalid])
-	c.flowAssign(holder, "")
-	c.flowLoan(borrow{holder: holder, place: p, mut: false, pos: pos})
-	for _, src := range c.borrowSources(x) {
-		if q, kind := through(c.placeOf(src)); kind != notPlace {
-			c.flowLoan(borrow{holder: holder, place: q, mut: false, pos: pos})
-		}
-	}
-
-	return holder
 }
 
 // variantBuild checks c(for f := range fields(c) { value }), the
@@ -886,21 +840,17 @@ func (c *Checker) variantBuild(e *ast.CallExpr, p *Part) operand {
 		c.recordDef(elt.Var, field)
 	}
 
-	c.enterRegion(true, false, elt.For)
-	r := &c.regions[len(c.regions)-1]
-	r.parts = true
-	r.floor, r.end = c.scope.parent, nodeEnd(elt.Value)
-	c.flowLoopBody()
+	c.enterLoop(true)
 	if field != nil {
 		v := c.expr(elt.Value, field.typ)
 		c.assign(v, field.typ, elt.Value.Pos(), "field "+field.name)
-		c.maybeMove(v, field.typ)
 		c.kept(v, "stored", elt.Value.Pos())
 	} else {
 		c.expr(elt.Value, nil)
 	}
 
-	c.leaveRegion()
+	c.leaveLoop()
+
 	return operand{value, p.of, nil, nil}
 }
 

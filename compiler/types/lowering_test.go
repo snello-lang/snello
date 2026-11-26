@@ -234,11 +234,10 @@ b3:
 }
 
 // BenchmarkLowering checks every example program as BenchmarkCheck
-// does, recording what the checker learned, once without the forms, once
-// keeping each body's form, and once comparing the form's passes with
-// the tree's, and reports allocations: the differences are what the
-// lowering and the forms kept cost, and what the passes over the form
-// cost beside the tree's.
+// does, once recording what the checker learned and once keeping each
+// body's form as well, and reports allocations: the difference between
+// the two is what the forms kept cost; the lowering and the passes over
+// the form run in both.
 func BenchmarkLowering(b *testing.B) {
 	type parsed struct {
 		f    *ast.File
@@ -253,17 +252,13 @@ func BenchmarkLowering(b *testing.B) {
 
 	conf := libraryConfig()
 	for _, bench := range []struct {
-		name    string
-		info    func() *Info
-		compare bool
+		name string
+		info func() *Info
 	}{
-		{"recorded", func() *Info { return &Info{} }, false},
-		{"forms", func() *Info { return &Info{Forms: map[*ast.BlockStmt]*Form{}} }, false},
-		{"compared", func() *Info { return &Info{} }, true},
+		{"recorded", func() *Info { return &Info{} }},
+		{"forms", func() *Info { return &Info{Forms: map[*ast.BlockStmt]*Form{}} }},
 	} {
 		b.Run(bench.name, func(b *testing.B) {
-			CompareForms(bench.compare)
-			defer CompareForms(false)
 			b.ReportAllocs()
 			for b.Loop() {
 				for _, p := range files {

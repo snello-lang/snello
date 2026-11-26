@@ -13,17 +13,16 @@ import (
 )
 
 // The borrow pass over the form: the graph of flow.go built from the
-// form's blocks, with the instructions as its events, and solved as the
-// graph the walk builds is. A temporary whose value is or holds a borrow
+// form's blocks, with the instructions as its events, solved once the
+// form is read. A temporary whose value is or holds a borrow
 // has a holder of its own in the graph where the order matters: a borrow
 // made into a temporary, lent for the call that takes it or until its
 // statement drops it; a value a call or a statement with several values
 // takes, lent its sources while the temporary is used; a value carried
 // out of a variable its statement stores, holding what it lends before
 // any store; and a temporary a binding is taken from. Any other value
-// says what it lends where it is stored, by its expression, as the
-// walk's recorders read it, so that what a variable holds is decided in
-// the form's order.
+// says what it lends where it is stored, by its expression, so that
+// what a variable holds is decided in the form's order.
 
 // formGraphs, when a test sets it, is given each pass once its graph is
 // solved, for the test to print the graph and the pass's table.
@@ -34,22 +33,22 @@ var formGraphs func(*formBorrows)
 type formBorrows struct {
 	checker *Checker
 	form    *Form
-	holders []*Var // per temporary, the holder standing for it in the graph when it is or holds a borrow, or is bound from; nil otherwise
+	holders []*Var            // per temporary, the holder standing for it in the graph when it is or holds a borrow, or is bound from; nil otherwise
+	name    []byte            // scratch for the fields a place is named by
+	names   map[string]string // the fields names made so far, one string each
 }
 
 // formBorrows runs the borrow pass over f, the form of a body of
 // signature sig, for a closure beginning at outer, then the passes of
-// the closures written in the body under its graph, and returns what
-// they refuse.
-func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) []formError {
-	saved, temps, dead, outerSig := c.flow, c.temps, c.dead, c.sig
-	c.flow, c.temps, c.dead, c.sig = c.newFlow(outer), nil, false, sig // the recorders decide by the body's own signature: a closure's parameters are its own
+// the closures written in the body under its graph, reporting what they
+// refuse.
+func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) {
+	saved, outerSig := c.flow, c.sig
+	c.flow, c.sig = c.newFlow(outer), sig // the recorders decide by the body's own signature: a closure's parameters are its own
 	if outer != token.NoPos {
 		c.flow.parent = saved // a closure's body sees what the variables of the body around it hold
 	}
 
-	wasPass := c.formPass
-	c.formPass, c.formErrs = true, c.formErrs[:0]
 	m := c.borrowPass
 	if m == nil {
 		m = &formBorrows{checker: c}
@@ -72,16 +71,12 @@ func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) []formEr
 
 		fl.loopOf = append(fl.loopOf, f.Blocks[b].Loop)
 		if f.Blocks[b].Head {
-			fl.loops = append(fl.loops, loopSpan{head: b, cont: b})
+			fl.loops = append(fl.loops, loopSpan{head: b})
 		}
 	}
 
 	c.flowParams(sig)
-	for b := range f.Blocks {
-		if !f.reached[b] {
-			continue // what control cannot reach is not checked, as the walk checks nothing after a return
-		}
-
+	for _, b := range f.order { // what control cannot reach is not checked
 		fl.cur = b
 		for i := f.Blocks[b].From; i < f.Blocks[b].To; i++ {
 			m.step(&f.Instrs[i])
@@ -94,16 +89,13 @@ func (c *Checker) formBorrows(f *Form, sig *Signature, outer token.Pos) []formEr
 	}
 
 	m.keptUses()
-	errs := slices.Clone(c.formErrs)
-	c.eachFlowError(func(e flowError) { errs = append(errs, formError{e.pos, e.msg}) })
+	c.eachFlowError(func(e flowError) { c.errorf(e.pos, e.msg) })
 	for _, cf := range f.closures { // a closure written in this body: its graph sees this one as its parent
-		errs = append(errs, c.formBorrows(cf.form, cf.sig, cf.pos)...)
+		c.formBorrows(cf.form, cf.sig, cf.pos)
 	}
 
 	c.freeFlow(c.flow)
-	c.flow, c.temps, c.dead, c.sig = saved, temps, dead, outerSig
-	c.formPass = wasPass
-	return errs
+	c.flow, c.sig = saved, outerSig
 }
 
 // step records the events of one instruction.
@@ -200,7 +192,7 @@ func (m *formBorrows) step(in *Instr) {
 // borrows may not go, from the loans before the use: stored, sent or
 // spawned, it is refused here; given to a parameter its callee may keep,
 // it is refused at the package's end, when what the callee keeps is
-// known, which the walk's record of such calls holds.
+// known (keepCalls).
 func (m *formBorrows) keptUses() {
 	c := m.checker
 	for _, k := range m.form.kept {
@@ -208,19 +200,19 @@ func (m *formBorrows) keptUses() {
 		if k.param == nil {
 			c.cannotBe(op, k.how, k.pos)
 		} else if what := c.borrowsWhat(op, k.pos); what != "" {
-			c.formKeeps = append(c.formKeeps, keepCall{k.param, k.callee, what, k.pos}) // compared with the walk's record while both run; the record itself once the walk's pass goes
+			c.keepCalls = append(c.keepCalls, keepCall{k.param, k.callee, what, k.pos}) // refused at the package's end, when what the callee keeps is known
 		}
 	}
 }
 
-// valueOf is the value of e as the walk's recorders take one, with the
-// type the typing gave it.
+// valueOf is the value of e as an operand, with the type the typing
+// gave it.
 func (c *Checker) valueOf(e ast.Expr) operand {
 	return operand{mode: value, typ: c.info.Types[e], expr: e}
 }
 
-// returned checks what the returned value lets out of the function, by
-// the walk's rule: a borrow must come from the function's source,
+// returned checks what the returned value lets out of the function: a
+// borrow must come from the function's source,
 // followed through the loans in effect at the return, and a closure
 // that borrows cannot leave. The value a ? returns is the function's
 // own result, which lets nothing out that its expression's type did
@@ -267,7 +259,7 @@ func (m *formBorrows) borrowed(in *Instr) {
 	}
 
 	c.access(in.Expr, p, borrowAccess(in.Mut), in.Expr.Pos())
-	h := m.holder(in.To, in.Pos, "")
+	h := m.holder(in.To, in.Pos, t.Named)
 	if t.Loop {
 		p, _ = through(p, kind)
 		c.loopLoan(h, p, in.Mut, in.Pos)
@@ -275,11 +267,11 @@ func (m *formBorrows) borrowed(in *Instr) {
 		return
 	}
 
-	c.flowLoan(borrow{holder: h, place: p, mut: in.Mut, pos: in.Pos, call: true})
+	c.flowLoan(borrow{holder: h, place: p, mut: in.Mut, pos: in.Pos, call: t.Named == ""}) // a construct's holder is named in a message; a borrow lent for a call is not
 }
 
-// placeOf is the place an operand names as the walk's passes name it,
-// the variable and its fields up to the first element, how it is
+// placeOf is the place an operand names as the graph names one, the
+// variable and its fields up to the first element, how it is
 // reached, owned, through a borrow or through an element, and the type
 // of the value at the end of the path. A borrow in a field is a part of
 // the owned value, which the store's rule reaches through; only a
@@ -295,17 +287,17 @@ func (m *formBorrows) placeOf(o Operand) (place, placeKind, Type) {
 	kind, t := placeOwned, v.typ
 	fields := o.Path
 	if i := strings.Index(fields, "[]"); i >= 0 {
-		fields = strings.TrimSuffix(fields[:i], ".") // the walk names a place up to its first element
+		fields = strings.TrimSuffix(fields[:i], ".") // the graph names a place up to its first element
 	}
 
 	plain := !strings.ContainsAny(fields, "*?") // the fields alone: the path itself names them
-	var named strings.Builder
+	named := m.name[:0]
 	for path := o.Path; path != ""; {
 		part, rest, _ := strings.Cut(path, ".")
 		path = rest
 		switch {
 		case part == "*":
-			if _, ok := t.(*Ref); ok && kind == placeOwned && named.Len() == 0 {
+			if _, ok := t.(*Ref); ok && kind == placeOwned && len(named) == 0 {
 				kind = placeBorrowed
 			}
 		case part == "[]":
@@ -314,21 +306,38 @@ func (m *formBorrows) placeOf(o Operand) (place, placeKind, Type) {
 			t = nil // the parts a pattern names are no fields: a binding holds what the whole lends
 			continue
 		case kind != placeIndexed && !plain:
-			if named.Len() > 0 {
-				named.WriteByte('.')
+			if len(named) > 0 {
+				named = append(named, '.')
 			}
 
-			named.WriteString(part)
+			named = append(named, part...)
 		}
 
 		t = stepType(t, part)
 	}
 
+	m.name = named
 	if !plain {
-		fields = named.String()
+		fields = m.nameOfFields(named)
 	}
 
 	return place{v, fields}, kind, t
+}
+
+// nameOfFields is the string of the fields named in b, made once per
+// name: the places of a body are named by few names, many times.
+func (m *formBorrows) nameOfFields(b []byte) string {
+	if s, ok := m.names[string(b)]; ok {
+		return s
+	}
+
+	if m.names == nil {
+		m.names = make(map[string]string)
+	}
+
+	s := string(b)
+	m.names[s] = s
+	return s
 }
 
 // root is the operand a pattern's part is bound from: the operand
@@ -386,11 +395,10 @@ func (m *formBorrows) eachPass(h *Var, pos token.Pos) {
 // with several values takes it, or it is carried, or a binding is taken
 // from a part of it. A value taken by a call lends each source where
 // the source stands, with an access to it there when a call made the
-// value, as the walk lends an argument that keeps a borrow; a carried
-// value holds what it lends where the place is stored, as the walk's
-// carry does; a literal, a tuple, a variant or a closure holds what its
-// parts lend. The loans live while the temporary is used, as the loans
-// lent for a call do.
+// value; a carried value holds what it lends where the place is stored;
+// a literal, a tuple, a variant or a closure holds what its parts lend.
+// The loans live while the temporary is used, as the loans lent for a
+// call do.
 func (m *formBorrows) made(t Operand, pos token.Pos, call bool) {
 	if t.Temp == NoTemp {
 		return
@@ -413,12 +421,12 @@ func (m *formBorrows) made(t Operand, pos token.Pos, call bool) {
 	first := len(f.loans)
 	switch {
 	case info.Carried || isFuncLit(e):
-		c.holdValue(h, "", info.Type, e, pos) // what the walk's hold would give a variable the value is stored in
+		c.holdValue(h, "", info.Type, e, pos) // what a variable the value is stored in would hold
 	default:
 		mut, _ := borrowIn(info.Type)
 		c.sources(e, func(src ast.Expr, read, deref bool) {
 			if p, kind := c.placeOf(src); kind != notPlace && call {
-				c.access(src, p, borrowAccess(mut), src.Pos()) // the call's result lends the place: accessed where the walk lends it for the call
+				c.access(src, p, borrowAccess(mut), src.Pos()) // the call's result lends the place: accessed where it is lent for the call
 			}
 
 			c.deriveFrom(h, "", mut, src, read, deref, src.Pos())
@@ -438,9 +446,9 @@ func funcLitOf(e ast.Expr) *ast.FuncLit {
 	return lit
 }
 
-// nameOf names a temporary's holder for a message, as the walk names a
-// temporary a binding is taken from: the expression whose value it
-// holds; the holder of a value lent for a call is named by nothing.
+// nameOf names a temporary's holder for a message: a temporary a
+// binding is taken from by the expression whose value it holds; the
+// holder of a value lent for a call is named by nothing.
 func (m *formBorrows) nameOf(t *TempInfo) string {
 	if t.Bound {
 		return exprText(unparen(t.Expr))
@@ -468,13 +476,14 @@ func (m *formBorrows) stores(call *ast.CallExpr) {
 // and what it holds once the value is in it.
 func (m *formBorrows) store(in *Instr) {
 	c := m.checker
-	if in.Place.IsTemp() {
-		return // an arm's value, into the temporary of the if or the match that chooses it: what it lends is decided where the chosen value is read, or stored, by the expression
+	if in.Place.IsTemp() { // an arm's value, into the temporary of the if or the match that chooses it: what it lends is decided where the chosen value is read, or stored, by the expression
+		m.usedWhereMade(in.To, "chosen by if or match, or come out of a block", in.Expr.Pos())
+		return
 	}
 
 	p, kind, t := m.placeOf(in.Place)
 	pos := in.Expr.Pos()
-	if in.To.IsValue() && in.To.Path != "" { // a part of a temporary, an element ranged over or a part a pattern binds: the place holds the temporary, dropped where its statement ends, and what the value lends
+	if in.To.IsValue() && (in.To.Path != "" || m.form.Temps[m.form.Temps[in.To.Temp].Origin].Bound) { // a part of a temporary, an element ranged over or what a pattern binds, the whole or a part: the place holds the temporary, dropped where its statement ends, and what the value lends
 		if in.Decl {
 			c.flowAssign(p.v, "")
 		}
@@ -500,11 +509,15 @@ func (m *formBorrows) store(in *Instr) {
 		c.flowUse(p.v, basePos(in.Expr)) // a store into a part reaches it through the variable, a use of what it holds
 	}
 
-	if c.flow.outer != token.NoPos && t != nil && holdsBorrow(t) && m.brings(in.To) && c.closureStore(p, pos) {
-		return
+	if c.flow.outer != token.NoPos && t != nil && (holdsBorrow(t) && m.brings(in.To) || isSignature(t) && m.closureBorrows(in.To, pos)) && c.closureStore(p, pos) {
+		return // a closure's body storing a borrow, or a closure that borrows, in a variable from outside it
 	}
 
 	if in.Decl {
+		if isSignature(p.v.typ) && !in.To.IsTemp() {
+			m.usedWhereMade(in.To, "copied to another variable", pos)
+		}
+
 		c.flowAssign(p.v, "") // a declaration gives the variable its value: what it held on a loop's last pass is let go
 		m.hold(p.v, "", p.v.typ, in)
 		return
@@ -520,6 +533,7 @@ func (m *formBorrows) store(in *Instr) {
 	c.access(in.Expr, p, writeAccess, accessPos(in.Expr))
 	switch {
 	case kind == placeOwned && p.path == "" && isSignature(t):
+		m.usedWhereMade(in.To, "assigned with =", pos)
 		c.flowAssign(p.v, "")
 	case t != nil && holdsBorrow(t):
 		prefix := ""
@@ -529,6 +543,33 @@ func (m *formBorrows) store(in *Instr) {
 
 		c.storeHolds(p, kind, prefix, t, func(part string) { m.hold(p.v, part, t, in) }, pos)
 	}
+}
+
+// usedWhereMade refuses the value o, a closure that borrows, anywhere
+// but where it is made: bound with :=, called, or passed straight to a
+// call, how saying where it was put instead. What it borrows is then
+// known where it is used, with nothing to follow.
+func (m *formBorrows) usedWhereMade(o Operand, how string, pos token.Pos) {
+	if m.closureBorrows(o, pos) {
+		m.checker.errorf(pos, "a closure that borrows cannot be "+how+": it is used where it is made, bound with :=, called, or passed to a call")
+	}
+}
+
+// closureBorrows reports whether the value o is a closure that borrows:
+// one written here that captures by borrow, or a variable holding one
+// before pos.
+func (m *formBorrows) closureBorrows(o Operand, pos token.Pos) bool {
+	c := m.checker
+	switch {
+	case o.IsValue():
+		e := m.form.Temps[o.Temp].Expr
+		return e != nil && c.closureExprBorrows(e)
+	case !o.IsTemp() && o.Path == "":
+		v := m.form.Vars[o.Var]
+		return isSignature(v.typ) && c.heldBy(v, pos) != nil
+	}
+
+	return false
 }
 
 // hold records that the part path of v, of type t, holds what the
@@ -552,23 +593,13 @@ func (m *formBorrows) hold(v *Var, path string, t Type, in *Instr) {
 		return
 	}
 
-	e := m.form.Temps[in.To.Temp].Expr
-	if _, ok := borrowIn(t); ok && e != nil {
-		if tmp := c.borrowOfTemporary(e); tmp != nil {
-			c.errorf(in.Expr.Pos(), "cannot keep a borrow of a temporary: "+exprText(tmp)+" is dropped when the statement ends")
-			return
-		}
-	}
-
 	h := m.holders[in.To.Temp]
-	if t := &m.form.Temps[in.To.Temp]; h != nil && (t.Given || t.Carried) {
+	if info := &m.form.Temps[in.To.Temp]; h != nil && (info.Given || info.Carried) {
 		c.flowCopy(v, h, "", path, in.Expr.Pos()) // what the holder took as the value was made, lent until now
 		return
 	}
 
-	if e != nil {
-		c.holdValue(v, path, t, e, in.Expr.Pos()) // by the expression, as the walk does; for a chosen value, each arm's expression
-	}
+	c.holdIn(v, path, t, m.form.Temps[in.To.Temp].Expr, in.Expr.Pos()) // by the expression; for a chosen value, each arm's; a borrow of a temporary is refused
 }
 
 // holdPlace records that the part path of v, of type t, holds what the

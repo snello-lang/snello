@@ -38,8 +38,11 @@ func TestFormBorrows(t *testing.T) {
 		{"func f(t string) { g := func(s ref string) ref string { return s }; r := g(ref t); keep(t); print(r) }", []string{"cannot move t: t is borrowed by r"}},
 		{"func f() int { outer := func() int { t := \"b\".Clone(); k := func() int { return len(t) }; inner := func() func() int { return k }; return inner()() }; return outer() }", []string{"closure k captures t by borrow and cannot be returned"}},
 		{"func f(c bool, s string) { if c { return } else { return }; r := ref s; keep(s); print(r) }", nil},
+		{"func f() { xs := []int{1, 2, 3}; print(xs[0:1], grow(mut xs)) }", []string{"cannot borrow xs as mut: xs is borrowed as ref at"}},
+		{"func f(n int, s string) { r := ref s; for i := 0; i < 2; i += 1 { match n { 1 => print(1), _ => print(2) }; print(r); keep(s) } }", []string{"s moved in a previous iteration of the loop", "cannot move s: s is borrowed by r at 28:27, used in the next pass of the loop at"}},
 		{"func f(s string) (ref string)? { if v := mkb3().Pick(ref s) { return Some(v) }; return None }", nil},
 		{"func f<T>(s string) T? { return match T { struct => Some(T{ for f := range fields(T) { [f]: match f.type { string => s, _ => f.default ?? return None } } }), _ => None } }", []string{"s moved in a previous iteration of the loop"}},
+		{"func f<T>(v mut T, w T) { match T { enum => match v { for c := range variants(T) => { *v = w } }, _ => {} } }", []string{"cannot assign to *v: v is borrowed by the arm written for each variant"}},
 		{"func f<T>(s string) T? { return match T { struct => Some(T{ for f := range fields(T) { [f]: match f.type { func() int => func() int { return len(s) }, _ => f.default ?? return None } } }), _ => None } }", []string{"closure captures s by borrow and cannot be stored", "a closure that borrows cannot be chosen by if or match"}},
 	}
 	var graphs []string

@@ -13,7 +13,7 @@ import (
 
 // The lowering writes a typed body as its form: the blocks and
 // instructions of form.go, in the order the program evaluates them. It
-// runs once a body is typed, reading the types and objects the walk
+// runs once a body is typed, reading the types and objects the typing
 // recorded, and decides for each use of a place what the program does
 // with its value: a Copy value is read, an owned value given where a
 // borrow is wanted is lent, any other is moved. A statement's
@@ -39,6 +39,7 @@ type lowering struct {
 	loops     []lowLoop   // the open loops, the innermost last
 	guard     *Guard      // the match guard whose condition is being lowered, which every block made meanwhile belongs to; nil otherwise
 	owned     []ownedTemp // the owned temporaries the statements being lowered made, dropped at each one's end unless taken; the current statement's from ownedMark
+	parts     []lentPart  // the borrows made into temporaries that a value made here holds as parts: lent for the call that takes the value, else the statement's
 	ownedMark int         // where the owned temporaries of the statement or arm being lowered begin; those before it belong to the statements and expressions around it
 	taken     []bool      // each temporary, whether a place or a call took it
 	bases     []reached   // the places reached through a call within the statement, reached once
@@ -46,6 +47,7 @@ type lowering struct {
 	results   Type
 	spawning  *ast.CallExpr // the call the spawn starts, whose closure's captures and arguments go to the task; nil otherwise
 	work      []int         // scratch for the reach over the form's blocks
+	seen      []bool        // the blocks reach has seen
 
 	declared     []int     // the variables the open scopes declared, in order, each scope a range of it
 	dropsScratch []Operand // what drops builds its list in, copied into the form by the leave
@@ -78,6 +80,28 @@ type lowLoop struct {
 // caller keeps forms; otherwise the form is the checker's scratch,
 // reused for the next body once the passes have read it.
 func (c *Checker) lowerBody(sig *Signature, body *ast.BlockStmt) *Form {
+	l := c.begin(sig)
+	l.stmts(body.List)
+	return l.finish(body.Rbrace, body)
+}
+
+// lowerInit lowers the values of a package variable's declaration d to a
+// form of their own, each value made as the declaration makes it and
+// given to its variable, so that the passes decide what the values move
+// and borrow: a package variable moved into one is refused there.
+func (c *Checker) lowerInit(d *ast.VarDecl, declared Type) *Form {
+	l := c.begin(nil)
+	for _, e := range d.Values {
+		l.take(l.value(e, declared))
+	}
+
+	return l.finish(d.Pos(), nil)
+}
+
+// begin starts the lowering of a body of signature sig, nil for a
+// declaration's values, on the checker's scratch, with the receiver and
+// the parameters declared first.
+func (c *Checker) begin(sig *Signature) *lowering {
 	l := c.lowering
 	if l == nil {
 		l = lowerings.Get().(*lowering)
@@ -86,40 +110,51 @@ func (c *Checker) lowerBody(sig *Signature, body *ast.BlockStmt) *Form {
 	}
 
 	if l.f == nil {
-		l.f = &Form{}
-	} else {
-		l.f.Vars, l.f.Blocks, l.f.Instrs, l.f.Temps = l.f.Vars[:0], l.f.Blocks[:0], l.f.Instrs[:0], l.f.Temps[:0]
-		l.f.operands, l.f.succs, l.f.closures, l.f.kept = l.f.operands[:0], l.f.succs[:0], l.f.closures[:0], l.f.kept[:0]
+		if n := len(c.spareForms); n > 0 {
+			l.f, c.spareForms = c.spareForms[n-1], c.spareForms[:n-1] // a closure's form checked with an earlier body
+		} else {
+			l.f = &Form{}
+		}
 	}
 
-	l.taken, l.bases, l.declared = l.taken[:0], l.bases[:0], l.declared[:0]
+	l.f.Vars, l.f.Blocks, l.f.Instrs, l.f.Temps = l.f.Vars[:0], l.f.Blocks[:0], l.f.Instrs[:0], l.f.Temps[:0]
+	l.f.operands, l.f.succs, l.f.closures, l.f.kept = l.f.operands[:0], l.f.succs[:0], l.f.closures[:0], l.f.kept[:0]
+
+	l.taken, l.bases, l.declared, l.parts = l.taken[:0], l.bases[:0], l.declared[:0], l.parts[:0]
 	l.scopes, l.loops, l.owned, l.ownedMark = l.scopes[:0], l.loops[:0], l.owned[:0], 0
-	l.results, l.spawning, l.guard = sig.results, nil, nil
-	wasPass := c.formPass
-	c.formPass = true // the names the lowering resolves through the recorders are the typing's: the scopes are closed
-	defer func() { c.formPass = wasPass }()
+	l.results, l.spawning, l.guard = nil, nil, nil
 	l.cur = l.newBlock()
 	l.openScope()
-	if sig.recv != nil {
-		l.declare(sig.recv)
-	}
+	if sig != nil {
+		l.results = sig.results
+		if sig.recv != nil {
+			l.declare(sig.recv)
+		}
 
-	for _, p := range sig.params {
-		l.declare(p)
+		for _, p := range sig.params {
+			l.declare(p)
+		}
 	}
 
 	l.params = len(l.f.Vars)
-	l.stmts(body.List)
+	return l
+}
+
+// finish ends the lowering begun by begin, where what is lowered ends at
+// end: control falling off leaves, the scope closes, and the blocks
+// control can reach are ordered. The form of a body is recorded when a
+// caller keeps forms, and the scratch given up for it.
+func (l *lowering) finish(end token.Pos, body *ast.BlockStmt) *Form {
 	if l.cur != noBlock { // the body ends by falling off: a function with no results returns here
-		l.leave(0, body.Rbrace, nil)
+		l.leave(0, end, nil)
 	}
 
-	l.closeScope(body.Rbrace)
+	l.closeScope(end)
 	l.endBlock()
-	l.work = l.f.reach(l.work)
+	l.work, l.seen = l.f.reach(l.work, l.seen)
 	f := l.f
-	if c.info != nil && c.info.Forms != nil {
-		c.info.Forms[body] = f
+	if body != nil && l.c.info.Forms != nil {
+		l.c.info.Forms[body] = f
 		l.f = nil // the form kept is its own; the next body gets a new scratch
 	}
 
@@ -230,10 +265,28 @@ func (l *lowering) joinTo(join int) {
 }
 
 // emit writes an instruction into the block being written; none where
-// control cannot reach.
+// control cannot reach. A move of an owned place no Drop reads is
+// recorded for the emitters, which empty the place: a move the pass
+// refuses, out of a borrow, a container or a value a Drop reads, or of a
+// part a loop over a type's parts names, is recorded by neither.
 func (l *lowering) emit(in Instr) {
-	if l.cur != noBlock {
-		l.f.Instrs = append(l.f.Instrs, in)
+	if l.cur == noBlock {
+		return
+	}
+
+	l.f.Instrs = append(l.f.Instrs, in)
+	if in.Op != OpMove || in.Capture || in.Place.IsTemp() {
+		return
+	}
+
+	if _, part := unparen(in.Expr).(*ast.PartExpr); part {
+		return
+	}
+
+	v := l.f.Vars[in.Place.Var]
+	kind, fields := placeKindOf(v.typ, in.Place.Path)
+	if holder, _ := dropHolder(place{v, fields}); kind == placeOwned && holder == "" {
+		l.c.info.Moves[in.Expr] = true
 	}
 }
 
@@ -338,16 +391,28 @@ func (l *lowering) bound(o Operand) {
 // where a closure that borrows may not go: stored into data, sent or
 // spawned, as how says, at pos.
 func (l *lowering) keep(e ast.Expr, how string, pos token.Pos) {
-	if isSignature(l.typeOf(e)) {
+	if l.mayBeClosure(e) {
 		l.f.kept = append(l.f.kept, keptUse{expr: e, how: how, pos: pos})
 	}
+}
+
+// mayBeClosure reports whether the value e may be a closure: one of a
+// function type, of a type parameter's type, or chosen by an if or a
+// match among branches that may be.
+func (l *lowering) mayBeClosure(e ast.Expr) bool {
+	switch l.typeOf(e).(type) {
+	case *Signature, *TypeParam:
+		return true
+	}
+
+	return eachBranch(e, func(ast.Expr) {})
 }
 
 // keepFor records that the argument arg, when it is of a function type,
 // is given to the parameter param of callee, which may keep it: whether
 // it does is decided at the package's end.
 func (l *lowering) keepFor(arg ast.Expr, param *Var, callee string) {
-	if isSignature(l.typeOf(arg)) {
+	if l.mayBeClosure(arg) {
 		l.f.kept = append(l.f.kept, keptUse{expr: arg, pos: arg.Pos(), param: param, callee: callee})
 	}
 }
@@ -374,7 +439,7 @@ func (l *lowering) closeLoop(exit int) {
 // given marks the temporary o as taken by a call, a defer or a statement
 // with several values: what it lends is lent until then.
 func (l *lowering) given(o Operand) {
-	if o.IsValue() {
+	if o.IsValue() && o.Path == "" { // a part of a temporary given is the part alone, which lends nothing of the whole
 		l.f.Temps[o.Temp].Given = true
 	}
 }
@@ -467,6 +532,23 @@ func (l *lowering) temp(t Type, owned bool, e ast.Expr) Operand {
 func (l *lowering) own(o Operand) {
 	if t := l.f.Temps[o.Temp].Type; t != nil && (!IsCopy(t) || holdsBorrow(t)) {
 		l.owned = append(l.owned, ownedTemp{o.Temp, len(l.scopes)})
+	}
+}
+
+// A lentPart is a borrow made into a temporary that a value made here
+// holds as a part, with the temporary of that value.
+type lentPart struct {
+	made, part int
+}
+
+// takeParts marks the borrow parts of the value o as taken, when a call
+// takes the value: they are lent for the call, as a borrow given to it
+// is, and no longer the statement's to drop at its end.
+func (l *lowering) takeParts(o Operand) {
+	for _, lp := range l.parts {
+		if o.IsValue() && lp.made == o.Temp {
+			l.taken[lp.part] = true
+		}
 	}
 }
 

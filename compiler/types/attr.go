@@ -192,7 +192,7 @@ func (c *Checker) attrsOn(obj Object, place int, attrs []*ast.Attr) {
 		}
 	}
 
-	if c.info == nil || len(list) == 0 {
+	if len(list) == 0 {
 		return
 	}
 

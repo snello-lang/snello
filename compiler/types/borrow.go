@@ -5,14 +5,12 @@
 package types
 
 import (
-	"slices"
-
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
 )
 
-// The borrow pass runs inside the checker's walk
-// beside the move pass. A borrow is created by ref or mut on a place,
+// The rules of borrowing, which the borrow pass over the form
+// (formborrows.go) applies. A borrow is created by ref or mut on a place,
 // by a method on its receiver, by a parameter that lends, by a pattern
 // matched through a borrow, and by ?? on a borrowed option; it is held
 // by the variable it is bound to, or by a field or element of it, and
@@ -76,127 +74,17 @@ const (
 	rebindAccess // a borrow variable given another borrow: what borrowed through it is unmoved, a closure that reads it is not
 )
 
-// A heldAccess is an access to a place, or an event of the flow graph,
-// met while the place an assignment writes is typed before the
-// assignment's value: the place is reached where the store is made,
-// after the value, so what it does waits and is made there, in its
-// order (replay). A use is the check that the place is not moved, with
-// noUse as it was; an access one of its kind, checked against what is
-// lent at the store; a move one of a place, by a call in the place, made
-// at the store; an event one the graph records, a loan, a drop or a
-// variable's read.
-type heldAccess struct {
-	held  heldKind
-	e     ast.Expr
-	p     place
-	kind  placeKind
-	what  access
-	pos   token.Pos
-	noUse bool
-	ev    flowEvent
-}
-
-type heldKind uint8
-
-const (
-	useHeld heldKind = iota
-	accessHeld
-	moveHeld
-	eventHeld
-)
-
-// accessExpr resolves e to its place and records what the access does
-// to it. For an assignment to a variable holding a borrow it returns
-// that variable: the assignment rebinds it and ends what it held.
-func (c *Checker) accessExpr(e ast.Expr, what access, pos token.Pos) *Var {
-	p, kind := c.placeOf(e)
-	if kind == notPlace {
-		return nil
-	}
-
-	c.capture(p.v, byMut)
-	if what == writeAccess && kind == placeOwned && p.path == "" && isBorrow(p.v.typ) {
-		c.access(e, p, rebindAccess, pos) // a closure that reads it when called would see the new borrow
-		c.flowAssign(p.v, "")             // the assignment points it somewhere else; what borrowed through it copied what it held, and still points there
-		return p.v
-	}
-
-	c.access(e, p, what, pos)
-	return nil
-}
-
 // access checks an access to a place against the borrows lent for the
 // call being checked, at once, and records it in the graph, where the
 // borrows held by variables are decided at the end of the function.
 func (c *Checker) access(e ast.Expr, p place, what access, pos token.Pos) {
-	if c.typingPlace {
-		c.heldAccess = append(c.heldAccess, heldAccess{held: accessHeld, e: e, p: p, what: what, pos: pos})
-		return
-	}
 
 	if p.v.global && what != readAccess && what != refAccess { // a package variable is reached from every task: read and lent as ref, never changed or taken
 		c.errorf(pos, p.v.name+" is a package variable, shared by every task; change it through a sync.Mutex, a sync.Atomic or a sync.Counter it holds")
 		return
 	}
 
-	for i := range c.temps {
-		if t := &c.temps[i]; t.collides(p, what) {
-			if c.flow == nil {
-				c.errorf(pos, c.collision(e, p, what, t))
-				return
-			}
-
-			c.flowError(pos, c.collision(e, p, what, t), true)
-			return
-		}
-	}
-
 	c.flowAccess(e, p, what, pos)
-}
-
-// replay makes what was held from from to to, in its order, where the
-// place it belongs to is reached: at its store. With again, the place
-// is reached a second time, a compound assignment's store after its
-// read: the checks and accesses are made again, and not the moves and
-// the graph's events, which the first reach recorded.
-func (c *Checker) replay(from, to int, again bool) {
-	for i := from; i < to; i++ {
-		h := c.heldAccess[i]
-		switch h.held {
-		case useHeld:
-			noUse := c.noUse
-			c.noUse = h.noUse
-			c.checkUsePlace(h.e, h.p, h.kind)
-			c.noUse = noUse
-		case accessHeld:
-			c.access(h.e, h.p, h.what, h.pos)
-		case moveHeld:
-			if !again {
-				c.moved = append(c.moved, move{h.p, h.pos, false})
-			}
-		case eventHeld:
-			if !again {
-				c.flowAdd(h.ev)
-			}
-		}
-	}
-}
-
-// settleHeld decides what an assignment's places held, from from on,
-// the places' entries before typed and the value's after: made at the
-// store, after the value; or, for an assignment nested in the place of
-// another, left to the outer store in this statement's own order, the
-// value's before the places'.
-func (c *Checker) settleHeld(from, typed int, nested bool) {
-	if !nested {
-		c.replay(from, len(c.heldAccess), false)
-		return
-	}
-
-	held := c.heldAccess[from:]
-	places := slices.Clone(held[:typed-from])
-	copy(held, held[typed-from:])
-	copy(held[len(held)-len(places):], places)
 }
 
 // collides reports whether an access to p collides with the borrow:
@@ -246,24 +134,6 @@ func (c *Checker) collision(e ast.Expr, p place, what access, b *borrow) string 
 	return msg + " at " + c.lineCol(b.pos)
 }
 
-// lend records a borrow of e for the call or statement being checked,
-// after checking the access, so that a later argument or the receiver
-// collides with it. A receiver is lent after the arguments are checked,
-// so a borrow they end is over before it.
-func (c *Checker) lend(e ast.Expr, mut bool) {
-	p, kind := c.placeOf(e)
-	if kind == notPlace {
-		return
-	}
-
-	if mut {
-		c.capture(p.v, byMut)
-	}
-
-	c.access(e, p, borrowAccess(mut), e.Pos())
-	c.temps = append(c.temps, borrow{place: p, mut: mut, pos: e.Pos()})
-}
-
 // borrowAccess is the access a borrow makes, ref or mut.
 func borrowAccess(mut bool) access {
 	if mut {
@@ -271,28 +141,6 @@ func borrowAccess(mut bool) access {
 	}
 
 	return refAccess
-}
-
-// lendCaptures lends what a closure literal captures for the call it
-// is passed to, so that the call cannot borrow the same variable again.
-func (c *Checker) lendCaptures(e ast.Expr, pos token.Pos) {
-	for _, cap := range c.capturesOf(e) {
-		if cap.mode == byMove {
-			continue
-		}
-
-		c.temps = append(c.temps, cap.borrow(nil, pos)) // the closure's creation made the access
-	}
-}
-
-// hold records that v holds the borrow its value carries, when the
-// value is a borrow and the place it was lent from can be found: r in
-// r := ref xs holds xs, n in n := cur ?? return holds what cur holds,
-// f in f := m.Get(k) holds m, and v in v := pick(0, ref m) holds m,
-// the argument of pick's borrowed parameter. A borrow of a temporary
-// cannot be held at all: t := s.Clone().Trim() would outlive the clone.
-func (c *Checker) hold(v *Var, e ast.Expr, pos token.Pos) {
-	c.holdIn(v, "", v.typ, e, pos)
 }
 
 // holdIn records that the part path of v, of type t, holds the borrow e
@@ -315,9 +163,8 @@ func (c *Checker) holdIn(v *Var, path string, t Type, e ast.Expr, pos token.Pos)
 // holdValue is holdIn once e is known to lend no temporary that v
 // would keep: v takes what e holds.
 func (c *Checker) holdValue(v *Var, path string, t Type, e ast.Expr, pos token.Pos) {
-	if id, ok := unparen(e).(*ast.Ident); ok && isSignature(t) {
-		c.usedWhereMade(id, "copied to another variable", pos)
-		return
+	if _, ok := unparen(e).(*ast.Ident); ok && isSignature(t) {
+		return // a closure variable copied: refused where the store is made, by the operand
 	}
 
 	if id, ok := unparen(e).(*ast.Ident); ok && isMut(t) {
@@ -564,59 +411,6 @@ func unparen(e ast.Expr) ast.Expr {
 	}
 }
 
-// holdPattern records the bindings of a pattern matched through a
-// borrow of the place src as holders of that borrow, in the order they
-// are written.
-func (c *Checker) holdPattern(p ast.Pattern, x ast.Expr) {
-	switch p := p.(type) {
-	case *ast.IdentPat:
-		if v, ok := c.scope.Lookup(p.Name.Name).(*Var); ok {
-			c.derive(v, "", v.typ, x, p.Name.Pos())
-		}
-	case *ast.TuplePat:
-		for _, elt := range p.Elts {
-			c.holdPattern(elt, x)
-		}
-	case *ast.VariantPat:
-		for _, arg := range p.Args {
-			c.holdPattern(arg, x)
-		}
-	case *ast.OrPat:
-		for _, alt := range p.Alts {
-			c.holdPattern(alt, x)
-		}
-	}
-}
-
-// bindThrough checks the bindings of a match or if-binding once the
-// arm's scope holds them. On a scrutinee reached through a borrow they
-// hold the borrow, and mut bindings borrow the scrutinee mut. On an
-// owned scrutinee a binding holds what the value lends, as one bound
-// by := does: v in if v := m.Get(k) holds m. A mut binding through a
-// map read is refused, since a key the map does not hold reads the
-// zero value and a write to it would be lost.
-func (c *Checker) bindThrough(p ast.Pattern, x ast.Expr, b *Ref) {
-	if c.scope.Len() == 0 {
-		return
-	}
-
-	if b == nil {
-		c.holdPattern(p, x)
-		return
-	}
-
-	if b.mut {
-		if ix, ok := x.(*ast.IndexExpr); ok && isMap(stripRef(c.placeType(ix.X))) {
-			c.errorf(x.Pos(), "cannot bind mut through "+exprText(x)+": a key the map does not hold reads the zero value; use "+exprText(ix.X)+".GetMut("+exprText(ix.Index)+")")
-			return
-		}
-
-		c.accessExpr(x, mutAccess, x.Pos())
-	}
-
-	c.holdPattern(p, x)
-}
-
 // borrowSources finds the place expressions a borrow-valued expression
 // lends from: the operand of ref or mut, the receiver of a method or
 // the argument a function's result borrows (callSource), the operand
@@ -810,46 +604,9 @@ func (c *Checker) throughWhat(e ast.Expr) string {
 	return "borrow"
 }
 
-// pin resolves the variables a value carrying a borrow names, while the
-// block or arm that yields it is still open: x := if c { t := ...; ref t
-// } else { ... } holds what the block's names hold, though the names
-// are gone by the time x takes the value, and a borrow of one dropped
-// with the block is refused there.
-func (c *Checker) pin(e ast.Expr, t Type) {
-	if c.flow == nil || !holdsBorrow(t) && !isSignature(t) {
-		return
-	}
-
-	if isSignature(t) && c.usedWhereMade(e, "chosen by if or match, or come out of a block", e.Pos()) {
-		return
-	}
-
-	c.sources(e, func(src ast.Expr, _, _ bool) {
-		for {
-			switch x := src.(type) {
-			case *ast.ParenExpr:
-				src = x.X
-			case *ast.SelectorExpr:
-				src = x.X
-			case *ast.IndexExpr:
-				src = x.X
-			case *ast.SliceExpr:
-				src = x.X
-			case *ast.UnaryExpr:
-				src = x.X
-			case *ast.Ident:
-				if v, ok := c.refersTo(x).(*Var); ok {
-					if c.pinned == nil {
-						c.pinned = make(map[*ast.Ident]*Var)
-					}
-
-					c.pinned[x] = v
-				}
-
-				return
-			default:
-				return
-			}
-		}
-	})
+// closureExprBorrows reports whether the value e is a closure that
+// borrows: one written here that captures by borrow, a variable holding
+// one, or either chosen by a branch of an if or a match.
+func (c *Checker) closureExprBorrows(e ast.Expr) bool {
+	return c.borrowsWhat(c.valueOf(e), e.Pos()) != ""
 }

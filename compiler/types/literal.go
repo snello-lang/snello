@@ -150,7 +150,6 @@ func (c *Checker) tuple(e *ast.TupleExpr, expected Type) operand {
 			elems[i] = op.typ // (mut j, 1) holds the borrow, as a name given mut j does, and so does a part a borrow is wanted for
 		}
 
-		c.maybeMove(op, elems[i]) // the part moves into the tuple
 	}
 
 	return operand{value, NewTuple(elems...), nil, nil}
@@ -277,7 +276,7 @@ func (c *Checker) genericLit(e *ast.CompositeLit, g *Named, expected Type) opera
 		}
 	}
 
-	ops := c.evaluate(in, values, slots, func(i int, op operand) { c.maybeMove(op, slots[i]) })
+	ops := c.evaluate(in, values, slots, func(int, operand) {})
 	targs, ok := c.complete(in, g.obj.name, e.Type)
 	if !ok {
 		return invalidOperand

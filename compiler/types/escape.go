@@ -22,16 +22,12 @@ import (
 // with two borrowed parameters and a borrowed result is refused, and
 // a return of a borrow of anything else is.
 
-// A closure being checked: where it begins, and the locals of the
-// enclosing functions it refers to, which it captures by borrow.
-type closure struct {
-	pos      token.Pos
-	captures []capture
-}
-
+// A capture is a variable of the body around a closure that the closure
+// refers to, and how: read from the form of the closure's body.
 type capture struct {
-	v    *Var
-	mode captureMode
+	v     *Var
+	mode  captureMode
+	reads bool // the body reads the variable, or borrows or moves it, beside assigning it: a value moved before the closure is gone for it
 }
 
 // A pendingStore is a storable question asked while the declarations
@@ -312,28 +308,6 @@ func (c *Checker) checkSources(name string, sig *Signature, pos token.Pos) {
 	}
 }
 
-// capture notes that the closures being checked refer to v, when v is
-// a local of a function enclosing them, declared before they begin.
-func (c *Checker) capture(v *Var, mode captureMode) {
-	if len(c.closures) == 0 || v.pos == token.NoPos || v.field || v.global {
-		return
-	}
-
-	mode = captureModeOf(v, mode)
-	for i := range c.closures {
-		cl := &c.closures[i]
-		if v.pos > cl.pos {
-			continue // declared inside the closure, or after it
-		}
-
-		if j := cl.index(v); j >= 0 {
-			cl.captures[j].mode = max(cl.captures[j].mode, mode)
-		} else {
-			cl.captures = append(cl.captures, capture{v, mode})
-		}
-	}
-}
-
 // captureModeOf is how a closure captures v given the strongest use it
 // makes of it: a number read by a closure is copied in, so the closure
 // holds no borrow and may be returned; a borrow variable, Copy too, stays
@@ -345,16 +319,6 @@ func captureModeOf(v *Var, mode captureMode) captureMode {
 	}
 
 	return mode
-}
-
-func (cl *closure) index(v *Var) int {
-	for j := range cl.captures {
-		if cl.captures[j].v == v {
-			return j
-		}
-	}
-
-	return -1
 }
 
 // capturesOf returns what a closure literal borrows, nil for one that
@@ -376,16 +340,17 @@ func (c *Checker) capturesOf(e ast.Expr) []capture {
 	return borrowed
 }
 
-// kept checks a value put into owned data, sent, spawned or returned:
-// a closure that captures a local, written out or held by a variable,
-// is a borrow and cannot go. how says which, for the message.
+// kept records what a value put into owned data, sent, spawned or
+// returned says of the function: a parameter so kept is one the
+// function keeps, which its callers are checked against. how says
+// which, for the message. Whether a closure that borrows may go there
+// the borrow pass decides.
 func (c *Checker) kept(op operand, how string, pos token.Pos) {
 	if op.mode == invalid || op.expr == nil {
 		return
 	}
 
-	c.keepParam(op, how, pos) // a parameter of the function, which the function then keeps: its callers are checked against that
-	c.cannotBe(op, how, pos)
+	c.keepParam(op, how, pos) // a parameter of the function, which the function then keeps: its callers are checked against that; whether a closure that borrows goes there the borrow pass decides
 }
 
 // cannotBe refuses the value op where it is kept, how saying where,
@@ -433,19 +398,16 @@ func heldIn(f *flow, v *Var, pos token.Pos) *borrow {
 	return nil
 }
 
-// returned checks the value of a return statement when the function
-// returns a borrow: every borrow in it must come from the function's
-// one source, the receiver or the borrowed parameter; a borrow of a
-// local, or of a parameter taken by value, dies with the function. A
-// closure that captures a local is a borrow of that local.
+// returned records what the value of a return statement says of the
+// function: a parameter returned is one the function keeps, which its
+// callers are checked against. What else the value lets out, the borrow
+// pass decides (returnEscapes).
 func (c *Checker) returned(e ast.Expr, op operand) {
 	if op.mode == invalid {
 		return
 	}
 
-	if !c.keepParam(op, "returned", e.Pos()) { // a parameter returned is what the function keeps, checked at its calls
-		c.returnEscapes(op, e.Pos())
-	}
+	c.keepParam(op, "returned", e.Pos()) // a parameter returned is what the function keeps, checked at its calls; what else the value lets out the borrow pass decides
 }
 
 // returnEscapes checks what the returned value op, no parameter, lets

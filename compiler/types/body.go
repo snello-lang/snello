@@ -47,35 +47,41 @@ func (c *Checker) funcBodies(f *ast.File) {
 }
 
 // checkBody checks one function's or method's body against its
-// signature. Each body starts afresh, with no moved places, and its
-// borrows are decided on its graph at its end; a closure's body shares
-// its function's moves and has a graph of its own.
+// signature: the typing, then, when the body typed, the move and the
+// borrow pass over its form. A closure's body is lowered with its
+// function's and checked after it, on a form and a graph of its own.
 func (c *Checker) checkBody(sig *Signature, recv *ast.Param, params []*ast.Param, body *ast.BlockStmt) {
 	c.sig, c.recv = sig, sig.recv
-	c.moved, c.floors, c.dead = c.moved[:0], c.floors[:0], false
-	c.flow = c.newFlow(token.NoPos)
 	c.enclosing = c.enclosing[:0]
 	first := len(c.errors)
 	c.funcBody(sig, recv, params, body)
-	c.solveFlow()
-	if c.info != nil && body != nil && (c.info.Forms != nil || compareForms) { // lowered when a caller keeps the forms or the passes over them are compared, once the tree's passes have reported
+	if body != nil && len(c.errors) == first { // a body that typed: what the passes would say of one that did not follows from the typing's refusal
 		form := c.lowerBody(sig, body) // the closures' forms, lowered inside their body's, are kept with it
-		if compareForms {
-			if c.comparePasses(c.formMoves(form), c.formBorrows(form, sig, token.NoPos), first) { // each pass runs the closures' after their body's
-				c.compareMoved(form, body)
-			}
-		}
+		c.formMoves(form)              // each pass runs the closures' after their body's
+		c.formBorrows(form, sig, token.NoPos)
+		c.spareClosures(form)
 	}
 
-	c.freeFlow(c.flow)
-	c.flow, c.temps = nil, c.temps[:0]
-	clear(c.pinned)
 	c.sig, c.recv = nil, nil
-	if c.sawParts && c.info != nil {
+	if c.sawParts {
 		c.selectParts(body)
 	}
 
 	c.sawParts = false
+}
+
+// spareClosures keeps the forms of the closures written in the body
+// whose form is f, checked now, for the closures lowered next, when no
+// caller keeps the forms.
+func (c *Checker) spareClosures(f *Form) {
+	if c.info.Forms != nil {
+		return
+	}
+
+	for _, cf := range f.closures {
+		c.spareClosures(cf.form)
+		c.spareForms = append(c.spareForms, cf.form)
+	}
 }
 
 // funcBody opens the function scope, declares the receiver and the
@@ -88,9 +94,6 @@ func (c *Checker) funcBody(sig *Signature, recv *ast.Param, params []*ast.Param,
 	}
 
 	scope := c.openScope()
-	if c.flow != nil && c.flow.fnScope == nil {
-		c.flow.fnScope = scope
-	}
 
 	if recv != nil {
 		c.declare(scope, recv.Name, sig.recv)
@@ -102,13 +105,10 @@ func (c *Checker) funcBody(sig *Signature, recv *ast.Param, params []*ast.Param,
 		}
 	}
 
-	c.flowParams(sig)
-
 	if !c.stmts(body.List) && sig.results != Unit {
 		c.errorf(body.Rbrace, "missing return at the end of the function")
 	}
 
-	c.dropScopes(scope.parent, body.Rbrace, dropExit)
 	c.closeScope()
 }
 
@@ -137,15 +137,19 @@ func (c *Checker) initializersOf(d *ast.VarDecl, scope *Scope) {
 		declared = c.typ(d.Type)
 	}
 
-	lent, moved := len(c.temps), len(c.movedValues)
-	defer func() { c.temps, c.movedValues = c.temps[:lent], c.movedValues[:moved] }() // what the declaration lent is given back, as a statement's is
+	first := len(c.errors)
 	ops := c.values(len(d.Names), d.Values, declared, d.Pos(), nil)
+	if scope == c.pkg.scope && len(c.errors) == first { // a package variable's values, typed: what they move and borrow the passes decide on their form
+		form := c.lowerInit(d, declared)
+		c.formMoves(form)
+		c.formBorrows(form, nil, token.NoPos)
+	}
+
 	for i, name := range d.Names {
 		c.assign(ops[i], declared, d.Values[min(i, len(d.Values)-1)].Pos(), "declaration")
 		t := declared
 		if declared == nil {
 			t = inferred(ops[i])
-			c.maybeMove(ops[i], t) // var a = b moves b, as with a type written
 			obj := scope.Lookup(name.Name)
 			c.setType(obj, t)
 			if v, ok := obj.(*Var); ok {
@@ -193,7 +197,6 @@ func (c *Checker) values(n int, values []ast.Expr, hint Type, pos token.Pos, int
 			return ops
 		}
 
-		c.maybeMove(op, valueType(op)) // the parts move out of the tuple
 		for i := range ops {
 			ops[i] = operand{value, t.elems[i], nil, nil}
 		}
@@ -212,8 +215,6 @@ func (c *Checker) values(n int, values []ast.Expr, hint Type, pos token.Pos, int
 		return ops
 	}
 
-	c.depth++ // what a value lends is not given back with it, but where the statement ends (stmt)
-	defer func() { c.depth-- }()
 	for i, v := range values {
 		t := hint
 		if into != nil {
@@ -221,31 +222,9 @@ func (c *Checker) values(n int, values []ast.Expr, hint Type, pos token.Pos, int
 		}
 
 		ops[i] = c.expr(v, t)
-		c.keepLent(v, ops[i])
-		c.given(v, ops[i], cmp.Or(t, inferred(ops[i])))
-		c.movedValues = append(c.movedValues, v)
 	}
 
 	return ops
-}
-
-// given records what giving the value op, the expression v, to a place
-// of type t does, as an argument's effects are recorded: an owned place
-// given where a borrow is wanted is lent, var r ref string = s; any
-// other value moves, a closure lending what it captures. One that does
-// not fit t is reported where it is stored, and does nothing.
-func (c *Checker) given(v ast.Expr, op operand, t Type) {
-	if !assignable(op, t) {
-		return
-	}
-
-	if r, ok := t.(*Ref); ok && op.mode != value && !isBorrow(op.typ) {
-		c.lend(v, r.mut)
-		return
-	}
-
-	c.lendCaptures(v, v.Pos())
-	c.maybeMove(op, t)
 }
 
 // setType gives a variable or constant declared without a type the

@@ -12,6 +12,10 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 )
 
+// setRoom is the records each block's set has room for in the pass's
+// pool before it grows on its own: nearly every set is smaller.
+const setRoom = 4
+
 // The move pass over the form: the places that may be moved at each
 // point, a set carried forward through the blocks, joined by union where
 // paths meet and run to a fixed point around a loop. A read or a borrow
@@ -20,69 +24,96 @@ import (
 // move of a place the program may not move out of, a borrow, a
 // temporary, an element or a field a Drop reads, is refused where it is
 // written. A variable declared before a loop and moved inside it, still
-// moved where a pass ends, is moved in the loop's next pass, reported
-// once where the pass ends; inside the loop the record that came round
-// is not a use again, and after the loop it is.
+// moved where a pass ends, is moved in the loop's next pass: a use of it
+// there is a use of what a previous pass moved, reported as such; after
+// the loop it is a use of a moved value as any other.
 
-// formMoves runs the move pass over f and returns what it refuses.
-func (c *Checker) formMoves(f *Form) []formError {
-	m := &formMoves{c: c, f: f, in: make([][]formMove, len(f.Blocks))}
-	queued, visited := make([]bool, len(f.Blocks)), make([]bool, len(f.Blocks))
-	queue := []int{0}
-	queued[0] = true
-	var state []formMove
-	for len(queue) > 0 {
-		b := queue[0]
-		queue = queue[1:]
-		queued[b], visited[b] = false, true
-		state = append(state[:0], m.in[b]...)
-		for _, in := range f.Instrs[f.Blocks[b].From:f.Blocks[b].To] {
-			state = m.step(state, in, b)
-		}
+// A formMove records a place moved, where, and in which block: a move
+// made in a guard's blocks follows the guard's path. round is one more
+// than the head of the loop the record came round, when it did: a use
+// of the place in that loop is a use of what a previous pass moved.
+type formMove struct {
+	place Operand
+	pos   token.Pos
+	block int
+	round int
+}
 
-		for _, s := range f.Blocks[b].Succs {
-			next := state
-			if g := f.Blocks[b].Guard; g != nil && f.Blocks[s].Guard != g && s != g.Taken { // the guard failed: the moves it made, refused already, follow the arm's path alone, and the arms after are not told of them again
-				next = slices.DeleteFunc(slices.Clone(state), func(r formMove) bool { return f.Blocks[r.block].Guard == g })
+// A formMoves is the pass over one form, the checker's scratch for it
+// kept across bodies.
+type formMoves struct {
+	c     *Checker
+	f     *Form
+	in    [][]formMove // the moved set where each block begins
+	dirty []bool       // the blocks whose set grew since they were last stepped through
+	state []formMove   // the set being carried through a block
+	round []formMove   // the set carried round a loop, its records marked
+	pool  []formMove   // where the blocks' sets begin, setRoom records each, one allocation for the form
+}
+
+// formMoves runs the move pass over f, the blocks in the order control
+// reaches them, each stepped through once and again while the set where
+// it begins grows, until none does.
+func (c *Checker) formMoves(f *Form) {
+	m := &c.moves
+	m.c, m.f = c, f
+	n := len(f.Blocks)
+	m.in, m.dirty = slices.Grow(m.in[:0], n)[:n], slices.Grow(m.dirty[:0], n)[:n]
+	m.pool = slices.Grow(m.pool[:0], n*setRoom)[:n*setRoom]
+	for b := range m.in {
+		m.in[b], m.dirty[b] = m.pool[b*setRoom:b*setRoom:(b+1)*setRoom], true
+	}
+
+	for again := true; again; {
+		again = false
+		for _, b := range f.order {
+			if !m.dirty[b] {
+				continue
 			}
 
-			if f.Blocks[s].Head && s <= b { // a pass's end: the loop's rule reports what it leaves moved, and the records come round marked
-				next = m.roundOf(state, s)
+			m.dirty[b] = false
+			state := append(m.state[:0], m.in[b]...)
+			for _, in := range f.Instrs[f.Blocks[b].From:f.Blocks[b].To] {
+				state = m.step(state, in, b)
 			}
 
-			if grew := m.merge(s, next); (grew || !visited[s]) && !queued[s] { // every block once, and again while its set grows
-				queued[s] = true
-				queue = append(queue, s)
+			m.state = state
+			for _, s := range f.Blocks[b].Succs {
+				next := state
+				if g := f.Blocks[b].Guard; g != nil && f.Blocks[s].Guard != g && s != g.Taken { // the guard failed: the moves it made, refused already, follow the arm's path alone, and the arms after are not told of them again
+					next = slices.DeleteFunc(slices.Clone(state), func(r formMove) bool { return f.Blocks[r.block].Guard == g })
+				}
+
+				if f.Blocks[s].Head && s <= b { // a pass's end: the records come round marked
+					next = m.roundOf(next, s)
+				}
+
+				if m.merge(s, next) {
+					m.dirty[s] = true
+					again = again || s <= b // a block after this one is stepped through in this round
+				}
 			}
 		}
 	}
 
 	for _, cf := range f.closures { // the closures written in the body, after it
-		m.errs = append(m.errs, c.formMoves(cf.form)...)
+		c.formMoves(cf.form)
 	}
-
-	return m.errs
 }
 
-// roundOf reports, where a pass of the loop whose head is head ends
-// with the path's moves in state, each variable declared before the
-// loop and moved in it, still moved, which the next pass finds so, and
-// returns the records marked as come round the loop, those not marked
-// by a loop inside it already.
+// roundOf returns the records of state as they come round the loop
+// whose head is head, each marked by the first loop it came round.
 func (m *formMoves) roundOf(state []formMove, head int) []formMove {
-	out := make([]formMove, 0, len(state))
+	out := m.round[:0]
 	for _, r := range state {
 		if r.round == 0 {
-			if v := m.f.Vars[r.place.Var]; v.pos < m.f.Blocks[head].Pos && r.block >= head {
-				m.report(r.pos, loopMovedMessage(m.text(r.place)))
-			}
-
 			r.round = head + 1
 		}
 
 		out = append(out, r)
 	}
 
+	m.round = out
 	return out
 }
 
@@ -114,7 +145,7 @@ func (m *formMoves) step(state []formMove, in Instr, b int) []formMove {
 
 		if g := m.f.Blocks[b].Guard; g != nil && !in.Place.IsTemp() { // a guard runs whether or not its arm is taken: what it moves would be gone for the arms after, so the move is refused
 			if v := m.f.Vars[in.Place.Var]; !(v.pos >= g.From && v.pos < g.To) {
-				m.report(in.Pos, guardMovedMessage(m.text(in.Place), g.What))
+				m.c.errorf(in.Pos, guardMovedMessage(m.text(in.Place), g.What))
 			}
 		}
 
@@ -142,18 +173,17 @@ func (m *formMoves) checkUse(state []formMove, in Instr, store bool, b int) {
 
 	for i := len(state) - 1; i >= 0; i-- { // the latest record of the place decides
 		r := state[i]
-		if r.round != 0 && m.inLoop(b, r.round-1) && r.pos == in.Pos {
-			continue // come round the loop this block is in, to the move it came from: the loop's rule reported it, once
-		}
-
 		switch {
 		case store && r.place == p:
 			return
+		case within(p, r.place) && r.round != 0 && m.inLoop(b, r.round-1):
+			m.c.errorf(basePos(e), loopMovedMessage(m.text(r.place))) // moved on a previous pass of the loop this use is in, and not given a value since
+			return
 		case within(p, r.place):
-			m.report(basePos(e), movedMessage(m.text(r.place), m.c.lineCol(r.pos)))
+			m.c.errorf(basePos(e), movedMessage(m.text(r.place), m.c.lineCol(r.pos)))
 			return
 		case !store && within(r.place, p):
-			m.report(basePos(e), partiallyMovedMessage(m.text(p), m.text(r.place), m.c.lineCol(r.pos)))
+			m.c.errorf(basePos(e), partiallyMovedMessage(m.text(p), m.text(r.place), m.c.lineCol(r.pos)))
 			return
 		}
 	}
@@ -166,7 +196,7 @@ func (m *formMoves) checkUse(state []formMove, in Instr, store bool, b int) {
 func (m *formMoves) movable(in Instr) bool {
 	e := in.Expr
 	if part, ok := unparen(e).(*ast.PartExpr); ok {
-		m.report(e.Pos(), partMovedMessage(e, part))
+		m.c.errorf(e.Pos(), partMovedMessage(e, part))
 		return false
 	}
 
@@ -176,9 +206,9 @@ func (m *formMoves) movable(in Instr) bool {
 		}
 
 		if isBorrow(m.c.info.Types[baseExpr(e)]) {
-			m.report(e.Pos(), outOfBorrowMessage(exprText(e)))
+			m.c.errorf(e.Pos(), outOfBorrowMessage(exprText(e)))
 		} else {
-			m.report(e.Pos(), outOfTemporaryMessage(e))
+			m.c.errorf(e.Pos(), outOfTemporaryMessage(e))
 		}
 
 		return false
@@ -187,14 +217,14 @@ func (m *formMoves) movable(in Instr) bool {
 	v := m.f.Vars[in.Place.Var]
 	switch kind, fields := placeKindOf(v.typ, in.Place.Path); kind {
 	case placeBorrowed:
-		m.report(e.Pos(), outOfBorrowMessage(exprText(e)))
+		m.c.errorf(e.Pos(), outOfBorrowMessage(exprText(e)))
 		return false
 	case placeIndexed:
-		m.report(e.Pos(), outOfContainerMessage(e, m.c.containerName(e)))
+		m.c.errorf(e.Pos(), outOfContainerMessage(e, m.c.containerName(e)))
 		return false
 	default:
 		if holder, t := dropHolder(place{v, fields}); holder != "" {
-			m.report(e.Pos(), dropHolderMessage(e, holder, t))
+			m.c.errorf(e.Pos(), dropHolderMessage(e, holder, t))
 			return false
 		}
 	}
@@ -212,14 +242,6 @@ func (m *formMoves) inLoop(b, head int) bool {
 	}
 
 	return false
-}
-
-// report keeps a message at a position, once: two instructions of one
-// expression, a receiver read and then lent, say the same thing.
-func (m *formMoves) report(pos token.Pos, msg string) {
-	if !slices.Contains(m.errs, formError{pos, msg}) {
-		m.errs = append(m.errs, formError{pos, msg})
-	}
 }
 
 // text names a place for a message, the variable and its fields.

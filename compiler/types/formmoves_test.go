@@ -108,6 +108,7 @@ func TestFormMoves(t *testing.T) {
 		{"func f(s string) { spawn func(v string) { print(v) }(s); print(len(s)) }", []string{"use of moved value s"}},
 		{"func f(s string) { spawn func() { print(s) }(); print(len(s)) }", []string{"use of moved value s"}},
 		{"func f(s string) { g := func() { print(len(s)); keep(s) }; g(); print(len(s)) }", []string{"use of moved value s; moved at 13:54"}},
+		{"func f() { s := \"a\".Clone(); keep(s); g := func() { print(len(s)); s = \"b\".Clone() }; g() }", []string{"use of moved value s; moved at 13:35"}},
 	}
 	for _, tt := range tests {
 		got := checkErrors(t, prelude+decls+tt.src)

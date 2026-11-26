@@ -43,6 +43,6 @@ func inited() {
 
 func posted() {
     for s := "x".Clone(); true; keep(s) {   // ERROR "s moved in a previous iteration of the loop"
-        print(len(s))                     // ERROR "use of moved value s"
+        print(len(s))                     // ERROR "s moved in a previous iteration of the loop"
     }
 }
