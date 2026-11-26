@@ -807,6 +807,10 @@ func TestBuildTest(t *testing.T) {
 	dir := filepath.Join(root, "p")
 	for _, backend := range []string{"llvm", "c"} {
 		out := filepath.Join(t.TempDir(), "p.test")
+		if platform.Host().OS == platform.Windows {
+			out += ".exe" // a program Windows runs ends with .exe
+		}
+
 		if err := BuildTest(dir, backend, out, false, io.Discard, nil); err != nil {
 			t.Fatalf("%s: %v", backend, err)
 		}

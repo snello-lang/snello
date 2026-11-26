@@ -230,7 +230,12 @@ func TestOutputFlags(t *testing.T) {
 	}
 
 	out := t.TempDir()
-	prog := filepath.Join(out, "prog")
+	exe := "" // the name a program ends with to be run, on Windows
+	if platform.Host().OS == platform.Windows {
+		exe = executable
+	}
+
+	prog := filepath.Join(out, "prog"+exe)
 	if code := run([]string{buildCommand, "-o", prog, dir}, io.Discard, io.Discard); code != exitSuccess {
 		t.Fatalf("build -o exited %d", code)
 	}
@@ -239,7 +244,7 @@ func TestOutputFlags(t *testing.T) {
 		t.Errorf("the program build -o wrote printed %q, %v", printed, err)
 	}
 
-	tests := filepath.Join(out, "hello.test")
+	tests := filepath.Join(out, "hello.test"+exe)
 	var errs strings.Builder
 	if code := run([]string{testCommand, "-c", "-debug", "-o", tests, dir}, io.Discard, &errs); code != exitSuccess {
 		t.Fatalf("test -c exited %d and said %q", code, errs.String())
