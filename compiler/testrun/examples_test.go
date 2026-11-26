@@ -166,7 +166,7 @@ func ExampleArea_silent() {
 	})
 	for _, backend := range []string{"llvm", "c"} {
 		var out bytes.Buffer
-		code, err := Run(filepath.Join(root, "geo"), backend, []string{"-v"}, &out, &out)
+		code, err := Run(filepath.Join(root, "geo"), backend, []string{"-v"}, &out, &out, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", backend, err)
 		}
@@ -186,12 +186,12 @@ func ExampleArea_silent() {
 		}
 
 		out.Reset()
-		if _, err := Run(filepath.Join(root, "named"), backend, nil, &out, &out); err == nil || !strings.Contains(err.Error(), "ExampleAreaa names nothing in package named") {
+		if _, err := Run(filepath.Join(root, "named"), backend, nil, &out, &out, nil); err == nil || !strings.Contains(err.Error(), "ExampleAreaa names nothing in package named") {
 			t.Errorf("%s: an example with no output comment naming nothing: %v", backend, err)
 		}
 
 		out.Reset()
-		code, err = Run(filepath.Join(root, "geo"), backend, []string{"-run", "ExampleArea_both"}, &out, &out)
+		code, err = Run(filepath.Join(root, "geo"), backend, []string{"-run", "ExampleArea_both"}, &out, &out, nil)
 		if err != nil || code != 0 || !strings.HasPrefix(out.String(), "ok  \tgeo\t") {
 			t.Errorf("%s: -run ExampleArea_both exited %d, %v, printed %q", backend, code, err, out.String())
 		}

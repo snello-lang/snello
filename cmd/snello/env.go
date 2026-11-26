@@ -28,7 +28,6 @@ import (
 // the settings are laid out and described.
 const (
 	envArgs         = "[NAME]"
-	jsonFlag        = "json"
 	versionSetting  = "VERSION"
 	targetSetting   = "TARGET"
 	moduleSetting   = "MODULE"

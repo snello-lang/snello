@@ -50,9 +50,10 @@ const (
 	exitFailure = 1
 	exitUsage   = 2
 
-	// The flags: the backend, a build for a debugger, and those test
-	// passes on to the program it builds, each written after flagStart;
-	// a test program runs each test once unless -count says otherwise.
+	// The flags: the backend, a build for a debugger, those test passes
+	// on to the program it builds, each written after flagStart, and
+	// the JSON env and test print; a test program runs each test once
+	// unless -count says otherwise.
 	backendFlag  = "backend"
 	debugFlag    = "debug"
 	targetFlag   = "target"
@@ -65,6 +66,7 @@ const (
 	benchFlag    = "bench"
 	countFlag    = "count"
 	timeoutFlag  = "timeout"
+	jsonFlag     = "json"
 	stdioFlag    = "stdio"
 	clientFlag   = "clientProcessId"
 	flagStart    = "-"
@@ -477,12 +479,13 @@ func declareParse(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string
 func declareTest(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
 	backend := declareBackend(fs)
 	o := declareTestOptions(fs)
+	asJSON := fs.Bool(jsonFlag, false, "print the run as events, one JSON object a line, for an editor or a tool")
 	return func(args []string) int {
 		if !checkBackend(testCommand, *backend, stderr) {
 			return exitUsage
 		}
 
-		return runTests(args[0], *backend, o.programFlags(), stdout, stderr)
+		return runTests(args[0], *backend, o.programFlags(), *asJSON, stdout, stderr)
 	}
 }
 

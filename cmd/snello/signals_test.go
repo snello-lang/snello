@@ -173,6 +173,68 @@ func TestRunForward(t *testing.T) {
 	}
 }
 
+// TestTestForward ends, with a termination, the command running a
+// package's tests as test does, plain and with -json: the test program
+// gets the termination and ends, which the command reports, and the
+// command leaves no file behind, so that an editor that cancels a run
+// leaves no test program running.
+func TestTestForward(t *testing.T) {
+	needSignals(t)
+	if testing.Short() {
+		t.Skip("builds a test program")
+	}
+
+	root := writePrograms(t, map[string]string{
+		"snello.mod":                "snello 0.1.0\n",
+		"sleeps/sleeps.snello":      "package sleeps\n\nfunc One() int { return 1 }\n",
+		"sleeps/sleeps_test.snello": "package sleeps\n\nimport (\"fmt\"; \"time\")\n\nfunc TestSleeps() {\n\tfmt.Println(\"ready\")\n\ttime.Sleep(60 * time.Second)\n}\n",
+	})
+
+	for _, mode := range []string{"test", "testjson"} {
+		tmp := t.TempDir()
+		cmd := helper(t, mode)
+		cmd.Env = append(cmd.Env, "TMPDIR="+tmp, helperDirEnv+"="+filepath.Join(root, "sleeps"))
+		out, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+
+		r := bufio.NewReader(out)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				cmd.Process.Kill()
+				t.Fatalf("%s: the tests never said ready: %v", mode, err)
+			}
+
+			if strings.Contains(line, "ready") {
+				break
+			}
+		}
+
+		cmd.Process.Signal(syscall.SIGTERM)
+		ended := make(chan error, 1)
+		go func() { ended <- cmd.Wait() }()
+		select {
+		case err := <-ended:
+			if _, bySignal := signalOf(err); bySignal {
+				t.Errorf("%s: the command ended by the signal itself, %v, not after its test program", mode, err)
+			}
+		case <-time.After(30 * time.Second):
+			cmd.Process.Kill()
+			t.Fatalf("%s: the command did not end after its termination", mode)
+		}
+
+		if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
+			t.Errorf("%s: test left %s in the temporary directory", mode, entries[0].Name())
+		}
+	}
+}
+
 // TestStartWindow signals a process between telling its work
 // directory's guard that a program is starting and handing it the
 // program, round after round: the guard holds the termination and
@@ -291,6 +353,8 @@ func TestHelperProcess(t *testing.T) {
 	case "run":
 		code, _ := runProgram(os.Getenv(helperDirEnv), "llvm", false, nil, nil, os.Stdout, os.Stderr)
 		os.Exit(code)
+	case "test", "testjson":
+		os.Exit(runTests(os.Getenv(helperDirEnv), "llvm", []string{"-v"}, os.Getenv(helperEnv) == "testjson", os.Stdout, os.Stderr))
 	case "window":
 		for range startWindowRounds {
 			w, err := newWorkDir(buildDirPattern)

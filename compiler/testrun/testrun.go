@@ -535,26 +535,45 @@ func (p *Plan) Build(backend, outDir string) (string, error) {
 	return bin, nil
 }
 
-// Run builds the tests of the package in dir through the backend and
-// runs the program with args, its output passed through, and returns
-// the program's exit code: 0 when every test passed.
-func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, error) {
+// A Work is the directory a caller guards for a test program to be
+// built in and run from: Dir is its path, Starting says the program is
+// about to start from it, and Started hands over the program, or nil
+// for a start that failed, so that what would end the caller is passed
+// on to the program and the directory goes however the caller ends.
+// The caller removes it. With none, the program is built in a
+// directory of the runner's own, removed when it returns.
+type Work interface {
+	Dir() string
+	Starting()
+	Started(p *os.Process)
+}
+
+// Run builds the tests of the package in dir through the backend, in
+// work, and runs the program with args, its output passed through, and
+// returns the program's exit code: 0 when every test passed.
+func Run(dir, backend string, args []string, stdout, stderr io.Writer, work Work) (int, error) {
 	if w := importer.ModuleWarning(dir); w != "" {
 		fmt.Fprintln(stderr, w) // before anything else, so that a build that fails still says it
 	}
 
 	p, err := PlanDir(dir)
-
 	if err != nil {
 		return 1, err
 	}
 
-	tmp, err := os.MkdirTemp("", "snello-test")
+	return p.run(dir, backend, args, stdout, stderr, work)
+}
+
+// run builds the plan's program through the backend in work, or in a
+// directory of its own, and runs it in dir with args, its output passed
+// through, and returns its exit code.
+func (p *Plan) run(dir, backend string, args []string, stdout, stderr io.Writer, work Work) (int, error) {
+	tmp, done, err := workDir(work)
 	if err != nil {
 		return 1, err
 	}
 
-	defer os.RemoveAll(tmp)
+	defer done()
 	bin, err := p.Build(backend, tmp)
 	if err != nil {
 		return 1, err
@@ -564,7 +583,24 @@ func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, err
 	cmd.Dir = dir // a package's tests run in its directory, so that testdata/ is beside them
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
+	if work != nil {
+		work.Starting()
+	}
+
+	err = cmd.Start()
+	if work != nil {
+		if err != nil {
+			work.Started(nil)
+		} else {
+			work.Started(cmd.Process)
+		}
+	}
+
+	if err == nil {
+		err = cmd.Wait()
+	}
+
+	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
 			if code := exit.ExitCode(); code >= 0 {
 				return code, nil
@@ -578,6 +614,21 @@ func Run(dir, backend string, args []string, stdout, stderr io.Writer) (int, err
 	}
 
 	return 0, nil
+}
+
+// workDir returns the directory a test program is built in, work's or
+// one of the runner's own, and what removes the runner's own.
+func workDir(work Work) (string, func(), error) {
+	if work != nil {
+		return work.Dir(), func() {}, nil
+	}
+
+	tmp, err := os.MkdirTemp("", "snello-test")
+	if err != nil {
+		return "", nil, err
+	}
+
+	return tmp, func() { os.RemoveAll(tmp) }, nil
 }
 
 // mainLabel names the tests of the main package in dir on their ok or

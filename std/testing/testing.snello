@@ -25,6 +25,12 @@ package testing
 
 import ("fmt"; "os"; "sync"; "time")
 
+// framing begins each line the runner writes itself under -json, its
+// report of the tests and of the run, so that what converts the output
+// to events tells that report from what the tests printed, which is
+// never framed.
+const framing = "\x16"
+
 // The prefixes of a test's report lines: its start under -v, and its
 // result.
 const runPrefix = "=== RUN   "
@@ -66,6 +72,7 @@ const flagRun = "-run"
 const flagBench = "-bench"
 const flagCount = "-count"
 const flagTimeout = "-timeout"
+const flagJSON = "-json"
 
 // skipMessage is the message of the panic Skip ends a test with, which
 // the test's State marks as a skip rather than a failure.
@@ -103,7 +110,7 @@ var registry = sync.NewMutex(Registry{states: map[int]State{}})
 // config is the flags, as Main read them, stored once before any test
 // runs and read by the tests: a configuration, which is what an Atomic
 // holds.
-var config = sync.NewAtomic(Config{verbose: false, short: false, update: false, failfast: false})
+var config = sync.NewAtomic(Config{verbose: false, short: false, update: false, failfast: false, json: false})
 
 // A Test is a test by name and function, what the generated main
 // lists; a benchmark is listed the same way. Name is the function's
@@ -171,6 +178,7 @@ struct Config impl Eq, Clone {
 	short    bool
 	update   bool
 	failfast bool
+	json     bool
 }
 
 // TempDir makes a new, empty directory for the test, under the
@@ -345,8 +353,9 @@ func ReportAllocs() {
 // benchmarks whose name holds NAME, . for all, -count N runs the tests
 // and the examples N times, -failfast stops at the first failure, -timeout D ends the program after D seconds,
 // -shuffle runs the tests in a random order, which it prints the seed
-// of, -short is for the tests to ask, and -update is for expect.Golden
-// to write its files. A flag's value that is no count ends the program
+// of, -short is for the tests to ask, -update is for expect.Golden to
+// write its files, and -json frames the runner's own lines for a
+// conversion to events, every test's start and result among them. A flag's value that is no count ends the program
 // with status 2.
 func Main(pkg ref string, tests []Test, examples []Example) {
 	only := ""
@@ -354,7 +363,7 @@ func Main(pkg ref string, tests []Test, examples []Example) {
 	count := 1
 	timeout := time.Duration(0)
 	shuffle := false
-	flags := Config{verbose: false, short: false, update: false, failfast: false}
+	flags := Config{verbose: false, short: false, update: false, failfast: false, json: false}
 	for i := 1; i < len(os.Args); i++ {
 		arg := ref os.Args[i]
 		hasValue := i+1 < len(os.Args)
@@ -368,6 +377,9 @@ func Main(pkg ref string, tests []Test, examples []Example) {
 			flags.failfast = true
 		} else if arg == flagShuffle {
 			shuffle = true
+		} else if arg == flagJSON {
+			flags.json = true
+			flags.verbose = true // every test's start and result, which the events are made of
 		} else if arg == flagRun && hasValue {
 			only = os.Args[i+1].Clone()
 			i += 1
@@ -383,6 +395,7 @@ func Main(pkg ref string, tests []Test, examples []Example) {
 		}
 	}
 
+
 	setFlags(flags)
 	if timeout > 0 {
 		spawn exitAfter(timeout)
@@ -395,7 +408,7 @@ func Main(pkg ref string, tests []Test, examples []Example) {
 			seed = 1
 		}
 
-		fmt.Println(flagShuffle, seed)
+		report(ref fmt.Sprintf("%s %d", flagShuffle, seed))
 	}
 
 	start := time.Now()
@@ -429,16 +442,16 @@ func Main(pkg ref string, tests []Test, examples []Example) {
 
 	took := fmt.Sprintf("%.3fs", time.Since(start).Seconds())
 	if failures > 0 {
-		fmt.Println("FAIL")
-		fmt.Println("FAIL\t" + pkg + "\t" + took)
+		report(ref "FAIL")
+		report(ref ("FAIL\t" + pkg + "\t" + took))
 		os.Exit(exitFailed)
 	}
 
 	if isVerbose() {
-		fmt.Println("PASS")
+		report(ref "PASS")
 	}
 
-	fmt.Println("ok  \t" + pkg + "\t" + took)
+	report(ref ("ok  \t" + pkg + "\t" + took))
 }
 
 // Catch runs f on the current task and returns the message of the
@@ -451,6 +464,37 @@ func Main(pkg ref string, tests []Test, examples []Example) {
 //
 //	msg := testing.Catch(func() { panic("boom") }) // Some("boom")
 func Catch(f func()) string?
+
+// report prints a line of the runner's own, or several, each framed
+// under -json.
+func report(text ref string) {
+	if !config.Load().json {
+		fmt.Println(text)
+	} else if text.Len() == 0 {
+		fmt.Println(framing) // an empty line of the runner's is framed too
+	} else {
+		fmt.Println(prefixed(text, ref framing))
+	}
+}
+
+// prefixed returns text with each of its lines after prefix; an empty
+// text is one empty line, after prefix.
+func prefixed(text ref string, prefix ref string) string {
+	if text.Len() == 0 {
+		return "" + prefix
+	}
+
+	out := ""
+	for line := range text.Lines() {
+		if out.Len() > 0 {
+			out += "\n"
+		}
+
+		out += prefix + line
+	}
+
+	return out
+}
 
 // isVerbose reports whether -v was given.
 func isVerbose() bool { return config.Load().verbose }
@@ -469,17 +513,27 @@ func runOnState(f func(st mut State)) {
 
 // reportLine prints a line of the running test's report, or holds it
 // when the test runs in parallel.
-func reportLine(line ref string) {
+func reportLine(line ref string) { printLine(line, true) }
+
+// printLine prints a line of the running test's, or holds it when the
+// test runs in parallel; under -json it is framed when it is the
+// runner's own and not what the test logged.
+func printLine(line ref string, own bool) {
+	text := line.Clone()
+	if own && config.Load().json {
+		text = prefixed(line, ref framing)
+	}
+
 	held := false
 	runOnState(func(st mut State) {
 		if st.parallel {
-			st.held += line + "\n"
+			st.held += text + "\n"
 			held = true
 		}
 	})
 
 	if !held {
-		fmt.Println(line)
+		fmt.Println(text)
 	}
 }
 
@@ -553,7 +607,7 @@ func runAndReport(f func()) bool {
 func reportLogged(logged ref string) {
 	for line := range logged.Lines() {
 		if line.Len() > 0 {
-			reportLine(line)
+			printLine(line, false) // what the test logged, never framed
 		}
 	}
 }
@@ -606,8 +660,8 @@ func runBenchmark(b ref Test) int {
 	for {
 		benchStart(n)
 		if msg := Catch(b.F) {
-			fmt.Println(failPrefix + b.Name)
-			fmt.Println(logIndent + msg)
+			report(ref (failPrefix + b.Name))
+			report(ref (logIndent + msg))
 			return 1
 		}
 
@@ -642,7 +696,7 @@ func runBenchmark(b ref Test) int {
 		line += fmt.Sprintf(" %8d B/op %8d allocs/op", benchBytes()/n, benchAllocs()/n)
 	}
 
-	fmt.Println(line)
+	report(ref line)
 	return 0
 }
 
@@ -724,8 +778,8 @@ func runExamples(examples ref []Example, only ref string) int {
 		path := dir + "/" + exampleOutput
 		if dir == "" || !runExample(e, ref path) {
 			if dir == "" {
-				fmt.Println(failPrefix + e.Name)
-				fmt.Println(logIndent + uncaptured)
+				report(ref (failPrefix + e.Name))
+				report(ref (logIndent + uncaptured))
 			}
 
 			failures += 1
@@ -746,14 +800,14 @@ func runExamples(examples ref []Example, only ref string) int {
 // it was to print.
 func runExample(e ref Example, path ref string) bool {
 	if isVerbose() {
-		fmt.Println(runPrefix + e.Name)
+		report(ref (runPrefix + e.Name))
 	}
 
 	start := time.Now()
 	saved := captureStart(path)
 	if saved < 0 { // not run: what it printed could not be read back
-		fmt.Println(failPrefix + e.Name)
-		fmt.Println(logIndent + uncaptured)
+		report(ref (failPrefix + e.Name))
+		report(ref (logIndent + uncaptured))
 		return false
 	}
 
@@ -763,22 +817,30 @@ func runExample(e ref Example, path ref string) bool {
 	got := os.ReadToString(path).UnwrapOr("")
 
 	if m := msg {
-		fmt.Println(failPrefix + e.Name + " " + took)
-		fmt.Println(logIndent + m)
+		report(ref (failPrefix + e.Name + " " + took))
+		report(ref (logIndent + m))
 		return false
 	}
 
 	if !outputMatches(ref got, ref e.Output, e.Unordered) {
-		fmt.Println(failPrefix + e.Name + " " + took)
-		fmt.Println(gotLabel)
-		fmt.Println(got.TrimSpace())
-		fmt.Println(wantLabel)
-		fmt.Println(e.Output.TrimSpace())
+		report(ref (failPrefix + e.Name + " " + took))
+		if config.Load().json { // set under the result as a failure's lines are, each line of the two texts indented below its label
+			report(ref (logIndent + gotLabel))
+			report(ref prefixed(ref got.TrimSpace(), ref (logIndent + logIndent)))
+			report(ref (logIndent + wantLabel))
+			report(ref prefixed(ref e.Output.TrimSpace(), ref (logIndent + logIndent)))
+		} else {
+			report(ref gotLabel)
+			report(ref got.TrimSpace())
+			report(ref wantLabel)
+			report(ref e.Output.TrimSpace())
+		}
+
 		return false
 	}
 
 	if isVerbose() {
-		fmt.Println(passPrefix + e.Name + " " + took)
+		report(ref (passPrefix + e.Name + " " + took))
 	}
 
 	return true

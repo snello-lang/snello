@@ -94,6 +94,13 @@ func (w *workDir) hand(p *os.Process) {
 	w.program <- p
 }
 
+// Dir, Starting and Started are the directory's path, start and hand,
+// by the names the test runner asks for a directory it is to build a
+// test program in and run it from.
+func (w *workDir) Dir() string           { return w.path }
+func (w *workDir) Starting()             { w.start() }
+func (w *workDir) Started(p *os.Process) { w.hand(p) }
+
 // remove stops the guard and removes the directory; it may be called
 // more than once.
 func (w *workDir) remove() {

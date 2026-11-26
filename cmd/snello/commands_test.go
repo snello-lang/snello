@@ -6,6 +6,7 @@ package main
 
 import (
 	"cmp"
+	"encoding/json"
 	"flag"
 	"io"
 	"os/exec"
@@ -178,5 +179,40 @@ func TestProgramFlags(t *testing.T) {
 		if got := strings.Join(o.programFlags(), " "); got != tt.want {
 			t.Errorf("%v passes %q, want %q", tt.args, got, tt.want)
 		}
+	}
+}
+
+// TestTestJSON runs a new module's tests with -json: every line printed
+// is an event, the test chosen by -run among them, and the last is the
+// package's pass.
+func TestTestJSON(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hello")
+	if code := run([]string{newCommand, dir}, io.Discard, io.Discard); code != exitSuccess {
+		t.Fatalf("new exited %d", code)
+	}
+
+	var out, errs strings.Builder
+	if code := run([]string{testCommand, "-json", "-run", "Greeting", dir}, &out, &errs); code != exitSuccess || errs.Len() > 0 {
+		t.Fatalf("test -json exited %d and said %q", code, errs.String())
+	}
+
+	type event struct{ Action, Package, Test string }
+	var events []event
+	for _, line := range strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n") {
+		var ev event
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("%q is no event: %v", line, err)
+		}
+
+		events = append(events, ev)
+	}
+
+	ran := false
+	for _, ev := range events {
+		ran = ran || ev.Action == "pass" && ev.Test == "TestGreeting"
+	}
+
+	if last := events[len(events)-1]; !ran || events[0].Action != "start" || last != (event{"pass", "hello", ""}) {
+		t.Errorf("events %+v", events)
 	}
 }

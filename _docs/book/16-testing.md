@@ -218,8 +218,29 @@ An example joins what it spawns: what a task writes after the example returns is
 | `-short` | what `testing.Short()` reports, for tests to skip their long part |
 | `-update` | make every `expect.Golden` write its file |
 | `-backend c` or `-backend llvm` | the backend the test build goes through |
+| `-json` | print the run as events, one JSON object a line, for an editor or a tool: see below |
 
 NAME is held as a substring, not matched as a pattern, since the language has no regular expressions yet. The flags are read by `testing.Main` from the program's arguments; `snello test` passes them through unchanged.
+
+## The run as events
+
+`snello test -json DIR` prints the run as one JSON object a line, which is how an editor shows a package's tests and a tool reads a run in CI. Each event has an `Action`, the `Package`, the `Test` it is about when it is about one, the `Time`, and as fits the action `Elapsed` in seconds and `Output`, a line the run printed:
+
+| Action | When |
+|---|---|
+| `start` | the package's run begins |
+| `run` | a test, a subtest or an example begins |
+| `pass`, `fail`, `skip` | a test ends, or, with no `Test`, the package |
+| `output` | a line the run printed, the test's when a test is running |
+| `bench` | a benchmark's result line |
+| `failure` | a check failed: `File` and `Line` where it is, the `Message`, and `Got` and `Want` when the check compared two values |
+
+A failure is placed where the failed check is written, and a panic the test did not intend at the innermost line of its trace in the package's own files. An example that prints other than its comment says has its two texts as `Got` and `Want`. A package that does not compile is its errors as `output` and the package's `fail`; a test the program's end leaves running, at a timeout or a crash, is failed with it. Everything but `failure` is the shape Go's `go test -json` prints, so a tool that reads one reads the other.
+
+```
+{"Time":"2026-11-26T15:04:05Z","Action":"failure","Package":"shapes","Test":"TestArea","File":"/work/shapes/shapes_test.snello","Line":29,"Message":"expect.Equal(ref Area(Rect{W: 2, H: 3}), ref 7.0)","Got":"6","Want":"7"}
+{"Time":"2026-11-26T15:04:05Z","Action":"fail","Package":"shapes","Test":"TestArea"}
+```
 
 ## Testing a main package
 
