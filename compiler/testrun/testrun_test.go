@@ -6,6 +6,7 @@ package testrun
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -790,5 +791,35 @@ func TestPlanDirFrom(t *testing.T) {
 		if !slices.Equal(p.Names, tt.want) || p.Path != "lib" || p.Main {
 			t.Errorf("the plan: tests %v, path %q, main %t; want %v of lib", p.Names, p.Path, p.Main, tt.want)
 		}
+	}
+}
+
+// TestBuildTest builds a package's tests into a program at the path
+// given, through both backends, which runs the tests -run picks when it
+// is run in the package's directory, as snello test runs it.
+func TestBuildTest(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"snello.mod":      "snello 0.1.0\n",
+		"p/p.snello":      onlySrc,
+		"p/p_test.snello": onlyTest,
+	})
+
+	dir := filepath.Join(root, "p")
+	for _, backend := range []string{"llvm", "c"} {
+		out := filepath.Join(t.TempDir(), "p.test")
+		if err := BuildTest(dir, backend, out, false, io.Discard, nil); err != nil {
+			t.Fatalf("%s: %v", backend, err)
+		}
+
+		cmd := exec.Command(out, "-v", "-run", Only("TestAreaBig"))
+		cmd.Dir = dir
+		printed, err := cmd.Output()
+		if err != nil || !strings.Contains(string(printed), "--- PASS: TestAreaBig") || strings.Contains(string(printed), "TestArea ") {
+			t.Errorf("%s: the program printed %q, %v", backend, printed, err)
+		}
+	}
+
+	if err := BuildTest(filepath.Join(root, "none"), "llvm", filepath.Join(t.TempDir(), "x"), false, io.Discard, nil); err == nil {
+		t.Error("a directory with no tests built a program")
 	}
 }

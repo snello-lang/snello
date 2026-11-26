@@ -493,7 +493,7 @@ func crossBuild(t *testing.T, dir, name string, target platform.Target, backend 
 	what := name + " for " + target.String() + " through " + backend
 	bin := target.Executable(name)
 	var code int
-	msgs := stderrOf(t, func() { code = build(dir, backend, target, false) })
+	msgs := stderrOf(t, func() { code = build(dir, backend, target, false, "") })
 	if code != exitSuccess {
 		t.Errorf("%s: the build failed:\n%s", what, msgs)
 		return

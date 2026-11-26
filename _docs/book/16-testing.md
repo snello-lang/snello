@@ -219,6 +219,7 @@ An example joins what it spawns: what a task writes after the example returns is
 | `-update` | make every `expect.Golden` write its file |
 | `-backend c` or `-backend llvm` | the backend the test build goes through |
 | `-json` | print the run as events, one JSON object a line, for an editor or a tool: see below |
+| `-c` | build the tests into a program and do not run it; `-o FILE` names it, `-debug` builds it for a debugger (chapter 30), and the program takes the flags above when it runs |
 
 NAME is held as a substring, since the language has no regular expressions yet, unless it is anchored: between `^` and `$` it is a whole name, or a group of whole names, `^(TestA|TestB)$`, which is what those patterns will mean once regular expressions come, so a pattern written now keeps its meaning. `-run ^$` runs no test, which is how a benchmark is run alone: `snello test -run ^$ -bench ^BenchmarkSum$ .`. An editor runs one test, or a file's, by these patterns. The flags are read by `testing.Main` from the program's arguments; `snello test` passes them through unchanged.
 

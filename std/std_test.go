@@ -61,7 +61,7 @@ func TestPackages(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				bin, err := plan.Build(backend, t.TempDir())
+				bin, err := plan.Build(backend, t.TempDir(), false)
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -26,6 +26,8 @@ Each debugger reads the debugging information on its own, so breakpoints, steppi
 $ snello build -debug prog
 ```
 
+`-o FILE` writes the binary elsewhere than under the program's name in the current directory, which is how an editor builds one for its debugger, `snello build -debug -o /tmp/run/prog prog`; the debugging information goes beside it under its name.
+
 On Linux the debugging information is in the binary. On Windows it is in `prog.pdb` beside `prog.exe`, the visualizers of the program's values in it. On macOS the linker leaves it in the objects it links, which the build removes, so the build gathers it first into `prog.dSYM` beside the binary, as `clang -g` does; lldb finds the bundle there and takes it when it matches the binary.
 
 ## One command: `snello debug`
@@ -37,6 +39,19 @@ $ snello debug prog --verbose input.txt
 ```
 
 It also loads Snello's support into the debugger, which shows values as the program writes them and adds the command `tasks`. A debugger loads no such script from a binary on its own, which is why the command does it, as Rust's `rust-lldb` and Go's Delve do. With `snello build -debug` and a debugger started by hand, everything below works but the formatted values and `tasks`, which the script adds once it is loaded: `command script import PATH/snello.py` in lldb, `source PATH/snello.py` in gdb. `snello debug` writes the script, the first time it runs, into a directory named by its version under `debug/` in Snello's cache directory, which chapter 32 names for each system, or the directory `SNELLO_CACHE` names; it is also `cmd/snello/snello.py` in a checkout of the repository.
+
+An editor that starts the debugger itself, through its debug adapter, asks the command for the same setup: `snello debug -setup lldb`, or `-setup gdb`, writes the script and the standard library's sources where `snello debug` keeps them and prints the commands the debugger runs first, one a line, which the editor gives the adapter as its own. That is how the VS Code extension's debugger shows values as the program writes them.
+
+## A test under the debugger
+
+`snello test -c -debug DIR` builds a package's tests into a program for a debugger, `shapes.test` for the package `shapes`, or where `-o FILE` says, with the debugging information beside it, and does not run it. The program takes the flags `snello test` passes it, so a debugger runs the one test it is to stop in by its name, in the package's directory, where the tests find their `testdata`:
+
+```
+$ snello test -c -debug -o shapes.test shapes
+$ cd shapes && lldb -- ../shapes.test -run ^TestArea$
+```
+
+A test program is built for a debugger only this way: `snello test` itself runs a release build, as chapter 16 says, and refuses `-debug` without `-c`.
 
 ## Stopping, stepping and printing
 

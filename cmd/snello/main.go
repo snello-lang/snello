@@ -78,6 +78,33 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// buildTests builds the tests of the package in dir into a program at
+// out, or at the package's name and .test in this directory, which runs
+// them with the flags snello test passes it; debug builds it for a
+// debugger.
+func buildTests(dir, backend, out string, debug bool, stderr io.Writer) int {
+	if out == "" {
+		out = programName(dir, true) + testProgramSuffix
+		if platform.Host().OS == platform.Windows {
+			out += executable
+		}
+	}
+
+	work, err := newWorkDir(buildDirPattern)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+
+	defer work.remove()
+	if err := testrun.BuildTest(dir, backend, out, debug, stderr, work); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailure
+	}
+
+	return exitSuccess
+}
+
 // runTests builds the tests of the package in dir into a program and
 // runs it through the backend, passing pass, the flags meant for the
 // program, whose exit code is the command's; asJSON prints the run as
@@ -248,7 +275,7 @@ func warnModule(w io.Writer, names []string) {
 
 // emit prints what build would compile: the C source, or the IR
 // module, for reading.
-func emit(path, backend string, target platform.Target, debug bool) int {
+func emit(path, backend string, target platform.Target, debug bool, _ string) int {
 	src, _, ok := emitSource(path, backend, target, debug, os.Stderr)
 	if !ok {
 		return exitFailure
@@ -259,27 +286,31 @@ func emit(path, backend string, target platform.Target, debug bool) int {
 }
 
 // build compiles a program, a file or a directory, to a native binary
-// named after it, in the current directory, through the backend asked
-// for; debug asks for the runtime's checks.
-func build(path, backend string, target platform.Target, debug bool) int {
+// at out, or named after it in the current directory, through the
+// backend asked for; debug asks for the runtime's checks.
+func build(path, backend string, target platform.Target, debug bool, out string) int {
 	bin, name, work, ok := compile(path, backend, target, debug, os.Stderr)
 	if !ok {
 		return exitFailure
 	}
 
+	if out != "" {
+		name = out
+	}
+
 	defer work.remove()
-	var out []byte
+	var log []byte
 	built, err := os.ReadFile(bin)
 	if err == nil {
 		err = os.WriteFile(name, built, binaryMode)
 	}
 
 	if err == nil && debug {
-		out, err = c.Bundle(bin, name, target) // before the build's directory, which holds the objects the bundle is gathered from, is removed
+		log, err = c.Bundle(bin, name, target) // before the build's directory, which holds the objects the bundle is gathered from, is removed
 	}
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n%s", err, out)
+		fmt.Fprintf(os.Stderr, "%v\n%s", err, log)
 		return exitFailure
 	}
 

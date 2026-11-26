@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -176,7 +177,7 @@ func TestDebugger(t *testing.T) {
 		t.Skip(debugger + where)
 	}
 
-	t.Setenv("SNELLO_CACHE", t.TempDir())
+	t.Setenv(c.CacheEnv, t.TempDir())
 	support, done, err := debugSupport()
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +209,7 @@ func TestDebugger(t *testing.T) {
 			}
 
 			t.Chdir(dir)
-			if code := build(src, b.backend, platform.Host(), true); code != 0 {
+			if code := build(src, b.backend, platform.Host(), true, ""); code != 0 {
 				t.Fatalf("snello build -debug exited %d", code)
 			}
 
@@ -507,7 +508,7 @@ func TestPlatformDebugger(t *testing.T) {
 // the cache off written for one session into a directory of its own,
 // which the session's end removes.
 func TestDebugSupport(t *testing.T) {
-	t.Setenv("SNELLO_CACHE", t.TempDir())
+	t.Setenv(c.CacheEnv, t.TempDir())
 	dir, done, err := debugSupport()
 	if err != nil {
 		t.Fatal(err)
@@ -555,5 +556,42 @@ func TestDebugSupport(t *testing.T) {
 	doneSecond()
 	if _, err := os.Stat(first); !os.IsNotExist(err) {
 		t.Errorf("a session's support outlived it: %v", err)
+	}
+}
+
+// TestDebuggerSetup prints, for lldb and for gdb, the commands an
+// editor's debugger runs first: the script loaded, which is written
+// where they say, and the standard library's sources mapped; another
+// debugger's name is refused, and so is debug with neither a program
+// nor -setup.
+func TestDebuggerSetup(t *testing.T) {
+	t.Setenv(c.CacheEnv, t.TempDir())
+	for name, load := range map[string]string{lldb: lldbImport, gdb: gdbSource} {
+		var out, errs strings.Builder
+		if code := run([]string{debugCommand, "-setup", name}, &out, &errs); code != exitSuccess {
+			t.Fatalf("%s: exited %d and said %q", name, code, errs.String())
+		}
+
+		lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+		if len(lines) != 2 || !strings.HasPrefix(lines[0], load) || !strings.Contains(lines[1], strings.TrimSuffix(lower.StdSources, stdPathEnd)) {
+			t.Errorf("%s: %q", name, lines)
+			continue
+		}
+
+		script, err := strconv.Unquote(strings.TrimPrefix(lines[0], load))
+		if err != nil {
+			script = strings.TrimPrefix(lines[0], load) // gdb's, unquoted
+		}
+
+		if _, err := os.Stat(script); err != nil {
+			t.Errorf("%s: the script is not where the command says: %v", name, err)
+		}
+	}
+
+	for _, args := range [][]string{{debugCommand, "-setup", cdb}, {debugCommand}} {
+		var errs strings.Builder
+		if code := run(args, io.Discard, &errs); code != exitUsage || errs.Len() == 0 {
+			t.Errorf("%v exited %d and said %q", args, code, errs.String())
+		}
 	}
 }

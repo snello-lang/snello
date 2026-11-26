@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -214,5 +215,52 @@ func TestTestJSON(t *testing.T) {
 
 	if last := events[len(events)-1]; !ran || events[0].Action != "start" || last != (event{"pass", "hello", ""}) {
 		t.Errorf("events %+v", events)
+	}
+}
+
+// TestOutputFlags writes a new module's program where build -o says, and
+// its tests into a program where test -c -o says, which runs one test
+// when it is run with -run, both with what a debugger reads when -debug
+// is given; test refuses -debug and -o without -c, and -json and the
+// program's flags with it.
+func TestOutputFlags(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hello")
+	if code := run([]string{newCommand, dir}, io.Discard, io.Discard); code != exitSuccess {
+		t.Fatalf("new exited %d", code)
+	}
+
+	out := t.TempDir()
+	prog := filepath.Join(out, "prog")
+	if code := run([]string{buildCommand, "-o", prog, dir}, io.Discard, io.Discard); code != exitSuccess {
+		t.Fatalf("build -o exited %d", code)
+	}
+
+	if printed, err := exec.Command(prog).Output(); err != nil || string(printed) != "Hello, Snello!\n" {
+		t.Errorf("the program build -o wrote printed %q, %v", printed, err)
+	}
+
+	tests := filepath.Join(out, "hello.test")
+	var errs strings.Builder
+	if code := run([]string{testCommand, "-c", "-debug", "-o", tests, dir}, io.Discard, &errs); code != exitSuccess {
+		t.Fatalf("test -c exited %d and said %q", code, errs.String())
+	}
+
+	cmd := exec.Command(tests, "-v", "-run", "^TestGreeting$")
+	cmd.Dir = dir
+	if printed, err := cmd.Output(); err != nil || !strings.Contains(string(printed), "--- PASS: TestGreeting") {
+		t.Errorf("the program test -c wrote printed %q, %v", printed, err)
+	}
+
+	if platform.Host().OS == platform.Darwin {
+		if _, err := os.Stat(tests + ".dSYM"); err != nil {
+			t.Errorf("test -c -debug wrote no debug information: %v", err)
+		}
+	}
+
+	for _, args := range [][]string{{testCommand, "-debug", dir}, {testCommand, "-o", tests, dir}, {testCommand, "-c", "-json", dir}, {testCommand, "-c", "-run", "X", dir}} {
+		errs.Reset()
+		if code := run(args, io.Discard, &errs); code != exitUsage || !strings.Contains(errs.String(), "-c builds") {
+			t.Errorf("%v exited %d and said %q", args, code, errs.String())
+		}
 	}
 }
