@@ -190,11 +190,13 @@ func (l *lowering) callArgs(x *ast.CallExpr, k callee) ([]Operand, bool) {
 		packed := false
 		if k.sig != nil && (i < k.sig.fixed() || k.sig.variadic) {
 			param, want, _, packed = argSlot(k.sig, i, x.Ellipsis.IsValid(), kind, each)
+		} else if v, ok := k.obj.(*Variant); ok {
+			want = l.borrowField(x, v, i) // a ref field given an owned value lends it, as a struct's ref field does
 		}
 
 		l.keepArg(arg, i, k, param, packed || builtin != nil && builtin.id == BuiltinReplace && i == 1, x == l.spawning)
 
-		if r, ok := want.(*Ref); ok && isBorrow(l.typeOf(arg)) { // a borrow variable passed on is lent again, not moved: a borrow of the variable for the call
+		if r, ok := want.(*Ref); ok && isBorrow(l.typeOf(arg)) && !Identical(r.elem, l.typeOf(arg)) { // a borrow variable passed on is lent again, not moved: a borrow of the variable for the call; given where a borrow of it is wanted, value lends the variable itself
 			if p, ok := l.placeOrPart(arg); ok {
 				l.emit(Instr{Op: OpRead, Place: p, Expr: arg, Pos: arg.Pos()})
 				l.argStack = append(l.argStack, l.lendFor(p, arg, l.ref(l.typeOf(arg), r.mut)))
@@ -270,4 +272,35 @@ func (l *lowering) converted(x *ast.CallExpr, arg ast.Expr) Operand {
 	}
 
 	return l.read(arg)
+}
+
+// borrowField is the type of the i-th field of the variant v that the
+// call x makes, as the call's type has it, Some's of an option of a
+// borrow or a generic enum's instance, when it is a borrow; nil
+// otherwise.
+func (l *lowering) borrowField(x *ast.CallExpr, v *Variant, i int) Type {
+	var field Type
+	switch t := l.typeOf(x).(type) {
+	case *Option:
+		if v == SomeVariant {
+			field = t.elem
+		}
+	case *Result:
+		switch v {
+		case OkVariant:
+			field = t.val
+		case ErrVariant:
+			field = t.err
+		}
+	case *Named:
+		if en, ok := t.Underlying().(*Enum); ok && v.index < len(en.variants) && i < len(en.variants[v.index].fields) {
+			field = en.variants[v.index].fields[i].typ
+		}
+	}
+
+	if !isBorrow(field) {
+		return nil
+	}
+
+	return field
 }

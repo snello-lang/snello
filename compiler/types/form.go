@@ -90,6 +90,8 @@ type TempInfo struct {
 	Bound   bool   // a binding or a loop variable takes a part of it, or of a borrow of it: it is held until its statement drops it
 	Given   bool   // a call or a defer takes it, or a statement with several values stores it: what it lends is lent until then
 	Carried bool   // made of a value that reads a variable its statement stores: it holds what the value lends before any store
+	View    bool   // a borrow a slice expression makes, a view into the place it slices rather than the place's value
+	Itself  bool   // a borrow of a borrow's own place, made where a borrow of the borrow is wanted, as ref r is written
 	Named   string // for a borrow made for a construct that holds it, what a message calls the holder: the arm written for each variant
 }
 

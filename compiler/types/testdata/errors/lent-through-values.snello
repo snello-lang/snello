@@ -1,0 +1,252 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a value lends what the values it is made of lend, followed
+// through every step that makes it, so a borrow of a local or of a
+// value an expression makes is refused wherever it would outlive its
+// owner: a local lent to a call whose result is returned, a view of a
+// value made here kept or assigned, a generic call storing a value made
+// here where a variable keeps it, an element taken from a tuple made
+// here that borrows such a value, an element ranged over or a part
+// matched through a borrow of a value made here, a borrow of a local's
+// own place or field returned through another local, whatever the local
+// holds, the same from a closure, a parameter taken by value, a
+// deferred print of what a call borrows of a value made here, a borrow
+// read through a local borrow and kept past what it points at, alone or
+// in a statement with several values, a borrow given where a borrow of
+// it is wanted, which lends its own slot, a parameter's or a value made
+// here, a borrow pushed or inserted into a slice past its owner, a value
+// lent to a call while a field of it holds a borrow of a dropped
+// variable, a borrow variable given another value while a borrow of its
+// slot is used, and a borrow of a local reached through a borrow held in
+// a field. Fix: keep the value in a variable that outlives the borrow,
+// or return it by value.
+
+package p
+
+import "fmt"
+
+struct Span {
+	text ref string
+	at   int
+}
+
+struct Cell<T> {
+	v T
+}
+
+func at(s ref Span) ref int {
+	return ref s.at
+}
+
+func made() string {
+	return "made here".Clone()
+}
+
+func numbers() []int {
+	return []int{1, 2}
+}
+
+func set<T>(c mut Cell<T>, x T) {
+	c.v = x
+}
+
+func id(x ref string) ref string {
+	return x
+}
+
+enum Two {
+	Pair(ref string, ref string)
+	Neither
+}
+
+struct Picker {
+	n int
+}
+
+struct Box {
+	s ref string
+}
+
+struct Wrap {
+	inner ref Span
+	n     int
+}
+
+func one(b ref Box) {
+	fmt.Println(b.s)
+}
+
+func (b Picker) Pick(s ref string) (ref string)? {
+	return Some(s)
+}
+
+func picker() Picker {
+	return Picker{n: 1}
+}
+
+func throughCall(t ref string) ref int {
+	x := Span{text: t, at: 41}
+	return at(x) // ERROR "cannot return a borrow of local x"
+}
+
+func viewKept() int {
+	xs := numbers()[0:1] // ERROR "cannot keep a borrow of a temporary: numbers() is dropped when the statement ends"
+	return xs[0]
+}
+
+func viewAssigned(p ref string) string {
+	var x ref string = p
+	x = made()[0:2] // ERROR "cannot keep a borrow of a temporary: made() is dropped when the statement ends"
+	return x.Clone()
+}
+
+func genericStore(p ref string) string {
+	c := Cell<ref string>{v: p}
+	set(mut c, made()) // ERROR "cannot keep a borrow of a temporary: made() is dropped when the statement ends"
+	return c.v.Clone()
+}
+
+func boundElement() string {
+	a, b := (ref made(), 1) // ERROR "cannot keep a borrow of made() in a: made() is dropped at the end of the statement"
+	fmt.Println(b)
+	return a.Clone()
+}
+
+func ownPlace(p ref string) ref Span {
+	sp := Span{text: p, at: 1}
+	r := ref sp
+	return r // ERROR "cannot return a borrow of local sp"
+}
+
+func ownField(p ref string) ref int {
+	v := Span{text: p, at: 1}
+	w := ref v
+	return ref w.at // ERROR "cannot return a borrow of local v"
+}
+
+func rangedOver() string {
+	var keep ref string = "z"
+	for x := range made().Split(",") {
+		keep = x // ERROR "cannot keep a borrow of made() in keep: made() is dropped at the end of the statement"
+	}
+
+	return keep.Clone()
+}
+
+func matchedThrough() string {
+	var keep ref string = "z"
+	match ref Pair(made(), "lit") {
+		Pair(x, y) => keep = *x, // ERROR "cannot keep a borrow of made() in keep: made() is dropped at the end of the statement"
+		Neither => {},
+	}
+
+	return keep.Clone()
+}
+
+func fieldSlot(p ref string) ref ref string {
+	sp := Span{text: p, at: 1}
+	r := ref sp.text
+	return r // ERROR "cannot return a borrow of local r"
+}
+
+func fromClosure(p ref string) int {
+	f := func(x ref string) ref Span {
+		sp := Span{text: x, at: 1}
+		r := ref sp
+		return r // ERROR "cannot return a borrow of local sp"
+	}
+
+	return f(p).at
+}
+
+func byValue(s string) (ref string)? {
+	if v := picker().Pick(ref s) {
+		return Some(v) // ERROR "cannot return a borrow of local s"
+	}
+
+	return None
+}
+
+func deferred() {
+	defer fmt.Println(*id(made())) // ERROR "a deferred call reads what it prints when it runs, after the defer statement drops made()"
+}
+
+func readThrough() string {
+	var keep ref string = "z"
+	{
+		s := made()
+		x := ref s
+		keep = *x // ERROR "cannot keep a borrow of s in keep: s is dropped at the end of its block"
+	}
+
+	return keep.Clone()
+}
+
+func readThroughSeveral() string {
+	var keep ref string = "z"
+	var other ref string = "z"
+	{
+		s := made()
+		x := ref s
+		keep, other = *x, "q" // ERROR "cannot keep a borrow of s in keep: s is dropped at the end of its block"
+	}
+
+	return keep.Clone() + other.Clone()
+}
+
+func returnedThrough() ref string {
+	s := made()
+	x := ref s
+	var k ref string = *x
+	return k // ERROR "cannot return a borrow of local s"
+}
+
+func slotOf(p ref string) ref ref string {
+	return p // ERROR "cannot return a borrow of local p"
+}
+
+func slotOfMade(p ref string) ref ref string {
+	return id(p) // ERROR "cannot return a borrow of a temporary: id(...) is dropped when the statement ends"
+}
+
+func pushed() {
+	s := "a,b".Clone()
+	parts := s.Split(",")
+	{
+		t := "inner".Clone()
+		parts.Push(ref t) // ERROR "cannot keep a borrow of t in parts: t is dropped at the end of its block"
+	}
+
+	fmt.Println(parts)
+}
+
+func fieldLent() {
+	var bx Box = Box{s: "z"}
+	{
+		t := "inner".Clone()
+		bx.s = t
+	}
+
+	one(ref bx) // ERROR "cannot keep a borrow of t: t is dropped at the end of its block"
+}
+
+func slotKept() {
+	s := "outer".Clone()
+	var x ref string = s
+	var rr ref ref string = x
+	{
+		t := "inner".Clone()
+		x = t // ERROR "cannot assign to x: x is borrowed by rr"
+	}
+
+	fmt.Println(*rr)
+}
+
+func throughField(p ref string) ref int {
+	sp := Span{text: p, at: 1}
+	w := Wrap{inner: sp, n: 2}
+	r := ref w
+	return ref r.inner.at // ERROR "cannot return a borrow of local sp"
+}

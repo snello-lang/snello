@@ -37,11 +37,15 @@ type word struct {
 
 // A returnedPart is the part of a variable a returned borrow is of:
 // the path in it, whether the borrow lends the place there or reads
-// the borrow stored there, and whether it lends an element of it.
+// the borrow stored there, whether it lends an element of it, and
+// whether the path is behind the borrow the variable is, *r or r.f
+// with r a borrow, rather than in the variable itself.
 type returnedPart struct {
 	path    string
 	lent    bool
 	indexed bool
+	behind  bool
+	read    bool // a borrow read out of a place, or copied from what a borrow variable holds, is on the way: what follows is what holds it, not a place lent itself
 }
 
 // once wraps report so that the return seq is reported once.
@@ -56,20 +60,33 @@ func (w *word) once(seq int, report func(token.Pos, string)) func(token.Pos, str
 
 // through returns the part of what the loan b borrows that the
 // returned part of b's holder is: x := ref v.io and a return of ref
-// x.r[0] lend v.io.r[0], and x := ref v.d and one of ref (*x)[0] lend
-// an element behind v.d. A loan held in a part of its holder is not
-// followed into, and the part is the loan's own place, lent or read
-// as the loan was made.
+// x.r[0] lend v.io.r[0], x := ref v.d and one of ref (*x)[0] lend an
+// element behind v.d, lent or read as the return does, and x := ref v
+// and one of *x read v. A loan held in a part of its holder is not
+// followed into, and the part is the loan's own place, lent or read as
+// the loan was made, a loan copied from what a borrow variable holds
+// being read; so is the whole holder's, returned itself.
 func (r returnedPart) through(b *borrow) returnedPart {
+	read := b.read || b.lent // a borrow read out of the place, or copied from what a borrow variable holds: what it points at is behind it
+	hpath := b.hpath
+	if r.behind && (hpath == "*" || strings.HasPrefix(hpath, "*.")) {
+		hpath = strings.TrimPrefix(strings.TrimPrefix(hpath, "*"), ".") // held behind the holder's borrow, where the returned part is
+	}
+
 	if r.path == "" && r.indexed && b.hpath == "" {
-		return returnedPart{path: b.place.path, lent: true, indexed: true}
+		return returnedPart{path: b.place.path, lent: r.lent, indexed: true, read: r.read || read}
 	}
 
-	if r.path == "" || b.hpath != "" {
-		return returnedPart{path: b.place.path, lent: !b.read}
+	if hpath != "" && r.path != hpath && pathWithin(r.path, hpath) { // a part behind the borrow held in a field, w.inner.text with inner the borrow: the rest of the path is in what it points at
+		rest := strings.TrimPrefix(r.path[len(hpath):], ".")
+		return returnedPart{path: joinPath(b.place.path, rest), lent: r.lent && !read, indexed: r.indexed, read: r.read || read}
 	}
 
-	return returnedPart{path: joinPath(b.place.path, r.path), lent: r.lent, indexed: r.indexed}
+	if r.path == "" && !r.behind || b.hpath != "" {
+		return returnedPart{path: b.place.path, lent: !read, behind: read, read: r.read || read}
+	}
+
+	return returnedPart{path: joinPath(b.place.path, r.path), lent: r.lent && !read, indexed: r.indexed, read: r.read || read}
 }
 
 // noteWord records that have, the implementation of the trait owner's

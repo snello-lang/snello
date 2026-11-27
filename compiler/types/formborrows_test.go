@@ -40,7 +40,18 @@ func TestFormBorrows(t *testing.T) {
 		{"func f(c bool, s string) { if c { return } else { return }; r := ref s; keep(s); print(r) }", nil},
 		{"func f() { xs := []int{1, 2, 3}; print(xs[0:1], grow(mut xs)) }", []string{"cannot borrow xs as mut: xs is borrowed as ref at"}},
 		{"func f(n int, s string) { r := ref s; for i := 0; i < 2; i += 1 { match n { 1 => print(1), _ => print(2) }; print(r); keep(s) } }", []string{"s moved in a previous iteration of the loop", "cannot move s: s is borrowed by r at 28:27, used in the next pass of the loop at"}},
-		{"func f(s string) (ref string)? { if v := mkb3().Pick(ref s) { return Some(v) }; return None }", nil},
+		{"func f(s string) (ref string)? { if v := mkb3().Pick(ref s) { return Some(v) }; return None }", []string{"cannot return a borrow of local s"}}, // s is taken by value: it dies when f returns
+		{"func f(s ref string) (ref string)? { if v := mkb3().Pick(s) { return Some(v) }; return None }", nil},
+		// A binding through a borrow reads the borrow stored in the part, of the part's own type, or borrows the part, of a borrow of it.
+		{"func f() string { var keep ref string = \"z\"; for x := range give(\"a,b\").Split(\",\") { keep = x }; return keep.Clone() }", []string{"cannot keep a borrow of give(...) in keep: give(...) is dropped at the end of the statement"}},
+		{"func f(p ref string) ref string { for x := range p.Split(\",\") { return x }; return p }", nil},
+		{"func f(p ref string) ref string { parts := p.Split(\",\"); for x := range ref parts { return *x }; return p }", nil},
+		{"func f(p ref string) ref string { o := Some(p); r := ref o; return match r { Some(x) => x, None => p } }", nil},
+		{"func f(p ref string) ref string { o := Some(p); return match ref o { Some(x) => x, None => p } }", nil},
+		{"func f(p ref string) ref string { t := (p, 1); r := ref t; a, b := *r; return a }", nil},
+		// A borrow a call takes holds what its place holds, which a later argument may not change.
+		{"struct Row2 { name string }\nstruct L2 { r ref Row2; n int }\nfunc change(r mut Row2) int { r.name = \"z\".Clone(); return 0 }\nfunc show(r ref Row2, n int) { print(r.name) }\nfunc f() { row := Row2{name: \"a\".Clone()}; l := L2{r: ref row, n: 1}; show(l.r, change(mut row)) }", []string{"cannot borrow row as mut: row is borrowed as ref"}},
+		{"func f() string { var keep ref string = \"z\"; var other ref string = \"z\"; { s := \"m\".Clone(); x := ref s; keep, other = *x, \"q\" }; return keep.Clone() + other.Clone() }", []string{"cannot keep a borrow of s in keep: s is dropped at the end of its block"}},
 		{"func f<T>(s string) T? { return match T { struct => Some(T{ for f := range fields(T) { [f]: match f.type { string => s, _ => f.default ?? return None } } }), _ => None } }", []string{"s moved in a previous iteration of the loop"}},
 		{"func f<T>(v mut T, w T) { match T { enum => match v { for c := range variants(T) => { *v = w } }, _ => {} } }", []string{"cannot assign to *v: v is borrowed by the arm written for each variant"}},
 		{"func f<T>(s string) T? { return match T { struct => Some(T{ for f := range fields(T) { [f]: match f.type { func() int => func() int { return len(s) }, _ => f.default ?? return None } } }), _ => None } }", []string{"closure captures s by borrow and cannot be stored", "a closure that borrows cannot be chosen by if or match"}},
