@@ -69,7 +69,8 @@ func coffFile(table []byte, arch string) ([]byte, error) {
 			copy(field[:], n)
 		} else { // four zero bytes, then the name's offset in the string table, which counts its own size
 			binary.LittleEndian.PutUint32(field[4:], uint32(coffStringSizeLen+strings.Len()))
-			strings.WriteString(n + nameEnd)
+			strings.WriteString(n)
+			strings.WriteString(nameEnd)
 		}
 
 		w(field, value, uint16(sectionIndex), uint16(0), uint8(coffExternal), uint8(0))

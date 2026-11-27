@@ -5,6 +5,7 @@
 package types
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -105,10 +106,10 @@ func TestReachDepth(t *testing.T) {
 		var b strings.Builder
 		b.WriteString("package main\n")
 		for i := 0; i < n-1; i++ {
-			b.WriteString("func f" + strconv.Itoa(i) + "<T>(v ref T) { f" + strconv.Itoa(i+1) + "(v) }\n")
+			fmt.Fprintf(&b, "func f%d<T>(v ref T) { f%d(v) }\n", i, i+1)
 		}
 
-		b.WriteString("func f" + strconv.Itoa(n-1) + "<T>(v ref T) { match T { int => print(1) } }\n")
+		fmt.Fprintf(&b, "func f%d<T>(v ref T) { match T { int => print(1) } }\n", n-1)
 		b.WriteString("func main() { f0(ref \"s\") }\n")
 		return b.String()
 	}

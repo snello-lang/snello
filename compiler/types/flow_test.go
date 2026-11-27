@@ -5,6 +5,7 @@
 package types
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -326,14 +327,16 @@ func (f *flow) String() string {
 	var b strings.Builder
 	for bi := range f.blocks {
 		blk := &f.blocks[bi]
-		b.WriteString("b" + strconv.Itoa(bi) + ":")
+		fmt.Fprintf(&b, "b%d:", bi)
 		for _, s := range blk.succs {
-			b.WriteString(" ->b" + strconv.Itoa(s))
+			fmt.Fprintf(&b, " ->b%d", s)
 		}
 
 		b.WriteString("\n")
 		for _, ev := range blk.events {
-			b.WriteString("  " + f.eventString(ev) + "\n")
+			b.WriteString("  ")
+			b.WriteString(f.eventString(ev))
+			b.WriteByte('\n')
 		}
 	}
 

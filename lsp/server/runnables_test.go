@@ -6,6 +6,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -180,9 +181,9 @@ func BenchmarkRunnables(b *testing.B) {
 	for p := range 30 {
 		pkg := "p" + strconv.Itoa(p)
 		var src strings.Builder
-		src.WriteString("package " + pkg + "\n\n")
+		fmt.Fprintf(&src, "package %s\n\n", pkg)
 		for g := range 40 {
-			src.WriteString("func Test" + strconv.Itoa(g) + "() {}\n\n")
+			fmt.Fprintf(&src, "func Test%d() {}\n\n", g)
 		}
 
 		files[pkg+"/"+pkg+"_test.snello"] = src.String()

@@ -5,7 +5,7 @@
 package types
 
 import (
-	"strconv"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -62,7 +62,7 @@ func TestFormBorrows(t *testing.T) {
 		b.WriteString(m.checker.flow.String())
 		for i, t := range m.form.Temps {
 			if t.Expr != nil {
-				b.WriteString("  t" + strconv.Itoa(i) + " = " + exprText(t.Expr) + " origin t" + strconv.Itoa(t.Origin))
+				fmt.Fprintf(&b, "  t%d = %s origin t%d", i, exprText(t.Expr), t.Origin)
 				if t.Bound {
 					b.WriteString(" bound")
 				}

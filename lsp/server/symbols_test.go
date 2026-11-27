@@ -6,6 +6,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -273,9 +274,9 @@ func BenchmarkWorkspaceSymbol(b *testing.B) {
 	for p := range 30 {
 		for f := range 8 {
 			var src strings.Builder
-			src.WriteString("package p" + strconv.Itoa(p) + "\n\n")
+			fmt.Fprintf(&src, "package p%d\n\n", p)
 			for g := range 40 {
-				src.WriteString("func F" + strconv.Itoa(f) + "_" + strconv.Itoa(g) + "() {}\n\n")
+				fmt.Fprintf(&src, "func F%d_%d() {}\n\n", f, g)
 			}
 
 			files["p"+strconv.Itoa(p)+"/f"+strconv.Itoa(f)+".snello"] = src.String()

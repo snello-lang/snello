@@ -163,23 +163,28 @@ func (o Operand) sub(part string) Operand {
 // to.
 func (f *Form) String() string {
 	var b strings.Builder
+	var num [20]byte // a block's number, written into b in place
 	for i, blk := range f.Blocks {
-		b.WriteString("b" + strconv.Itoa(i))
+		b.WriteByte('b')
+		b.Write(strconv.AppendInt(num[:0], int64(i), 10))
 		if blk.Head {
 			b.WriteString(" (head)")
 		}
 
 		b.WriteString(":\n")
 		for _, in := range f.Instrs[blk.From:blk.To] {
-			b.WriteString("  " + f.instrString(in) + "\n")
+			b.WriteString("  ")
+			b.WriteString(f.instrString(in))
+			b.WriteByte('\n')
 		}
 
 		b.WriteString("  ->")
 		for _, s := range blk.Succs {
-			b.WriteString(" b" + strconv.Itoa(s))
+			b.WriteString(" b")
+			b.Write(strconv.AppendInt(num[:0], int64(s), 10))
 		}
 
-		b.WriteString("\n")
+		b.WriteByte('\n')
 	}
 
 	return b.String()
