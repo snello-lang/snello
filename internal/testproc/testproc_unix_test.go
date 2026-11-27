@@ -51,7 +51,7 @@ func TestGuardRestarts(t *testing.T) {
 	}
 
 	_ = syscall.Kill(old, syscall.SIGKILL)
-	for deadline := time.Now().Add(goneWithin); alive(old) && !zombie(old); time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(goneWithin); alive(old); time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the guard %d did not end", old)
 		}
@@ -128,17 +128,18 @@ func wantListed(t *testing.T, procs []process) {
 	t.Fatalf("processes() does not list the test binary, %d", want.pid)
 }
 
-// alive reports whether the process pid still runs, or has ended and
-// not been collected.
-func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
+// alive reports whether the process pid still runs: listed and not a
+// zombie, which has ended and waits only to be collected, as a process
+// whose parent died does where process 1 collects none, the go command
+// a container runs.
+func alive(pid int) bool {
+	for _, p := range processes() {
+		if p.pid == pid {
+			return !p.zombie
+		}
+	}
 
-// zombie reports whether the process pid, a child of the test binary,
-// has ended, without collecting it.
-func zombie(pid int) bool {
-	var info syscall.Rusage
-	var status syscall.WaitStatus
-	got, _ := syscall.Wait4(pid, &status, syscall.WNOHANG|syscall.WNOWAIT, &info)
-	return got == pid
+	return false
 }
 
 // kill ends the process pid, which a failing test leaves.
