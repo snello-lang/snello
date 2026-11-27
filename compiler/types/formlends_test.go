@@ -106,6 +106,7 @@ func TestLends(t *testing.T) {
 		{"func f() (ref string)? { s := \"a\".Clone(); return Some(s) }", "return", "lent s"},
 		{"func f() ref int { return ref 5 }", "return", "nothing"},
 		{"func f() ref int { return ref mkInts()[0] }", "return", "temporary mkInts()"},
+		{"func f(s mut []int) mut []int { return mut s[1:] }", "return", "temporary s[1:]"}, // a mut view borrows the header its slice expression makes
 		{"func f(p ref string) ref string { a, b := (p, ref mk()); print(b); return a }", "bind a", "p"},
 		{"func f(p ref string) ref string { a, b := (p, ref mk()); print(b); return a }", "bind b", "t0"}, // the temporary mk() is
 		{"func f(p ref string) ref string { match Holder(p) { Holder(x) => return x, _ => {} }; return p }", "bind x", "p"},

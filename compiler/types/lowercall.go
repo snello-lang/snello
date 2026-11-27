@@ -261,10 +261,15 @@ func (l *lowering) lendFor(p Operand, e ast.Expr, ref *Ref) Operand {
 	return t
 }
 
-// converted evaluates the operand of a conversion: the value is taken
-// when it is the same value under another name, and read, a copy made,
-// between numbers and between a string and its bytes or runes.
+// converted evaluates the operand of a conversion: a borrow seen as
+// another type is the borrow itself; the value is taken when it is the
+// same value under another name, and read, a copy made, between numbers
+// and between a string and its bytes or runes.
 func (l *lowering) converted(x *ast.CallExpr, arg ast.Expr) Operand {
+	if r, view := l.typeOf(x).(*Ref); view && conversionTakes(stripRef(l.typeOf(arg)), r.elem) {
+		return l.value(arg, nil) // a borrow seen as another type: the borrow itself, lending what it lends
+	}
+
 	if target := l.typeOf(x); conversionTakes(stripRef(l.typeOf(arg)), target) {
 		a := l.value(arg, target)
 		l.take(a)

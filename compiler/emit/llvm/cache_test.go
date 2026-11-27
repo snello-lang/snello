@@ -6,7 +6,6 @@ package llvm
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // TestRuntimeCache checks the cache through this backend: two release
@@ -41,7 +41,7 @@ func TestRuntimeCache(t *testing.T) {
 			t.Fatalf("release build %d: %v\n%s", i, err, out)
 		}
 
-		if printed, err := exec.Command(bin).Output(); err != nil || string(printed) != "cached\n" {
+		if printed, err := testproc.Command(bin).Output(); err != nil || string(printed) != "cached\n" {
 			t.Fatalf("release build %d printed %q, %v", i, printed, err)
 		}
 	}

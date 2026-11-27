@@ -18,9 +18,15 @@
 // or read through two borrows; a borrow written ref of a borrow variable
 // or a field holding one, which passes the borrow on; the result of a
 // ref ref parameter, which holds what the slot holds; a borrow of a
-// borrow variable's slot used while the variable keeps its value; and a
-// struct of borrows rebuilt from its own fields field by field. The borrows the same
-// steps would carry past their owners are refused,
+// borrow variable's slot used while the variable keeps its value; a
+// struct of borrows rebuilt from its own fields field by field; and a mut
+// view of a slice given to a call within its statement, passed on
+// through a call and a generic call, an element of it returned, and the
+// view kept in variables and an option, changed through each, past the
+// block that made it, through ?? and a call's tuple, and a slice walked
+// by a view in a loop's post statement and its body; and a struct
+// holding a mut borrow moved before what it borrows changes, and a
+// deferred print of a tuple holding a borrow. The borrows the same steps would carry past their owners are refused,
 // testdata/errors/lent-through-values.snello.
 
 package main
@@ -183,6 +189,100 @@ func rebuilt(p ref string) string {
 	return t.a.Clone() + " " + t.b.Clone()
 }
 
+func inc(xs mut []int) {
+	for i := 0; i < len(xs); i += 1 {
+		xs[i] += 10
+	}
+}
+
+func passOn(xs mut []int) mut []int {
+	return xs
+}
+
+func sameOf<T>(x T) T {
+	return x
+}
+
+func firstOf(x mut []int) mut int {
+	return mut x[0]
+}
+
+func second(s mut []int) mut int {
+	return firstOf(mut s[1:])
+}
+
+func pairOf(x mut []int) (mut []int, int) {
+	return (x, 1)
+}
+
+func walked() string {
+	xs := []int{1, 2, 3, 4, 5}
+	ys := []int{0}
+	var r mut []int = mut ys
+	if len(xs) > 2 {
+		r = mut xs[1:] // the header outlives the if, in a slot of the function
+	}
+
+	r[0] += 100
+	var o (mut []int)? = None
+	k := o ?? mut xs[3:]
+	k[0] += 1000
+	for v := mut xs; len(v) > 3; v = mut v[1:] {
+		v[0] += 10
+	}
+
+	w := mut xs
+	for len(w) > 4 {
+		w[0] += 20
+		w = mut w[1:]
+	}
+
+	var last mut []int = mut ys
+	for i := 0; i < 3; i += 1 {
+		last, _ = pairOf(mut xs[i:])
+	}
+
+	last[0] += 5000
+	return fmt.Sprint(xs)
+}
+
+struct Keeper {
+	r mut string
+	n int
+}
+
+func moved() string {
+	xs := []string{"first".Clone()}
+	h := Keeper{r: mut xs[0], n: 1}
+	g := h
+	*g.r += "!"
+	xs.Push("second".Clone())
+	t := (ref xs[1], 2)
+	defer fmt.Println("deferred", t)
+	return fmt.Sprint(xs)
+}
+
+func views() string {
+	xs := []int{1, 2, 3, 4}
+	inc(mut xs[2:])
+	inc(passOn(mut xs[1:]))
+	inc(sameOf<mut []int>(mut xs[3:]))
+	*second(mut xs) += 100
+	v := mut xs[2:]
+	v[1] += 1000
+	w := v
+	inc(w)
+	var r mut []int = mut xs
+	r = mut xs[3:]
+	inc(r)
+	o := Some(mut xs[0:1])
+	if s := o {
+		inc(s)
+	}
+
+	return fmt.Sprint(xs)
+}
+
 func main() {
 	s := "hello, world".Clone()
 	h := Holder(s)
@@ -200,4 +300,7 @@ func main() {
 	fmt.Println(kept(q), twice(q))
 	xs := []int{4, 5, 6}
 	fmt.Println(passedOn(q), viaLocal(xs)[1], outer(q), slot(q), rebuilt(q))
+	fmt.Println(views())
+	fmt.Println(walked())
+	fmt.Println(moved())
 }

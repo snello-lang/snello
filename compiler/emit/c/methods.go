@@ -857,8 +857,34 @@ func (e *Emitter) into(t types.Type, pos token.Pos, call func(out string) string
 	return out
 }
 
-// saved writes x into a temporary of type t and returns its name, for
-// a value the runtime takes by address.
+// slot writes the C value v of type t into a temporary declared at the
+// top of the function being written and returns its name. The header of
+// a mut view, mut xs[1:], lives there, so that it lasts as long as the
+// checker lets a borrow keep it, the function, whatever block of C the
+// statement is written in: a variable keeping the view outlives the
+// else of a ?? or the pass of a loop the header was written in.
+func (e *Emitter) slot(v string, t types.Type, pos token.Pos) string {
+	tmp := e.temp()
+	e.prologue = append(e.prologue, e.cType(t, pos)+" "+tmp+" = "+zeroValue+";")
+	e.line(tmp + " = " + v + ";")
+	return tmp
+}
+
+// isView reports whether x, parentheses looked through, is a slice
+// expression: a view, whose header a mut borrow of it points at.
+func isView(x ast.Expr) bool {
+	for {
+		switch y := x.(type) {
+		case *ast.ParenExpr:
+			x = y.X
+		case *ast.SliceExpr:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
 // spill writes the C value v of type t into a temporary and returns its
 // name, so that an expression naming it more than once evaluates it
 // once.
@@ -868,6 +894,8 @@ func (e *Emitter) spill(v string, t types.Type, pos token.Pos) string {
 	return tmp
 }
 
+// saved writes x into a temporary of type t and returns its name, for
+// a value the runtime takes by address.
 func (e *Emitter) saved(x ast.Expr, t types.Type) string {
 	v := e.temp()
 	e.lineParts(e.cType(t, x.Pos()), " ", v, " = ", e.valueTo(x, t), ";")

@@ -8,3 +8,7 @@ hello, world 5
 left,right right left,right left,right left left,right
 left,right left
 left,right 5 left,right left,right q left,right
+[11 112 33 1054]
+[31 112 5003 1004 5]
+deferred (second, 2)
+[first! second]

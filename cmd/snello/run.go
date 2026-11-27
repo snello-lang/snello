@@ -13,27 +13,28 @@ import (
 	"syscall"
 
 	"github.com/snello-lang/snello/compiler/platform"
+	"github.com/snello-lang/snello/compiler/testrun"
 )
 
 // runProgram builds the program at path, a file or a directory, through
-// backend, runs it with args, the arguments after its path, on the
-// command's stdin, stdout and stderr, and returns its exit code: the
-// program's own, signalExitBase and the signal's number for a program a
-// signal ended, which it returns too for the command to end by, or
-// exitFailure for a build that failed or a program that did not start.
-// The binary's directory is removed when the program ends, and the
-// signals that reach the command while it runs are answered as workDir
-// says, so that run leaves no file behind however the program ends and
-// the program never runs on without the command. debug asks for the
-// runtime's checks.
-func runProgram(path, backend string, debug bool, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, os.Signal) {
+// backend, runs it through start with args, the arguments after its
+// path, on the command's stdin, stdout and stderr, and returns its exit
+// code: the program's own, signalExitBase and the signal's number for a
+// program a signal ended, which it returns too for the command to end
+// by, or exitFailure for a build that failed or a program that did not
+// start. The binary's directory is removed when the program ends, and
+// the signals that reach the command while it runs are answered as
+// workDir says, so that run leaves no file behind however the program
+// ends and the program never runs on without the command. debug asks
+// for the runtime's checks.
+func runProgram(path, backend string, debug bool, args []string, stdin io.Reader, stdout, stderr io.Writer, start testrun.Command) (int, os.Signal) {
 	bin, _, work, ok := compile(path, backend, platform.Host(), debug, stderr)
 	if !ok {
 		return exitFailure, nil
 	}
 
 	defer work.remove()
-	cmd := exec.Command(bin, args...)
+	cmd := start(bin, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	work.start()
 	if err := cmd.Start(); err != nil {

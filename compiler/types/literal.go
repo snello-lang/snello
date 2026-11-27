@@ -16,7 +16,8 @@ import (
 // literal types a literal by the type its context asks for: an integer
 // literal is whatever numeric type is expected, else int; a float is
 // f64 unless a float type is expected; a character is any integer type
-// expected, else rune. There is no untyped constant arithmetic. An
+// expected, else rune; a string is a string type expected, a declared
+// one or one a borrow is of, else string. There is no untyped constant arithmetic. An
 // integer or a character that the integer type it takes cannot hold is
 // refused, as Go refuses a constant that overflows: arithmetic wraps, a
 // number written down does not, and one written past its type would be
@@ -27,7 +28,7 @@ import (
 func (c *Checker) literal(lit *ast.BasicLit, expected Type) Type {
 	switch lit.Kind {
 	case token.INT:
-		t := numericExpected(expected, IsNumeric)
+		t := basicExpected(expected, IsNumeric)
 		if t == nil {
 			t = Typ[Int]
 		}
@@ -41,13 +42,13 @@ func (c *Checker) literal(lit *ast.BasicLit, expected Type) Type {
 		c.holds(lit, n, err != nil, t)
 		return t
 	case token.FLOAT:
-		if t := numericExpected(expected, IsFloat); t != nil {
+		if t := basicExpected(expected, IsFloat); t != nil {
 			return t
 		}
 
 		return Typ[Float64]
 	case token.CHAR:
-		t := numericExpected(expected, IsInteger)
+		t := basicExpected(expected, IsInteger)
 		if t == nil {
 			t = aliases[1] // rune
 		}
@@ -62,6 +63,10 @@ func (c *Checker) literal(lit *ast.BasicLit, expected Type) Type {
 
 		return t
 	case token.STRING:
+		if t := basicExpected(stripRef(expected), IsString); t != nil {
+			return t // a declared string type, Name, as readily as string: n == "snello", n[1:3] == "ne"
+		}
+
 		return Typ[String]
 	}
 
@@ -112,10 +117,10 @@ func (c *Checker) holds(lit *ast.BasicLit, n uint64, huge bool, t Type) {
 	c.errorf(lit.Pos(), text+" overflows "+t.String())
 }
 
-// numericExpected returns expected when its underlying type is a basic
+// basicExpected returns expected when its underlying type is a basic
 // type with one of the given properties, so a literal takes a declared
-// type such as NodeID as readily as int.
-func numericExpected(expected Type, info BasicInfo) Type {
+// type such as NodeID as readily as int, and Name as readily as string.
+func basicExpected(expected Type, info BasicInfo) Type {
 	if expected == nil {
 		return nil
 	}

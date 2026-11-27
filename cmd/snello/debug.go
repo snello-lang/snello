@@ -22,6 +22,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/platform"
+	"github.com/snello-lang/snello/compiler/testrun"
 	"github.com/snello-lang/snello/std"
 )
 
@@ -121,13 +122,14 @@ var (
 )
 
 // debug builds the program at path, a file or a directory, as build
-// -debug does through backend, and runs the platform's debugger on the
-// binary, with args, the arguments after the program's path, for the
-// program, Snello's script loaded and the standard library's
-// sources where the debugger looks for them: the command loads the
-// script, since neither debugger loads one a binary names unless the
-// user has trusted its place. It returns the debugger's exit code.
-func debug(path, backend string, args []string) int {
+// -debug does through backend, and runs the platform's debugger,
+// through start, on the binary, with args, the arguments after the
+// program's path, for the program, Snello's script loaded and the
+// standard library's sources where the debugger looks for them: the
+// command loads the script, since neither debugger loads one a binary
+// names unless the user has trusted its place. It returns the
+// debugger's exit code.
+func debug(path, backend string, args []string, start testrun.Command) int {
 	_, isDir, ok := programFiles(path, platform.Host(), os.Stderr)
 	if !ok {
 		return exitFailure
@@ -157,7 +159,7 @@ func debug(path, backend string, args []string) int {
 
 	defer done()
 	cmdArgs := debuggerCommand(name, support, currentDir+string(filepath.Separator)+programName(path, isDir), args)
-	cmd := exec.Command(debugger, cmdArgs...)
+	cmd := start(debugger, cmdArgs...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError

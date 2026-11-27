@@ -91,6 +91,7 @@ type TempInfo struct {
 	Given   bool   // a call or a defer takes it, or a statement with several values stores it: what it lends is lent until then
 	Carried bool   // made of a value that reads a variable its statement stores: it holds what the value lends before any store
 	View    bool   // a borrow a slice expression makes, a view into the place it slices rather than the place's value
+	Slot    bool   // a mut view's header, which lives in a slot of the function as both backends store it: written each time its borrow is made, dropped where the function ends
 	Itself  bool   // a borrow of a borrow's own place, made where a borrow of the borrow is wanted, as ref r is written
 	Named   string // for a borrow made for a construct that holds it, what a message calls the holder: the arm written for each variant
 }
@@ -162,23 +163,28 @@ func (o Operand) sub(part string) Operand {
 // to.
 func (f *Form) String() string {
 	var b strings.Builder
+	var num [20]byte // a block's number, written into b in place
 	for i, blk := range f.Blocks {
-		b.WriteString("b" + strconv.Itoa(i))
+		b.WriteByte('b')
+		b.Write(strconv.AppendInt(num[:0], int64(i), 10))
 		if blk.Head {
 			b.WriteString(" (head)")
 		}
 
 		b.WriteString(":\n")
 		for _, in := range f.Instrs[blk.From:blk.To] {
-			b.WriteString("  " + f.instrString(in) + "\n")
+			b.WriteString("  ")
+			b.WriteString(f.instrString(in))
+			b.WriteByte('\n')
 		}
 
 		b.WriteString("  ->")
 		for _, s := range blk.Succs {
-			b.WriteString(" b" + strconv.Itoa(s))
+			b.WriteString(" b")
+			b.Write(strconv.AppendInt(num[:0], int64(s), 10))
 		}
 
-		b.WriteString("\n")
+		b.WriteByte('\n')
 	}
 
 	return b.String()

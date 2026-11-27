@@ -2,15 +2,92 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Rule: the owner cannot change a value while it is borrowed.
+// Rule: the owner cannot change a value while it is borrowed, given the
+// value alone or as one of several, from a tuple written there, a
+// call's results or a tuple variable taken apart, whatever the place: a
+// variable, a field, an element or what a borrow points at; nor can a
+// borrow variable a closure reads be given another borrow while the
+// closure is to be called, nor what a borrow held in a field points at
+// be freed by the statement that stores through it, *h.r. Fix: use the
+// borrow before the assignment, or assign a value the borrow does not
+// see.
 
 package p
 
 import "fmt"
+
+struct Pair {
+    f string
+    n int
+}
+
+func two() (string, int) {
+    return ("two".Clone(), 2)
+}
+
+func pairOf(x mut []int) (mut []int, int) {
+    return (x, 1)
+}
 
 func main() {
     s := "a"
     r := ref s
     s = "b"                               // ERROR "cannot assign to s: s is borrowed"
     fmt.Println(r)
+}
+
+func several() {
+    x := "a".Clone()
+    r := ref x
+    x, _ = ("b".Clone(), 1)               // ERROR "cannot assign to x: x is borrowed by r"
+    fmt.Println(r)
+}
+
+func results() {
+    p := Pair{f: "a".Clone(), n: 1}
+    r := ref p.f
+    p.f, p.n = two()                      // ERROR "cannot assign to p.f: p.f is borrowed by r"
+    fmt.Println(r)
+}
+
+func apart() {
+    t := ("t".Clone(), 7)
+    xs := []string{"a".Clone()}
+    r := ref xs[0]
+    xs[0], _ = t                          // ERROR "cannot assign to xs[0]: xs is borrowed by r"
+    fmt.Println(r)
+}
+
+func through() {
+    x := "a".Clone()
+    p := mut x
+    r := ref *p
+    *p, _ = two()                         // ERROR "cannot assign to *p: p is borrowed by r"
+    fmt.Println(r)
+}
+
+func rebound() {
+    xs := []int{1}
+    ys := []int{2}
+    var b mut []int = mut xs
+    f := func() { fmt.Println(b) }
+    b, _ = pairOf(mut ys)                 // ERROR "cannot assign to b: b is borrowed by f"
+    f()
+}
+
+struct Held {
+    r mut string
+}
+
+func clearAll(xs mut []string) int {
+    xs.Clear()
+    return 0
+}
+
+func storedThrough() {
+    v := []string{"a".Clone()}
+    h := Held{r: mut v[0]}
+    n := 0
+    *h.r, n = "z".Clone(), clearAll(mut v)  // ERROR "cannot borrow v as mut: v is already borrowed as mut by h"
+    print(n)
 }

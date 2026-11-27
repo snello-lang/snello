@@ -11,11 +11,12 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // A script drives an example that serves rather than prints: the suite
@@ -35,7 +36,7 @@ import (
 // that did not exit within ten seconds of the script's end is an
 // error that says which.
 func play(bin, dir string, script []byte) ([]byte, error) {
-	cmd := exec.Command(bin)
+	cmd := testproc.Command(bin)
 	cmd.Dir = dir
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -166,7 +167,7 @@ func sessionWithin(port string, lines []string, wait time.Duration) error {
 	for _, line := range lines {
 		switch {
 		case line == ">" || strings.HasPrefix(line, "> "):
-			if _, err := io.WriteString(conn, strings.TrimPrefix(line[1:], " ")+"\n"); err != nil {
+			if _, err := fmt.Fprintln(conn, strings.TrimPrefix(line[1:], " ")); err != nil {
 				return err
 			}
 		case line == "<" || strings.HasPrefix(line, "< "):

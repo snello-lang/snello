@@ -7,6 +7,7 @@ package types
 import (
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
+	"slices"
 )
 
 // The rules of borrowing, which the borrow pass over the form
@@ -116,6 +117,9 @@ func (c *Checker) collision(e ast.Expr, p place, what access, b *borrow) string 
 		msg = "cannot use " + exprText(e) + ": " + b.text() + " is borrowed as mut"
 	case writeAccess, rebindAccess:
 		msg = "cannot assign to " + exprText(e) + ": " + b.text() + " is borrowed"
+		if c.flow != nil && slices.Contains(c.flow.slots, p.v) {
+			msg = "cannot make the view " + exprText(e) + " again: the one it made before is still held" // its header's slot written while a borrow of it is used
+		}
 	case moveAccess:
 		msg = "cannot move " + p.text() + ": " + b.text() + " is borrowed"
 	case refAccess:
@@ -128,7 +132,9 @@ func (c *Checker) collision(e ast.Expr, p place, what access, b *borrow) string 
 	}
 
 	if b.holder != nil && !b.call {
-		msg += " by " + c.holderText(b)
+		if by := c.holderText(b); by != "" {
+			msg += " by " + by
+		}
 	}
 
 	return msg + " at " + c.lineCol(b.pos)

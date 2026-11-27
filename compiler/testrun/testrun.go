@@ -550,10 +550,16 @@ type Work interface {
 	Started(p *os.Process)
 }
 
+// A Command makes the command that runs the program a run builds:
+// exec.Command for the snello command, and for a test the command that
+// ends the program with the test binary (internal/testproc).
+type Command func(name string, args ...string) *exec.Cmd
+
 // Run builds the tests of the package in dir through the backend, in
-// work, and runs the program with args, its output passed through, and
-// returns the program's exit code: 0 when every test passed.
-func Run(dir, backend string, args []string, stdout, stderr io.Writer, work Work) (int, error) {
+// work, and runs the program with args through command, its output
+// passed through, and returns the program's exit code: 0 when every
+// test passed.
+func Run(dir, backend string, args []string, stdout, stderr io.Writer, work Work, command Command) (int, error) {
 	if w := importer.ModuleWarning(dir); w != "" {
 		fmt.Fprintln(stderr, w) // before anything else, so that a build that fails still says it
 	}
@@ -563,13 +569,13 @@ func Run(dir, backend string, args []string, stdout, stderr io.Writer, work Work
 		return 1, err
 	}
 
-	return p.run(dir, backend, args, stdout, stderr, work)
+	return p.run(dir, backend, args, stdout, stderr, work, command)
 }
 
 // run builds the plan's program through the backend in work, or in a
-// directory of its own, and runs it in dir with args, its output passed
-// through, and returns its exit code.
-func (p *Plan) run(dir, backend string, args []string, stdout, stderr io.Writer, work Work) (int, error) {
+// directory of its own, and runs it in dir with args through command,
+// its output passed through, and returns its exit code.
+func (p *Plan) run(dir, backend string, args []string, stdout, stderr io.Writer, work Work, command Command) (int, error) {
 	tmp, done, err := workDir(work)
 	if err != nil {
 		return 1, err
@@ -581,7 +587,7 @@ func (p *Plan) run(dir, backend string, args []string, stdout, stderr io.Writer,
 		return 1, err
 	}
 
-	cmd := exec.Command(bin, args...)
+	cmd := command(bin, args...)
 	cmd.Dir = dir // a package's tests run in its directory, so that testdata/ is beside them
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

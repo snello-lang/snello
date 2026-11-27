@@ -8,7 +8,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	goruntime "runtime"
@@ -21,6 +20,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/c"
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/platform"
+	"github.com/snello-lang/snello/internal/testproc"
 	snelloruntime "github.com/snello-lang/snello/runtime"
 )
 
@@ -279,7 +279,7 @@ func runToFunction(t *testing.T, debugger, bin, name string) string {
 
 	ctx, cancel := context.WithTimeout(context.Background(), debuggerTimeout)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, bin, args...).CombinedOutput() // kill ends the session with a status of its own
+	out, _ := testproc.CommandContext(ctx, bin, args...).CombinedOutput() // kill ends the session with a status of its own
 	if ctx.Err() != nil {
 		t.Fatalf("%s did not finish within %v:\n%s", debugger, debuggerTimeout, out)
 	}
@@ -343,7 +343,7 @@ func runDebugger(t *testing.T, debugger, bin, support, backend string) string {
 
 	ctx, cancel := context.WithTimeout(context.Background(), debuggerTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	out, err := testproc.CommandContext(ctx, bin, args...).CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatalf("%s on the %s build did not finish within %v; it may be waiting for a permission to debug:\n%s", debugger, backend, debuggerTimeout, out)
 	}

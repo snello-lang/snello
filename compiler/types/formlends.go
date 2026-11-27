@@ -269,7 +269,14 @@ func (m *formBorrows) madeOf(in *Instr) int {
 		return NoTemp
 	case *ast.UnaryExpr:
 		if (x.Op == token.REF || x.Op == token.MUT) && len(in.Args) == 1 {
-			return m.borrowOf(in.Args[0], true, false)
+			a := in.Args[0]
+			if x.Op == token.MUT && a.IsValue() && a.Path == "" && m.form.Temps[a.Temp].View { // mut s[1:]: a mut borrow of the header the slice expression made in the statement, and through it of what the view lends
+				tmp := m.borrowOf(a, true, true)
+				m.follow(a)
+				return tmp
+			}
+
+			return m.borrowOf(a, true, false)
 		}
 	}
 
@@ -351,7 +358,108 @@ func (m *formBorrows) followSource(o Operand, result Type) int {
 		return m.followHeld(o)
 	}
 
+	if view, ok := m.headerOf(o); ok && !m.canHold(result, m.form.Temps[o.Temp].Type) {
+		return m.follow(view) // a result that cannot hold the header, a mut int of firstOf(mut s[1:]), points into what the view does
+	}
+
 	return m.follow(o)
+}
+
+// canHold reports whether a value of type t can hold a value of type u:
+// is one, or holds one in an element, a field, a variant or a type
+// argument, a named type looked into once. A type parameter, a trait
+// and a function can hold anything.
+func (m *formBorrows) canHold(t, u Type) bool {
+	m.seenNamed = m.seenNamed[:0]
+	return m.holdsValue(t, u)
+}
+
+func (m *formBorrows) holdsValue(t, u Type) bool {
+	if Identical(t, u) {
+		return true
+	}
+
+	switch t := t.(type) {
+	case *TypeParam, *Trait, *Signature:
+		return true
+	case *Named:
+		if slices.Contains(m.seenNamed, t) {
+			return false
+		}
+
+		m.seenNamed = append(m.seenNamed, t)
+		return m.holdsValue(t.Underlying(), u) || m.anyHoldsValue(typeArgs(t), u)
+	case *Ref:
+		return m.holdsValue(t.elem, u)
+	case *Pointer:
+		return m.holdsValue(t.elem, u)
+	case *Option:
+		return m.holdsValue(t.elem, u)
+	case *Slice:
+		return m.holdsValue(t.elem, u)
+	case *Array:
+		return m.holdsValue(t.elem, u)
+	case *Chan:
+		return m.holdsValue(t.elem, u)
+	case *Result:
+		return m.holdsValue(t.val, u) || m.holdsValue(t.err, u)
+	case *Map:
+		return m.holdsValue(t.key, u) || m.holdsValue(t.value, u)
+	case *Tuple:
+		return m.anyHoldsValue(t.elems, u)
+	case *Struct:
+		return m.fieldsHold(t.fields, u)
+	case *Enum:
+		for _, v := range t.variants {
+			if m.fieldsHold(v.fields, u) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (m *formBorrows) anyHoldsValue(ts []Type, u Type) bool {
+	for _, t := range ts {
+		if m.holdsValue(t, u) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (m *formBorrows) fieldsHold(vs []*Var, u Type) bool {
+	for _, v := range vs {
+		if m.holdsValue(v.typ, u) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// headerOf returns the view the operand o is a mut borrow of the header
+// of, mut s[1:], when it is one.
+func (m *formBorrows) headerOf(o Operand) (Operand, bool) {
+	if !o.IsValue() || o.Path != "" {
+		return Operand{}, false
+	}
+
+	m.defsOf()
+	i := m.firstDef[o.Temp]
+	if i == noLend || m.nextDef[i] != noLend || m.form.Instrs[i].Op != OpMake {
+		return Operand{}, false
+	}
+
+	in := &m.form.Instrs[i]
+	u, ok := unparen(in.Expr).(*ast.UnaryExpr)
+	if !ok || u.Op != token.MUT || len(in.Args) != 1 || !in.Args[0].IsValue() || !m.form.Temps[in.Args[0].Temp].View {
+		return Operand{}, false
+	}
+
+	return in.Args[0], true
 }
 
 // held is lends for what the value a borrow o is made of holds, rather

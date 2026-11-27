@@ -29,6 +29,7 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/toolchain"
 	"github.com/snello-lang/snello/compiler/version"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // TestProgramName checks the name a build gives its binary: the last
@@ -534,7 +535,7 @@ func crossBuild(t *testing.T, dir, name string, target platform.Target, backend 
 		t.Fatal(err)
 	}
 
-	got, err := exec.Command(runner[0], append(runner[1:], "./"+bin)...).Output()
+	got, err := testproc.Command(runner[0], append(runner[1:], "./"+bin)...).Output()
 	if err != nil || string(got) != string(want) {
 		t.Errorf("%s: ran %v and printed\n%s\nwant\n%s", what, err, got, want)
 		return

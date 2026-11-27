@@ -106,12 +106,12 @@ func buildTests(dir, backend, out string, debug bool, stderr io.Writer) int {
 }
 
 // runTests builds the tests of the package in dir into a program and
-// runs it through the backend, passing pass, the flags meant for the
-// program, whose exit code is the command's; asJSON prints the run as
-// events instead, a build's error among them. In a checkout of the
-// compiler, std/NAME is a standard package, run from its sources as
-// edited with the library's privileges.
-func runTests(dir, backend string, pass []string, asJSON bool, stdout, stderr io.Writer) int {
+// runs it through the backend, started through start, passing pass, the
+// flags meant for the program, whose exit code is the command's; asJSON
+// prints the run as events instead, a build's error among them. In a
+// checkout of the compiler, std/NAME is a standard package, run from
+// its sources as edited with the library's privileges.
+func runTests(dir, backend string, pass []string, asJSON bool, stdout, stderr io.Writer, start testrun.Command) int {
 	work, err := newWorkDir(buildDirPattern) // a termination of the command ends the test program too, and the build goes
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -120,10 +120,10 @@ func runTests(dir, backend string, pass []string, asJSON bool, stdout, stderr io
 
 	defer work.remove()
 	if asJSON {
-		return testrun.RunJSON(dir, backend, pass, stdout, work)
+		return testrun.RunJSON(dir, backend, pass, stdout, work, start)
 	}
 
-	code, err := testrun.Run(dir, backend, pass, stdout, stderr, work)
+	code, err := testrun.Run(dir, backend, pass, stdout, stderr, work, start)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitFailure

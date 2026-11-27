@@ -719,10 +719,14 @@ func (c *Checker) sliceExpr(e *ast.SliceExpr) operand {
 
 	switch t := base.Underlying().(type) {
 	case *Slice:
-		return operand{value, NewRef(t, false), nil, nil} // a view: it never owns or grows the elements, so it is never mut
+		return operand{value, NewRef(base, false), nil, nil} // a view of the slice's own type, a declared one's methods with it, which passes for a read where a view of its underlying type is wanted; it never owns or grows the elements, so it is never mut
 	case *Basic:
 		if t.kind == String {
-			return operand{value, NewRef(Typ[String], false), nil, nil}
+			if _, declared := base.(*Named); declared {
+				return operand{value, NewRef(base, false), nil, nil} // a view of a declared string type is one, string(n[1:]) where a ref string is wanted
+			}
+
+			return operand{value, NewRef(Typ[String], false), nil, nil} // a constant's untyped string is a string
 		}
 	}
 

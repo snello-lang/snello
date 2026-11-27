@@ -19,9 +19,13 @@
 // here, a borrow pushed or inserted into a slice past its owner, a value
 // lent to a call while a field of it holds a borrow of a dropped
 // variable, a borrow variable given another value while a borrow of its
-// slot is used, and a borrow of a local reached through a borrow held in
-// a field. Fix: keep the value in a variable that outlives the borrow,
-// or return it by value.
+// slot is used, a borrow of a local reached through a borrow held in a
+// field, and a mut view of a slice, whose header is a slot of the
+// function, returned, alone or in a tuple or struct a call makes, stored
+// in what the caller owns, or made again while the view the slot held
+// before is used. Fix: keep the value in a variable that outlives the
+// borrow, or return it by value; keep a mut view in a variable of the
+// function, and return the bounds, or the slice it views.
 
 package p
 
@@ -72,6 +76,46 @@ struct Box {
 struct Wrap {
 	inner ref Span
 	n     int
+}
+
+struct MutView {
+	v mut []int
+}
+
+struct Buffer {
+	buf []int
+}
+
+func (b mut Buffer) rest() mut []int {
+	return mut b.buf[1:] // ERROR "cannot return a borrow of a temporary: b.buf[1:] is dropped when the function returns"
+}
+
+struct Cursor {
+	rest mut []int
+}
+
+func pairOf(x mut []int) (mut []int, int) {
+	return (x, 1)
+}
+
+func boxOf(x mut []int) MutView {
+	return MutView{v: x}
+}
+
+func pass(x mut []int) mut []int {
+	return x
+}
+
+func same<T>(x T) T {
+	return x
+}
+
+func both(a mut []int, b ref []int) int {
+	return len(a) + len(b)
+}
+
+func two(a mut []int, b mut []int) int {
+	return len(a) + len(b)
 }
 
 func one(b ref Box) {
@@ -226,10 +270,10 @@ func fieldLent() {
 	var bx Box = Box{s: "z"}
 	{
 		t := "inner".Clone()
-		bx.s = t
+		bx.s = t // ERROR "cannot keep a borrow of t in bx: t is dropped at the end of its block"
 	}
 
-	one(ref bx) // ERROR "cannot keep a borrow of t: t is dropped at the end of its block"
+	one(ref bx)
 }
 
 func slotKept() {
@@ -249,4 +293,59 @@ func throughField(p ref string) ref int {
 	w := Wrap{inner: sp, n: 2}
 	r := ref w
 	return ref r.inner.at // ERROR "cannot return a borrow of local sp"
+}
+
+func mutTail(s mut []int) mut []int {
+	return mut s[1:] // ERROR "cannot return a borrow of a temporary: s[1:] is dropped when the function returns"
+}
+
+func (c mut Cursor) advance() {
+	c.rest = mut c.rest[1:] // ERROR "cannot store a borrow of c.rest[1:] in c: c.rest[1:] is a mut view, whose header lives in this function, and c is the caller's"
+}
+
+func viewInTuple(s mut []int) (mut []int, int) {
+	return pairOf(mut s[1:]) // ERROR "cannot return a borrow of a temporary: s[1:] is dropped when the function returns"
+}
+
+func viewInStruct(s mut []int) MutView {
+	return boxOf(mut s[1:]) // ERROR "cannot return a borrow of a temporary: s[1:] is dropped when the function returns"
+}
+
+func viewInField(s mut []int) MutView {
+	return MutView{v: mut s[1:]} // ERROR "cannot return a borrow of a temporary: s[1:] is dropped when the function returns"
+}
+
+func viewInOption(s mut []int) (mut []int)? {
+	return Some(mut s[1:]) // ERROR "cannot return a borrow of a temporary: s[1:] is dropped when the function returns"
+}
+
+func viewChosen(s mut []int, c bool) mut []int {
+	return if c { mut s[1:] } else { s } // ERROR "cannot return a borrow of a temporary: s[1:] is dropped when the function returns"
+}
+
+func viewPassed(s mut []int) mut []int {
+	return pass(mut s[1:]) // ERROR "cannot return a borrow of a temporary: s[1:] is dropped when the function returns"
+}
+
+func viewGeneric(s mut []int) mut []int {
+	return same<mut []int>(mut s[1:]) // ERROR "cannot return a borrow of a temporary: s[1:] is dropped when the function returns"
+}
+
+func viewsAcrossPasses(xs mut []int) {
+	ys := []int{1}
+	var prev mut []int = mut ys
+	var cur mut []int = mut ys
+	for i := 0; i < 2; i += 1 {
+		prev = cur
+		cur = mut xs[i:] // ERROR "cannot borrow xs as mut: xs is already borrowed as mut by prev"
+		prev[0] += 1
+	}
+}
+
+func viewBesideRef(xs mut []int) int {
+	return both(mut xs[0:], ref xs) // ERROR "cannot borrow xs as ref: xs is already borrowed as mut"
+}
+
+func viewsOverlap(xs mut []int) int {
+	return two(mut xs[0:2], mut xs[1:]) // ERROR "cannot borrow xs as mut: xs is already borrowed as mut"
 }

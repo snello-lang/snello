@@ -392,12 +392,15 @@ func (e *Emitter) coalesce(x *ast.CoalesceExpr) string {
 	rt := e.typeOf(x)
 	place, t, held := e.consumed(x.X)
 	test, val := place+".has", place+".val"
+	var inside types.Type
 	r, isResult := t.Underlying().(*types.Result)
 	if isResult {
-		test = place + ".ok"
+		test, inside = place+".ok", r.Val()
+	} else if o, ok := t.Underlying().(*types.Option); ok {
+		inside = o.Elem()
 	}
 
-	if r, ok := rt.(*types.Ref); ok && r.Mut() {
+	if r, ok := rt.(*types.Ref); ok && r.Mut() && !types.Identical(inside, rt) { // a mut borrow of the value inside; an option of a mut borrow holds the borrow itself
 		val = "&" + val
 	}
 

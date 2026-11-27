@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // probeTimeout bounds a probe whose failure is a hang, a lost wake,
@@ -510,7 +512,7 @@ int main(void) {
 		t.Fatalf("%v\n%s", err, b)
 	}
 
-	got, err := exec.Command(bin).Output()
+	got, err := testproc.Command(bin).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -691,7 +693,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(dir, "build"), probe)
-	out, err := exec.Command(bin, root).CombinedOutput()
+	out, err := testproc.Command(bin, root).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -852,14 +854,14 @@ int main(int argc, char **argv) {
 	for _, mode := range [][]string{{"-O1", "-DSN_DEBUG"}, {"-O2"}} {
 		dir := filepath.Join(t.TempDir(), "build")
 		bin := buildProbeAs(t, dir, probe, mode...)
-		out, err := exec.Command(bin).CombinedOutput()
+		out, err := testproc.Command(bin).CombinedOutput()
 		if err != nil || string(out) != want {
 			t.Fatalf("%v: %v\n%s", mode, err, out)
 		}
 	}
 
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	out, err := exec.Command(bin, "deep").CombinedOutput()
+	out, err := testproc.Command(bin, "deep").CombinedOutput()
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != 2 || !strings.Contains(string(out), "past the bound of 100 bytes") {
 		t.Fatalf("a task past its bound in a debug build: %v\n%s", err, out)
@@ -912,7 +914,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "build"), probe, "-O1", "-DSN_DEBUG", "-fno-omit-frame-pointer")
-	out, err := exec.Command(bin).CombinedOutput()
+	out, err := testproc.Command(bin).CombinedOutput()
 	want := "panic: boom\n" + strings.Repeat("\tdeep at probe.snello:10\n", 4) + "\tmain at probe.snello:20\n"
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != 2 || string(out) != want {
@@ -958,7 +960,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	out, err := exec.Command(bin).CombinedOutput()
+	out, err := testproc.Command(bin).CombinedOutput()
 	want := "panic: boom\ncaught 1 boom contained 1\npanic: boom\ncaught 1 boom contained 2\n"
 	if err != nil || string(out) != want {
 		t.Fatalf("%v\n%s", err, out)
@@ -1019,7 +1021,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	out, err := exec.Command(bin).CombinedOutput()
+	out, err := testproc.Command(bin).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -2748,7 +2750,7 @@ int main(int argc, char **argv) {
 `
 	dir := t.TempDir()
 	bin := buildProbe(t, filepath.Join(dir, "build"), probe)
-	out, err := exec.Command(bin).CombinedOutput()
+	out, err := testproc.Command(bin).CombinedOutput()
 	if err != nil || string(out) != "rounds 20000\n" {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -2764,7 +2766,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin = buildProbe(t, filepath.Join(dir, "twice"), twice)
-	out, err = exec.Command(bin).CombinedOutput()
+	out, err = testproc.Command(bin).CombinedOutput()
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != 2 || !strings.Contains(string(out), "a channel handle was given up twice") {
 		t.Fatalf("%v\n%s", err, out)
@@ -2843,7 +2845,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	out, err := exec.Command(bin).CombinedOutput()
+	out, err := testproc.Command(bin).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -2910,7 +2912,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	out, err := exec.Command(bin).CombinedOutput()
+	out, err := testproc.Command(bin).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -3035,7 +3037,7 @@ int main(int argc, char **argv) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "build"), probe)
-	out, err := exec.Command(bin).CombinedOutput()
+	out, err := testproc.Command(bin).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -3109,7 +3111,7 @@ func buildProbeAs(t *testing.T, dir, src string, mode ...string) string {
 // stacks, as the system's debugger reads them, and then ended.
 func runProbe(bin string, args ...string) ([]byte, error) {
 	var out bytes.Buffer
-	cmd := exec.Command(bin, args...)
+	cmd := testproc.Command(bin, args...)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
 		return nil, err
@@ -3137,11 +3139,11 @@ func threadStacks(pid int) string {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case windowsOS:
-		cmd = exec.CommandContext(ctx, windowsDebugger(), "-p", p, "-c", cdbStacks)
+		cmd = testproc.CommandContext(ctx, windowsDebugger(), "-p", p, "-c", cdbStacks)
 	case darwinOS:
-		cmd = exec.CommandContext(ctx, lldbName, "--batch", "-p", p, "-o", lldbStacks)
+		cmd = testproc.CommandContext(ctx, lldbName, "--batch", "-p", p, "-o", lldbStacks)
 	default:
-		cmd = exec.CommandContext(ctx, gdbName, "-batch", "-p", p, "-ex", gdbStacks)
+		cmd = testproc.CommandContext(ctx, gdbName, "-batch", "-p", p, "-ex", gdbStacks)
 	}
 
 	out, err := cmd.CombinedOutput()
@@ -3229,7 +3231,7 @@ func systemProbeSources(t *testing.T, dir string) []string {
 func probeLines(t *testing.T, name, src, input string) []string {
 	t.Helper()
 	bin := buildProbe(t, filepath.Join(t.TempDir(), name), src)
-	cmd := exec.Command(bin)
+	cmd := testproc.Command(bin)
 	cmd.Stdin = strings.NewReader(input)
 	out, err := cmd.Output()
 	if err != nil {
@@ -3799,7 +3801,7 @@ int main(int argc, char **argv) {
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "linear"), probe)
 	for _, mode := range []string{"spaces", "closes", "marks"} {
 		start := time.Now()
-		out, err := exec.Command(bin, mode).CombinedOutput()
+		out, err := testproc.Command(bin, mode).CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s: %v\n%s", mode, err, out)
 		}
@@ -3932,7 +3934,7 @@ int main(void) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "search"), probe)
-	out, err := exec.Command(bin).CombinedOutput()
+	out, err := testproc.Command(bin).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -3994,7 +3996,7 @@ int main(void) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "pieces"), probe)
-	if out, err := exec.Command(bin).CombinedOutput(); err != nil {
+	if out, err := testproc.Command(bin).CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }
@@ -4033,7 +4035,7 @@ int main(void) {
 }
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "block"), probe)
-	if out, err := exec.Command(bin).CombinedOutput(); err != nil {
+	if out, err := testproc.Command(bin).CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }
@@ -4062,7 +4064,7 @@ int main(void) {
 `
 	bin := buildProbe(t, filepath.Join(t.TempDir(), "linear"), probe)
 	start := time.Now()
-	out, err := exec.Command(bin).CombinedOutput()
+	out, err := testproc.Command(bin).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -4131,7 +4133,7 @@ int main(int argc, char **argv) {
 	var key [32]byte
 	copy(key[:], seed)
 	for _, source := range []string{"the system", "the clock"} {
-		cmd := exec.Command(bin)
+		cmd := testproc.Command(bin)
 		if source == "the clock" {
 			cmd.Args = append(cmd.Args, "clock")
 		}
@@ -4194,7 +4196,7 @@ int main(void) {
 `
 	for _, mode := range [][]string{{"-O1", "-DSN_DEBUG"}, {"-O2"}} {
 		bin := buildProbeAs(t, filepath.Join(t.TempDir(), "counts"), probe, mode...)
-		out, err := exec.Command(bin).Output()
+		out, err := testproc.Command(bin).Output()
 		if err != nil {
 			t.Fatalf("%v: %v", mode, err)
 		}
@@ -4305,7 +4307,7 @@ int main(void) {
 	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "scales"), probe, "-O2")
 	least := [4]float64{math.Inf(1), math.Inf(1), math.Inf(1), math.Inf(1)} // allocating on one thread and four, listing on one and four
 	for range 3 {
-		out, err := exec.Command(bin).Output()
+		out, err := testproc.Command(bin).Output()
 		if err != nil {
 			t.Fatal(err)
 		}

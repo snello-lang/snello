@@ -313,6 +313,8 @@ var handledErrors = map[string]bool{
 	// A value lends what the values it is made of lend, followed through
 	// every step that makes it.
 	"lent-through-values.snello": true,
+	// A value holding a mut borrow carries it wherever it moves.
+	"holder-moved.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

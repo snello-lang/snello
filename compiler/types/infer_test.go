@@ -9,9 +9,11 @@ import "testing"
 // TestUnifyBorrows holds inference to its rule for a borrow: a value
 // passed to a bare type parameter binds what it borrows, and a borrow
 // met inside a type binds as itself, a slice's element, an option's
-// value or what a ref parameter lends alike.
+// value or what a ref parameter lends alike; and a declared type met by
+// a type of no name binds by its underlying type, an Ints against []T.
 func TestUnifyBorrows(t *testing.T) {
 	view := &Ref{elem: Typ[String]}
+	ints := NewNamed(NewTypeName(0, "Ints", nil), &Slice{elem: Typ[Int]}, nil) // type Ints []int
 	tests := []struct {
 		name      string
 		slot      func(p *TypeParam) Type
@@ -22,6 +24,8 @@ func TestUnifyBorrows(t *testing.T) {
 		{"an option's value", func(p *TypeParam) Type { return &Option{elem: p} }, &Option{elem: view}, view},
 		{"behind a ref parameter", func(p *TypeParam) Type { return &Ref{elem: p} }, &Ref{elem: view}, view},
 		{"a value lent to a ref parameter", func(p *TypeParam) Type { return &Ref{elem: p} }, Typ[Int], Typ[Int]},
+		{"a declared type's underlying type", func(p *TypeParam) Type { return &Slice{elem: p} }, ints, Typ[Int]},
+		{"a borrow of a declared type", func(p *TypeParam) Type { return &Ref{elem: &Slice{elem: p}} }, &Ref{elem: ints}, Typ[Int]},
 	}
 	for _, tt := range tests {
 		p := NewTypeParam(NewTypeName(0, "T", nil), 0)

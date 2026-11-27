@@ -7,7 +7,8 @@
 // view of each, and reads them when the function returns,
 // so what a saved view sees cannot be given a new value, moved away or
 // dropped before then; a Copy value, an int, is saved whole and may
-// change. Fix: print a clone, defer fmt.Println(s.Clone()), or defer a
+// change, and one that holds a borrow, a struct of a ref field or a
+// tuple of one, holds what it borrows until the call runs. Fix: print a clone, defer fmt.Println(s.Clone()), or defer a
 // closure that prints the value as it is then, defer func() { ... }().
 
 package p
@@ -37,4 +38,23 @@ func copied() {
     n := 1
     defer fmt.Println(n)
     n = 2
+}
+
+struct Ref {
+    r ref string
+    n int
+}
+
+func heldField() {
+    a := "first".Clone()
+    c := Ref{r: ref a, n: 1}
+    defer fmt.Println(c.r)
+    a = "second".Clone()                    // ERROR "cannot assign to a: a is borrowed by the deferred call"
+}
+
+func heldTuple() {
+    a := "first".Clone()
+    t := (ref a, 2)
+    defer print(t)
+    a = "second".Clone()                    // ERROR "cannot assign to a: a is borrowed by the deferred call"
 }

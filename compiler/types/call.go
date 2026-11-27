@@ -130,6 +130,36 @@ func conversionTakes(v, t Type) bool {
 	return v != nil && t != nil && !(hasInfo(v, IsNumeric) && hasInfo(t, IsNumeric)) && Identical(v.Underlying(), t.Underlying())
 }
 
+// viewRefused says why a borrow of a value of type v may not be seen
+// here as a borrow of t, its underlying type or a type declared over
+// the same one, or "" when it may. Reading a declared type as its
+// underlying type is anyone's; seeing a borrowed value as a declared
+// type, or changing a value of a declared type through another type,
+// is the declaring package's alone, so that code outside it changes no
+// value of the package's type it was only lent, and lends none under
+// it. A value the program owns converts freely, by the value rules.
+func (c *Checker) viewRefused(v, t Type, mut bool) string {
+	if n, ok := t.(*Named); ok && n.obj.pkg != c.pkg {
+		return "only package " + pkgName(n.obj.pkg) + ", which declares " + n.obj.name + ", may see a value as one"
+	}
+
+	if n, ok := v.(*Named); ok && mut && n.obj.pkg != c.pkg {
+		return "a mut view changes " + n.obj.name + " where its methods do not see it; only package " + pkgName(n.obj.pkg) + ", which declares it, may"
+	}
+
+	return ""
+}
+
+// pkgName names the package pkg for a message, the language's own for
+// a predeclared type.
+func pkgName(pkg *Package) string {
+	if pkg == nil {
+		return "builtin"
+	}
+
+	return pkg.name
+}
+
 // paramType returns the type of the i-th parameter of sig, or nil.
 func paramType(sig *Signature, i int) Type {
 	if i < len(sig.params) {
@@ -461,9 +491,12 @@ func (c *Checker) conversion(e *ast.CallExpr, t Type) operand {
 	switch {
 	case hasInfo(v, IsNumeric) && hasInfo(t, IsNumeric):
 	case conversionTakes(v, t):
-		if lent { // the value itself, which a borrow does not give: two owners would free it twice
-			c.errorf(e.Args[0].Pos(), "cannot convert "+x.typ.String()+" to "+t.String()+": the conversion takes the value, and a borrow lends it; convert a value of its own, a clone or one moved in")
-			break
+		if lent { // a borrow seen as t, the same words, lent as the operand is
+			if why := c.viewRefused(v, t, r.mut); why != "" {
+				c.errorf(e.Args[0].Pos(), "cannot convert "+x.typ.String()+" to "+t.String()+": "+why)
+			}
+
+			return operand{value, NewRef(t, r.mut), nil, nil} // refused or not, a view, so that what uses it is checked as a view
 		}
 
 		c.zeroConversion(e, v, t)

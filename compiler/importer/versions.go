@@ -516,7 +516,12 @@ func writeLockIfChanged(name string, locked map[string]record, byKey map[string]
 
 	var b strings.Builder
 	for _, key := range keys {
-		b.WriteString(key + fieldSeparator + now[key].commit + fieldSeparator + now[key].hash + lineEnd)
+		b.WriteString(key)
+		b.WriteString(fieldSeparator)
+		b.WriteString(now[key].commit)
+		b.WriteString(fieldSeparator)
+		b.WriteString(now[key].hash)
+		b.WriteString(lineEnd)
 	}
 
 	return replaceFile(name, b.String(), lockFileMode)

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/snello-lang/snello/compiler/platform"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // libcTimeout bounds the measuring program's run, whose every case ends
@@ -311,7 +312,7 @@ func TestCLibraryStack(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), libcTimeout)
 	defer cancel()
 	var stdout bytes.Buffer
-	cmd := exec.CommandContext(ctx, bin)
+	cmd := testproc.CommandContext(ctx, bin)
 	cmd.Stdout = &stdout // stderr has what __stack_chk_fail prints
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("%v\n%s", err, stdout.String())

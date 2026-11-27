@@ -119,7 +119,7 @@ func keptMut(c mut Cells) {
 
 func param(it mut Walk) {
     for p := range mut it {
-        fmt.Println(p, it.Next())           // ERROR "cannot borrow it as ref: it is already borrowed as mut by the range loop"
+        fmt.Println(p, it.Next())           // ERROR "cannot borrow it as mut: it is already borrowed as mut by the range loop"
     }
 }
 
@@ -127,6 +127,6 @@ func reentered() {
     b := Bag{xs: []string{"x"}}
     it := b.Iter()
     for p := range it {
-        fmt.Println(p, it.Next())           // ERROR "cannot borrow it as ref: it is already borrowed as mut by the range loop"
+        fmt.Println(p, it.Next())           // ERROR "cannot borrow it as mut: it is already borrowed as mut by the range loop"
     }
 }

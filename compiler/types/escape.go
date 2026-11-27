@@ -513,7 +513,9 @@ func (c *Checker) sourcePlace(p place, kind placeKind, lent bool, pos token.Pos)
 // reaches the function's receiver or parameters.
 func (c *Checker) followReturn(v *Var, part returnedPart, pos token.Pos, seq int, in bitset, seen []*Var) {
 	f := c.flow
-	report := func(pos token.Pos, msg string) { f.errs = append(f.errs, flowError{seq: seq, pos: pos, msg: msg}) }
+	report := func(pos token.Pos, msg string) {
+		f.errs = append(f.errs, flowError{seq: seq, pos: pos, msg: msg, returned: true})
+	}
 	if c.keepsWord() {
 		report = c.word.once(seq, report) // one return breaks the word once, however many ways it reaches the parameter
 	}
@@ -540,7 +542,7 @@ func (c *Checker) followReturn(v *Var, part returnedPart, pos token.Pos, seq int
 	if part.lent && !part.read && !v.global && !behindBorrow(v, part) { // a borrow of the variable's own place, reached by borrows of places alone, not one it holds: what it holds does not keep it alive
 		switch {
 		case slices.Contains(f.temporaries, v):
-			report(pos, "cannot return a borrow of a temporary: "+v.name+" is dropped when its statement ends")
+			report(pos, "cannot return a borrow of a temporary: "+v.name+" is dropped "+c.temporaryEnd(v))
 		case f.outer != token.NoPos && v.pos < f.outer:
 			report(pos, "cannot return a borrow of "+v.name+" from a closure: "+v.name+" is captured, and a closure's returned borrow is tied to its parameters")
 		default:
@@ -570,7 +572,7 @@ func (c *Checker) followReturn(v *Var, part returnedPart, pos token.Pos, seq int
 	switch {
 	case found:
 	case slices.Contains(f.temporaries, v):
-		report(pos, "cannot return a borrow of a temporary: "+v.name+" is dropped when its statement ends")
+		report(pos, "cannot return a borrow of a temporary: "+v.name+" is dropped "+c.temporaryEnd(v))
 	case f.outer != token.NoPos && v.pos < f.outer: // a closure's body: the variable is the enclosing function's, captured
 		report(pos, "cannot return a borrow of "+v.name+" from a closure: "+v.name+" is captured, and a closure's returned borrow is tied to its parameters")
 	case !holdsBorrow(v.typ):

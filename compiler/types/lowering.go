@@ -46,6 +46,7 @@ type lowering struct {
 	loops     []lowLoop   // the open loops, the innermost last
 	guard     *Guard      // the match guard whose condition is being lowered, which every block made meanwhile belongs to; nil otherwise
 	owned     []ownedTemp // the owned temporaries the statements being lowered made, dropped at each one's end unless taken; the current statement's from ownedMark
+	slots     []int       // the temporaries that are slots of the function, mut views' headers, dropped where the function's scope is left, after its variables
 	parts     []lentPart  // the borrows made into temporaries that a value made here holds as parts: lent for the call that takes the value, else the statement's
 	ownedMark int         // where the owned temporaries of the statement or arm being lowered begin; those before it belong to the statements and expressions around it
 	taken     []bool      // each temporary, whether a place or a call took it
@@ -184,7 +185,7 @@ func (c *Checker) begin(sig *Signature) *lowering {
 	l.f.operands, l.f.succs, l.f.closures, l.f.kept = l.f.operands[:0], l.f.succs[:0], l.f.closures[:0], l.f.kept[:0]
 
 	l.taken, l.bases, l.declared, l.parts = l.taken[:0], l.bases[:0], l.declared[:0], l.parts[:0]
-	l.scopes, l.loops, l.owned, l.ownedMark = l.scopes[:0], l.loops[:0], l.owned[:0], 0
+	l.scopes, l.loops, l.owned, l.ownedMark, l.slots = l.scopes[:0], l.loops[:0], l.owned[:0], 0, l.slots[:0]
 	l.results, l.spawning, l.guard = nil, nil, nil
 	l.cur = l.newBlock()
 	l.openScope()
@@ -394,16 +395,35 @@ func (l *lowering) closeScopeAs(pos token.Pos, why dropWhy) {
 	l.dropScope(pos, why)
 	l.declared = l.declared[:l.scopes[len(l.scopes)-1]]
 	l.scopes = l.scopes[:len(l.scopes)-1]
+	if len(l.scopes) == 0 {
+		l.slots = l.slots[:0]
+	}
 }
 
 // dropScope drops the innermost scope's variables at pos, the last
-// declared first, leaving the scope open: a path out of the scope
-// drops them where it leaves.
+// declared first, and for the function's scope its slots after them,
+// leaving the scope open: a path out of the scope drops them where it
+// leaves.
 func (l *lowering) dropScope(pos token.Pos, why dropWhy) {
 	from := l.scopes[len(l.scopes)-1]
 	for i := len(l.declared) - 1; i >= from; i-- {
 		l.drop(l.declared[i], pos, why)
 	}
+
+	if len(l.scopes) == 1 {
+		for i := len(l.slots) - 1; i >= 0; i-- {
+			l.emit(Instr{Op: OpDrop, Place: Temp(l.slots[i]), Pos: pos, why: why})
+		}
+	}
+}
+
+// ownBySlot makes the temporary o a slot of the function in place of
+// its statement's: it is dropped where the function's scope is left,
+// after its variables, so that any of them may keep a borrow of it, and
+// a path that leaves a block keeps it.
+func (l *lowering) ownBySlot(o Operand) {
+	l.f.Temps[o.Temp].Slot = true
+	l.slots = append(l.slots, o.Temp)
 }
 
 // scopeVars returns the variables the scope s declared, in order.
@@ -561,7 +581,8 @@ func (l *lowering) droppable(i int) bool {
 }
 
 // drops lists what a path leaving the scopes above floor drops, the
-// innermost scope's variables first, the last declared first.
+// innermost scope's variables first, the last declared first, and for a
+// path leaving the function's scope its slots after them.
 func (l *lowering) drops(floor int) []Operand {
 	out := l.dropsScratch[:0]
 	for s := len(l.scopes) - 1; s >= floor; s-- {
@@ -570,6 +591,12 @@ func (l *lowering) drops(floor int) []Operand {
 			if l.droppable(vars[i]) {
 				out = append(out, Operand{Var: vars[i]})
 			}
+		}
+	}
+
+	if floor == 0 {
+		for i := len(l.slots) - 1; i >= 0; i-- {
+			out = append(out, Temp(l.slots[i]))
 		}
 	}
 

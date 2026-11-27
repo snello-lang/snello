@@ -24,6 +24,7 @@ import (
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // TestHello builds the smallest program through the LLVM backend, in
@@ -140,7 +141,7 @@ func TestNoReservation(t *testing.T) {
 			t.Fatalf("%v\n%s", err, out)
 		}
 
-		got, err := exec.Command("sh", "-c", `ulimit -v 2097152 && exec "$0"`, bin).CombinedOutput()
+		got, err := testproc.Command("sh", "-c", `ulimit -v 2097152 && exec "$0"`, bin).CombinedOutput()
 		if err != nil || string(got) != string(want) {
 			t.Errorf("debug=%v: %v, printed:\n%s--- want ---\n%s", debug, err, got, want)
 		}
@@ -181,7 +182,7 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin)
+	cmd := testproc.CommandContext(ctx, bin)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +259,7 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin)
+	cmd := testproc.CommandContext(ctx, bin)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatal(err)

@@ -23,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // How a program is run: the time one may take before it is taken to
@@ -160,7 +162,7 @@ func (p Program) Skip() string {
 func Run(bin, dir string, interrupts int) (string, string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout) // a program that hangs fails rather than stalling the suite
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin)
+	cmd := testproc.CommandContext(ctx, bin)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stderr = &stderr // kept whatever the exit: a program that goes on after a contained panic prints the panic
