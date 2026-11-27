@@ -53,7 +53,9 @@ git log --format="%h$unit%s$unit%b$record" "${since:+$since..}HEAD" |
         key = subject; sub(/ \(#[0-9]+\)$/, "", key)
         if (key in seen) next # a pull request merged with its commit of the same subject: the newer, the merge with its number, stands for both
         seen[key] = 1
-        line = "- " (scope != "" ? "**" scope "**: " : "") toupper(substr(text, 1, 1)) substr(text, 2)
+        first = text; sub(/ .*/, "", first)
+        if (first ~ /^[a-z]+(-[a-z]+)*[,:;]?$/) text = toupper(substr(text, 1, 1)) substr(text, 2) # a word starts the line with a capital; a name, install.ps1 or go.mod, stays as written
+        line = "- " (scope != "" ? "**" scope "**: " : "") text
         if (subject ~ /^[a-z]+(\([^)]*\))?!: / || body ~ /(^|\n)BREAKING[ -]CHANGE: /) add("Breaking changes", line)
         else if (type == "feat") add("Added", line)
         else if (type == "fix") add("Fixed", line)
