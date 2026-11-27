@@ -102,7 +102,7 @@ Each of these is a bug a Go program can write and a Snello program cannot:
 - **A goroutine blocked forever on a receive no one will send to.** Once the senders are gone the receive yields `None`; a receive that waits is waiting on a sender that exists.
 - **A goroutine blocked forever on a send no one will receive.** Once the receivers are gone the send drops its value and returns.
 
-What remains of deadlock is a genuine cycle, tasks each waiting for another, and a task holding a sending handle it never uses while another waits to receive. The report names it: `fatal error: all tasks are asleep - deadlock!` is followed by what the main task waits for, `the main task waits to receive on the channel made at pipeline.snello:39, which 2 sending and 1 receiving handles remain on, with 0 tasks waiting to send and 1 to receive`. The sending handles that remain are the ones to look for.
+What remains of deadlock is a genuine cycle, tasks each waiting for another, a task holding a sending handle it never uses while another waits to receive, and a task holding a receiving handle it never uses while another waits to send, `ch := make(chan int); ch <- 1`. The report names it: `fatal error: all tasks are asleep - deadlock!` is followed by what the main task waits for, `the main task waits to receive on the channel made at pipeline.snello:39, which 2 sending and 1 receiving handles remain on, with 0 tasks waiting to send and 1 to receive`. The sending handles that remain are the ones to look for.
 
 ## Buffered channels
 

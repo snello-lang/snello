@@ -100,7 +100,7 @@ func popMin(n *Node) (*Node, *Node?) {
 }
 ```
 
-A function is declared with `func`, its parameters are named before their types, and names that share a type are grouped: `func(from, to NodeID, w int)`. Several results are written as a tuple type, `(*Node, *Node?)`, returned as a tuple, `return (n, right)`, and taken apart at the call, `min, rest := popMin(l)`.
+A function is declared with `func`, its parameters are named before their types, and names that share a type are grouped: `func(from, to NodeID, w int)`. Several results are written as a tuple type, `(*Node, *Node?)`, returned as a tuple, `return (n, right)`, and taken apart at the call, `min, rest := popMin(l)`. A return gives one value, so the statement `return n, right`, without the parentheses, is refused with the form to write: `return gives one value, and several are one tuple: write return (a, b)`. In a match arm and after `??`, a comma after the return's value ends the arm or the element it stands in, so several values are a tuple there too.
 
 A parameter says how the function takes its argument. `src ref string` reads it; `out mut File` changes it in place; a plain `n *Node` takes ownership of it. Chapter 6 covers the three modes. Until then, read `ref` as "borrowed to read" and `mut` as "borrowed to change".
 

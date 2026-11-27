@@ -114,7 +114,7 @@ func log(path ref string, line ref string) Result<(), io.Error> {
 `os.OpenOptions` says the same with named settings, each a field with a default (chapter 23): `Read` is `true`, `Perm` is `0o666`, and the rest are `false`. `Append` implies `Write`. `Create`, `Truncate` and `Exclusive` need `Write` or `Append`, and `Truncate` cannot go with `Append`, so a file opened for reading alone is never made or emptied; any other combination is an invalid argument.
 
 ```go
-f := os.OpenOptions{Append: true, Create: true, Perm: 0o600}.Open(path)?   // the log above
+f := os.OpenOptions{Read: false, Append: true, Create: true, Perm: 0o600}.Open(path)?   // the log above
 ```
 
 `O_CREATE|O_EXCL` fails with an error of kind `io.Exists` when the file is there, which is how a program takes a lock file or refuses to overwrite. The flags' numbers are Snello's own, the same on every system, where Go's are the system's and differ between Linux and macOS; a flag the package does not name is an invalid argument. `os.ReadFile(path)` reads a whole file as bytes, into one block of the size the file reports, and `os.WriteFile(path, data, perm)` writes one, beside `ReadToString` and `WriteString` for text.
@@ -199,7 +199,7 @@ path.IsAbs("/usr")                  // true
 
 `Clean` applies four rules until none applies: several slashes become one, an element that is a single dot is dropped, an element that is two dots is dropped with the element before it, and two dots at the start of a path that starts with a slash are dropped. So a path a user typed that climbs out of where it started shows it after `Clean`, by starting with two dots, which `examples/paths/paths.snello` uses to refuse one.
 
-`Join` takes two paths, where Go's takes any number, since a Snello function has a fixed number of parameters; three are joined two at a time, `path.Join(ref path.Join(a, b), c)`. An empty one is left out, and the result is cleaned.
+`Join` takes two paths, where Go's takes any number; three are joined two at a time, `path.Join(ref path.Join(a, b), c)`. An empty one is left out, and the result is cleaned.
 
 `Base`, `Ext` and `Split` lend parts of the path they are given: nothing is copied, and the borrow rules keep the path alive while the part is used. `Clean`, `Join` and `Dir` return a new string. A path that is clean already, which most are, is checked in one pass and copied; one that is not is rewritten an element at a time.
 
