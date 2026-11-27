@@ -337,7 +337,8 @@ type DeferStmt struct {
 	Call  Expr
 }
 
-// A ReturnStmt returns zero or more values.
+// A ReturnStmt returns no value or one, several being one tuple: the
+// parser refuses return a, b and keeps the tuple, (a, b), as the one.
 type ReturnStmt struct {
 	Return  token.Pos
 	Results []Expr
@@ -418,7 +419,9 @@ type ParenExpr struct {
 }
 
 // A TupleExpr is (a, b), with two or more elements, or the unit (), with
-// none, which is also the value of a match with no value.
+// none, which is also the value of a match with no value. The parser
+// refuses return a, b and reads it on as this tuple, whose Lparen is
+// then the first element's position.
 type TupleExpr struct {
 	Lparen token.Pos
 	Elts   []Expr

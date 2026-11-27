@@ -60,8 +60,28 @@ func (*Code) block()      {}
 // heading, and a span of indented lines a list when its first line
 // begins with a marker and code otherwise.
 func Parse(text string) []Block {
-	lines := dedent(strings.Split(strings.TrimRight(text, lineSep), lineSep))
 	var blocks []Block
+	for _, p := range parseLines(strings.Split(strings.TrimRight(text, lineSep), lineSep)) {
+		blocks = append(blocks, p.Block)
+	}
+
+	return blocks
+}
+
+// A placed block is a block and the lines it was read from, start up
+// to end, of the lines parseLines was given.
+type placed struct {
+	Block
+	start, end int
+}
+
+// parseLines reads lines into blocks as Parse does, keeping the lines
+// each came from, so that a part of a block can be traced to its line
+// in the source: Parse reads a comment's text, and a link checker the
+// comment's own lines, blank ones included.
+func parseLines(raw []string) []placed {
+	lines := dedent(raw)
+	var blocks []placed
 	for i := 0; i < len(lines); {
 		line := lines[i]
 		switch {
@@ -74,9 +94,9 @@ func Parse(text string) []Block {
 			}
 
 			if text, ok := strings.CutPrefix(line, headingMark); ok && i-start == 1 && (start == 0 || blank(lines[start-1])) && (i == len(lines) || blank(lines[i])) {
-				blocks = append(blocks, &Heading{strings.TrimSpace(text)})
+				blocks = append(blocks, placed{&Heading{strings.TrimSpace(text)}, start, i})
 			} else {
-				blocks = append(blocks, &Paragraph{lines[start:i]})
+				blocks = append(blocks, placed{&Paragraph{lines[start:i]}, start, i})
 			}
 		default:
 			start := i
@@ -89,7 +109,7 @@ func Parse(text string) []Block {
 				end--
 			}
 
-			blocks = append(blocks, indentedBlock(lines[start:end]))
+			blocks = append(blocks, placed{indentedBlock(lines[start:end]), start, end})
 		}
 	}
 

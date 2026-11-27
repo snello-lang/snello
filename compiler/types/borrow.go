@@ -5,6 +5,8 @@
 package types
 
 import (
+	"slices"
+
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
 )
@@ -152,7 +154,7 @@ func (c *Checker) holdIn(v *Var, path string, t Type, e ast.Expr, pos token.Pos)
 
 	if _, ok := borrowIn(t); ok {
 		if tmp := c.borrowOfTemporary(e); tmp != nil {
-			c.errorf(pos, "cannot keep a borrow of a temporary: "+exprText(tmp)+" is dropped when the statement ends")
+			c.errorf(pos, "cannot keep a borrow of a temporary: "+temporaryText(tmp)+" is dropped when the statement ends")
 			return
 		}
 	}
@@ -282,6 +284,10 @@ func (c *Checker) borrowOfTemporary(e ast.Expr) ast.Expr {
 			tmp = c.borrowOfTemporary(v)
 		}
 	}) {
+		if tmp == nil && !c.staticBranches(e) {
+			tmp = c.temporaryOf(e) // the if or the match itself, whose owned value a borrow was lent from: its branches moved into it, unless each is a literal or a constant, which lives for the whole program
+		}
+
 		return tmp
 	}
 
@@ -315,14 +321,55 @@ func (c *Checker) borrowOfTemporary(e ast.Expr) ast.Expr {
 			}
 		}
 
-		for _, arg := range c.passed[x].args { // a generic call's result holds what its arguments hold
-			if tmp := c.heldTemporary(arg); tmp != nil {
+		passed := c.passed[x]
+		for _, arg := range passed.args { // a generic call's result holds what its arguments hold
+			held := c.heldTemporary
+			if slices.Contains(passed.lent, arg) {
+				held = c.borrowOfTemporary // a temporary lent to a ref parameter is a borrow the result may be, pick<ref string>(owned())
+			}
+
+			if tmp := held(arg); tmp != nil {
 				return tmp
 			}
 		}
 	}
 
 	return c.temporaryOf(e)
+}
+
+// temporaryText names the temporary e for a message: an if's or a
+// match's value by the construct, since its text is its branches, and
+// any other by its text.
+func temporaryText(e ast.Expr) string {
+	switch unparen(e).(type) {
+	case *ast.IfExpr:
+		return "the if's value"
+	case *ast.MatchExpr:
+		return "the match's value"
+	case *ast.CoalesceExpr:
+		return "the ??'s value"
+	}
+
+	return exprText(e)
+}
+
+// staticBranches reports whether every branch of e, an if or a match,
+// is a string literal or constant, never yields, or is an if or a match
+// whose own branches are so: text that lives for the whole program,
+// which a borrow of the if's value views where it lies. A number is
+// copied into the if's result, a temporary, which a borrow would point
+// at after the statement drops it, so an if of number literals is no
+// exception. e that is no if or match has no branches to be so.
+func (c *Checker) staticBranches(e ast.Expr) bool {
+	all := true
+	branching := eachBranch(e, func(v ast.Expr) {
+		t := c.info.Types[unparen(v)]
+		if !isNever(t) && !(c.static(v) && isString(t)) && !c.staticBranches(v) {
+			all = false
+		}
+	})
+
+	return branching && all
 }
 
 // heldTemporary returns a temporary that what e holds borrows, or nil:

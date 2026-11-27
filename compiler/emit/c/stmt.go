@@ -454,8 +454,6 @@ func (e *Emitter) spread(x ast.Expr, n int) []string {
 // is computed first, then the calls run, then the value is returned.
 func (e *Emitter) returnStmt(s *ast.ReturnStmt) {
 	switch {
-	case len(s.Results) > 1:
-		e.unsupported(s.Return, "returning several values")
 	case len(s.Results) == 0:
 		e.leaveFunction(s.Pos())
 		e.line("return;")

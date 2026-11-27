@@ -240,7 +240,7 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 		}
 
 		name, _ := e.methodNameOf(nil, n, method, pos)
-		msg := e.op("call %sn_string @"+name+"(ptr "+p+")", "%sn_string")
+		msg := e.op("call %sn_string @"+name+"("+e.argsTo(n, method, pos, p)+")", "%sn_string")
 		if quoted {
 			return text{e.rt("sn_quote_owned", "%sn_string", msg), true}
 		}
@@ -494,7 +494,7 @@ func (e *Emitter) equal(a, b string, t types.Type, pos token.Pos) value {
 	t = lower.ValueType(t)
 	if n, ok := t.(*types.Named); ok && written(n, "Eq") { // the type says how; a derived Eq is the comparison of the parts below
 		name, _ := e.methodNameOf(nil, n, "Eq", pos)
-		return e.op("call i1 @"+name+"(ptr "+a+", ptr "+b+")", "i1")
+		return e.op("call i1 @"+name+"("+e.argsTo(n, "Eq", pos, a, b)+")", "i1")
 	}
 
 	if basic, ok := t.Underlying().(*types.Basic); ok {
@@ -646,7 +646,7 @@ func (e *Emitter) hash(p string, t types.Type, pos token.Pos) value {
 	t = lower.ValueType(t)
 	if n, ok := t.(*types.Named); ok && written(n, "Hash") {
 		name, _ := e.methodNameOf(nil, n, "Hash", pos)
-		return e.op("call i64 @"+name+"(ptr "+p+")", "i64")
+		return e.op("call i64 @"+name+"("+e.argsTo(n, "Hash", pos, p)+")", "i64")
 	}
 
 	if _, ok := t.Underlying().(*types.Enum); ok {
@@ -777,7 +777,7 @@ func (e *Emitter) compare(a, b string, t types.Type, pos token.Pos) value {
 	ord := e.irType(types.Ordering, pos)
 	if n, ok := t.(*types.Named); ok && n.Method("Cmp") != nil {
 		name, _ := e.methodNameOf(nil, n, "Cmp", pos)
-		return e.op("call "+ord+" @"+name+"(ptr "+a+", ptr "+b+")", ord)
+		return e.op("call "+ord+" @"+name+"("+e.argsTo(n, "Cmp", pos, a, b)+")", ord)
 	}
 
 	if basic, ok := t.Underlying().(*types.Basic); ok {

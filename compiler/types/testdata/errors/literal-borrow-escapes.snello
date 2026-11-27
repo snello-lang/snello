@@ -1,0 +1,75 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a borrow of a local cannot leave its function, carried in a
+// tuple, a struct, an option, a result or a variant, nested or chosen by
+// a branch: a slice of a local, s[0:4], is a borrow of it like ref s,
+// and so is a local given to a ref slot, Span{text: s}, a parameter
+// taken by value among them. Fix: return what the caller can own, a
+// clone, or a borrow of a parameter.
+
+package p
+
+struct Span {
+	text ref string
+	at   int
+}
+
+enum Held {
+	Holder(ref string)
+	Nothing
+}
+
+func tuple() (ref string, int) {
+	s := "abcdefgh".Clone()
+	return (s[0:4], 1) // ERROR "cannot return a borrow of local s"
+}
+
+func literal() Span {
+	s := "abcdefgh".Clone()
+	return Span{text: s[0:4], at: 0} // ERROR "cannot return a borrow of local s"
+}
+
+func held() (ref string, int) {
+	s := "abcdefgh".Clone()
+	t := (s[0:4], 1)
+	return t // ERROR "cannot return a borrow of local s"
+}
+
+func nested() (ref string, int)? {
+	s := "abcdefgh".Clone()
+	return Some((s[0:4], 1)) // ERROR "cannot return a borrow of local s"
+}
+
+func implicit() Span {
+	s := "abcdefgh".Clone()
+	return Span{text: s, at: 0} // ERROR "cannot return a borrow of local s"
+}
+
+func byValue(s string) Span {
+	return Span{text: s, at: 0} // ERROR "cannot return a borrow of local s"
+}
+
+func variant() Held {
+	s := "abcdefgh".Clone()
+	return Holder(s) // ERROR "cannot return a borrow of local s"
+}
+
+func result() Result<(ref string, int), string> {
+	s := "abcdefgh".Clone()
+	return Ok((s[0:4], 1)) // ERROR "cannot return a borrow of local s"
+}
+
+func matched(n int) (ref string, int) {
+	s := "abcdefgh".Clone()
+	return match n { // ERROR "cannot return a borrow of local s"
+		0 => (s[0:4], 1),
+		_ => (s[4:8], 2),
+	}
+}
+
+func chosen(c bool) (ref string, int) {
+	s := "abcdefgh".Clone()
+	return if c { (s[0:4], 1) } else { (s[4:8], 2) } // ERROR "cannot return a borrow of local s"
+}

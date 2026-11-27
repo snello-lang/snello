@@ -192,7 +192,7 @@ func (c *Checker) values(n int, values []ast.Expr, hint Type, pos token.Pos, int
 			return ops
 		}
 
-		t, ok := valueType(op).(*Tuple)
+		t, ok := valueType(op).Underlying().(*Tuple) // a declared tuple type is taken apart as the tuple it stands for
 		if !ok || len(t.elems) != n {
 			c.errorf(pos, "assignment mismatch: "+strconv.Itoa(n)+" names but a value of type "+op.typ.String())
 			return ops

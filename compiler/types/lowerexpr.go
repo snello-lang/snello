@@ -46,7 +46,7 @@ func (l *lowering) value(e ast.Expr, want Type) Operand {
 	case *ast.TupleExpr:
 		start := len(l.argStack)
 		for _, elt := range x.Elts {
-			l.argStack = append(l.argStack, l.value(elt, nil))
+			l.argStack = append(l.argStack, l.keptValue(elt, "stored", nil)) // a tuple holds its elements as a struct holds its fields: a closure that borrows cannot be put in one
 		}
 
 		return l.madeFrom(e, start, true)
@@ -349,40 +349,10 @@ func (l *lowering) partsElt(pe *ast.PartsElt) {
 	l.closeLoop(exit)
 }
 
-// slotType is the type of what a literal's i-th part is given to: the
-// field key names, or the i-th, a slice's or an array's element, a
-// map's value or a tuple's i-th element; nil when the literal's type is
-// not known.
+// slotType is the type of the slot the i-th element of x fills, as the
+// checker gives it (Checker.slotType).
 func (l *lowering) slotType(x *ast.CompositeLit, i int, key ast.Expr) Type {
-	if id, ok := key.(*ast.Ident); ok {
-		if f, ok := l.c.info.Uses[id].(*Var); ok && f.field {
-			return f.typ // a struct's field; a map's key is a value, which says nothing of the slot
-		}
-	}
-
-	t := l.typeOf(x)
-	if t == nil {
-		return nil
-	}
-
-	switch u := t.Underlying().(type) {
-	case *Struct:
-		if i < len(u.fields) {
-			return u.fields[i].typ
-		}
-	case *Slice:
-		return u.elem
-	case *Array:
-		return u.elem
-	case *Map:
-		return u.value
-	case *Tuple:
-		if i < len(u.elems) {
-			return u.elems[i]
-		}
-	}
-
-	return nil
+	return l.c.slotType(x, i, key)
 }
 
 // madeFrom is made for the operands gathered on the stack from start,

@@ -1,0 +1,17 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: panic takes one message, what a ref string parameter takes, a
+// string owned or lent, which the program prints as it ends; a value
+// of another type, one declared over string among them, is refused, so
+// that a panic says the text the program wrote. Fix: make the text,
+// panic(fmt.Sprintf("n is %d", n)).
+
+package p
+
+func check(n int) {
+	if n < 0 {
+		panic(n) // ERROR "panic takes a string, the message, and n (int) is not one"
+	}
+}

@@ -600,7 +600,10 @@ func take<T>(place mut T) T
 func replace<T>(place mut T, v T) T
 
 // panic prints its message, msg, lent, and ends the program with status
-// 2, after the values still owned are dropped. It never returns, and
+// 2, after the values still owned are dropped. msg is what a ref string
+// parameter takes, a string owned or lent; a value of another type, one
+// declared over string among them, is refused, so that a panic prints
+// the text the program wrote. It never returns, and
 // the compiler knows that: a match arm or an if branch may end in a
 // panic where a value is wanted. A panic is for a mistake in the
 // program itself, never for its input, which an Option or a Result

@@ -145,9 +145,17 @@ func (c *Checker) tuple(e *ast.TupleExpr, expected Type) operand {
 		}
 
 		op := c.expr(elt, hint)
+		c.kept(op, "stored", elt.Pos()) // a tuple holds its elements as a struct holds its fields
 		elems[i] = valueType(op)
-		if isBorrow(op.typ) && (isBorrow(hint) || lends(elt)) {
+		switch {
+		case isBorrow(op.typ) && (isBorrow(hint) || lends(elt)):
 			elems[i] = op.typ // (mut j, 1) holds the borrow, as a name given mut j does, and so does a part a borrow is wanted for
+		case hint != nil && op.mode != invalid && !isBorrow(hint) && assignable(op, hint):
+			if _, ok := hint.(*Trait); ok {
+				c.hide(op.typ, elt.Pos(), "a trait value") // a generic body's value of a type parameter, inside a trait value
+			}
+
+			elems[i] = hint // converted to its slot, as a struct field's value is: a chan T to a <-chan T, a value to a trait it implements
 		}
 
 	}

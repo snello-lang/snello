@@ -69,6 +69,7 @@ func (c *Checker) matchExpr(e *ast.MatchExpr, expected Type) operand {
 		}
 	}
 
+	c.lentBranches(e, result, "match")
 	return result
 }
 

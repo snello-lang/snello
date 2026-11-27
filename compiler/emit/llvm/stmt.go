@@ -440,9 +440,6 @@ func (e *Emitter) returnStmt(s *ast.ReturnStmt) {
 		}
 
 		e.returnValue(v)
-	default:
-		e.unsupported(s.Return, "returning several values")
-		return
 	}
 
 	e.fn.terminated = true

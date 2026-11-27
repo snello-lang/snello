@@ -708,7 +708,7 @@ func (e *Emitter) cloneAt(p string, t types.Type, pos token.Pos) value {
 	ir := e.irType(t, pos)
 	if n, ok := t.(*types.Named); ok && written(n, "Clone") {
 		name, _ := e.methodNameOf(nil, n, "Clone", pos)
-		return e.op("call "+ir+" @"+name+"(ptr "+p+")", ir)
+		return e.op("call "+ir+" @"+name+"("+e.argsTo(n, "Clone", pos, p)+")", ir)
 	}
 
 	switch {

@@ -56,4 +56,4 @@ The book is written as the language is built: a chapter exists as soon as its fe
 - A change that implements or decides a language feature updates the chapter that owns the feature in the same change, as it carries its tests.
 - A chapter describes what the compiler does today; what it does not do yet is said plainly where it matters.
 - Samples come from `../../examples/`. When an example changes, the chapter quoting it changes with it.
-- The chapters name no other language. Snello is explained by what it is and what it is for. Comparisons for readers coming from Go live in Appendix B, and a chapter that gains a feature adds its row there.
+- A chapter explains Snello on its own terms, by what it is and what it is for. Another language is named where it explains something a reader needs, such as the command a Snello command reads like, the precedent a rule follows or the program a measurement is taken against, never as the definition of a Snello feature. The comparisons for readers coming from Go live in Appendix B, and a chapter that gains a feature adds its row there.

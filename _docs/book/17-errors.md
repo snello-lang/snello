@@ -151,7 +151,7 @@ A test asserts on an error with `expect.IsErr`, which gives the error back for a
 
 ## What a panic prints
 
-A panic is a bug, chapter 8, and a bug wants finding. A panic prints its message and, under it, the stack of the task it happened on: one line per function, the innermost first, each the function as the program names it and the file and line it was at. The index check in `At` fails on the third call of `render`:
+A panic is a bug, chapter 8, and a bug wants finding. `panic` takes one message, what a `ref string` parameter takes, a string owned or lent, which says what went wrong in the program's own words; a value of another type is refused, a type declared over `string` among them, and `fmt.Sprintf` makes the text from a value `fmt` prints. A panic prints its message and, under it, the stack of the task it happened on: one line per function, the innermost first, each the function as the program names it and the file and line it was at. The index check in `At` fails on the third call of `render`:
 
 ```go
 struct Grid { cells []int }

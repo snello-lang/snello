@@ -19,10 +19,11 @@ Snello is a programming language: Go's syntax and concurrency, memory safety wit
 9. `_docs/design/13-documentation.md`: doc comments, `snello doc`, examples and the pages in a browser.
 10. `_docs/design/14-distribution.md`: versions, the release cadence and channels, what a release holds and how it is trusted, and how Snello is installed.
 11. `_docs/design/15-language-server.md`: the language server, `snello lsp`, the protocol it speaks, how it keeps documents and checks their packages, its diagnostics, hover and definition, symbols, references and rename.
-12. `_docs/book/README.md`: the user-facing book and which chapters exist.
-13. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
-14. `CODING_STANDARDS.md`: how code is written here.
-15. The [milestones](https://github.com/snello-lang/snello/milestones) and the issue of the current task: what is done, what is next, and the acceptance criteria for each task. See "Planning" below.
+12. `_docs/design/17-runtime-probes.md`: the probes the runtime announces its tasks and allocations through, to the system's own tracers on each platform, in place of a profiler of Snello's own; proposed, not built.
+13. `_docs/book/README.md`: the user-facing book and which chapters exist.
+14. `examples/README.md`: what each example shows, and where the feature programs and the refused programs live.
+15. `CODING_STANDARDS.md`: how code is written here.
+16. The [milestones](https://github.com/snello-lang/snello/milestones) and the issue of the current task: what is done, what is next, and the acceptance criteria for each task. See "Planning" below.
 
 Do not propose anything these documents already decided without saying which decision you are reopening and why.
 

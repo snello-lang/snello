@@ -62,7 +62,7 @@ func (p *Parser) parseStmtList() []ast.Stmt {
 //
 //	var x int           DeclStmt
 //	spawn worker(id)    SpawnStmt
-//	return a, b         ReturnStmt
+//	return (a, b)       ReturnStmt
 //	{ ... }             BlockStmt
 //	x := f()            AssignStmt, via parseSimpleStmt
 func (p *Parser) parseStmt() ast.Stmt {
@@ -82,6 +82,11 @@ func (p *Parser) parseStmt() ast.Stmt {
 		p.next()
 		if !exprEnd[p.tok] {
 			ret.Results = p.parseExprList(token.SEMICOLON)
+		}
+
+		if len(ret.Results) > 1 { // one way to write it: several values are one tuple, read on as that tuple
+			p.error(ret.Results[1].Pos(), "return gives one value, and several are one tuple: write return (a, b)")
+			ret.Results = []ast.Expr{&ast.TupleExpr{Lparen: ret.Results[0].Pos(), Elts: ret.Results}}
 		}
 
 		return ret

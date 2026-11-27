@@ -48,20 +48,7 @@ func (g *CommentGroup) Pos() token.Pos { return g.List[0].Slash }
 // lines at either end dropped and a run of blank lines made one, so
 // that a comment reads as its writer meant, whatever its markers.
 func (g *CommentGroup) Text() string {
-	var lines []string
-	for _, c := range g.List {
-		text := c.Text
-		if strings.HasPrefix(text, lineMarker) {
-			text = strings.TrimPrefix(text[len(lineMarker):], " ")
-		} else {
-			text = strings.TrimSuffix(strings.TrimPrefix(text, blockOpen), blockClose)
-		}
-
-		for line := range strings.SplitSeq(text, commentLine) {
-			lines = append(lines, strings.TrimRight(line, " \t\r"))
-		}
-	}
-
+	lines, _ := g.Lines()
 	var b strings.Builder
 	blank := false
 	for _, line := range lines {
@@ -80,4 +67,34 @@ func (g *CommentGroup) Text() string {
 	}
 
 	return b.String()
+}
+
+// Lines returns the group's lines as Text reads them, the markers and
+// the space after a // taken off and trailing space trimmed, with
+// nothing dropped or joined, and where each begins in the source: the
+// comment's first / for its first line, and a block comment's later
+// lines at their own starts. A reader of the text points back at the
+// line a part of it came from through it.
+func (g *CommentGroup) Lines() (lines []string, at []token.Pos) {
+	for _, c := range g.List {
+		if text, ok := strings.CutPrefix(c.Text, lineMarker); ok {
+			lines = append(lines, strings.TrimRight(strings.TrimPrefix(text, " "), " \t\r"))
+			at = append(at, c.Slash)
+			continue
+		}
+
+		offset := 0
+		for line := range strings.SplitSeq(strings.TrimSuffix(strings.TrimPrefix(c.Text, blockOpen), blockClose), commentLine) {
+			start := c.Slash
+			if offset > 0 {
+				start += token.Pos(len(blockOpen) + offset)
+			}
+
+			lines = append(lines, strings.TrimRight(line, " \t\r"))
+			at = append(at, start)
+			offset += len(line) + len(commentLine)
+		}
+	}
+
+	return lines, at
 }

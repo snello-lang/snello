@@ -290,6 +290,26 @@ var handledErrors = map[string]bool{
 	"blank-guard.snello": true,
 	// A match guard runs whether or not its arm is taken: it may not move a value declared before it, and the value is moved after the match.
 	"move-in-guard.snello": true,
+	// panic takes one message, a string.
+	"panic-not-string.snello": true,
+	// Nothing runs before main, so a function named init is refused.
+	"init-func.snello": true,
+	// A borrow of a local leaves in no literal, and a tuple holds no
+	// closure that borrows.
+	"literal-borrow-escapes.snello": true,
+	"tuple-closure-stored.snello":   true,
+	// A return ends a function, so no package variable's initializer
+	// holds one.
+	"return-outside-function.snello": true,
+	// An if or a match with an owned branch is a temporary, which no ref
+	// slot keeps.
+	"branch-temporary.snello": true,
+	// An if or a match that gives a borrow gives one from every branch.
+	"owned-branch-lent.snello": true,
+	// A value an expression makes and lends lives to its statement's end.
+	"lent-temporary.snello": true,
+	// An assignment writes a place, never a value an expression makes.
+	"assign-to-value.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

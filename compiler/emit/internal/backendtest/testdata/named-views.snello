@@ -1,0 +1,90 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Methods of types declared over a string and a slice, whose ref
+// receiver is the view's words rather than an address, called by the
+// compiler's own helpers as a direct call calls them: String and Error
+// when fmt prints the value, Eq and Hash when it keys a map, Cmp when a
+// slice of it is sorted, Clone when it is cloned, String through a
+// trait value's table, and Error in the chain %+v prints; and a derived
+// Error over a string, the backend's own helper, which takes the value
+// at its address, printed directly, through a trait value and by %+v.
+
+package main
+
+import "fmt"
+
+type Name string impl fmt.Stringer, Eq, Hash, Ord, Clone
+
+func (n ref Name) String() string {
+	return fmt.Sprintf("name(%d)", len(n))
+}
+
+func (n ref Name) Eq(other ref Name) bool {
+	return len(n) == len(other)
+}
+
+func (n ref Name) Hash() u64 {
+	return u64(len(n))
+}
+
+func (n ref Name) Cmp(other ref Name) Ordering {
+	return len(n).Cmp(len(other))
+}
+
+func (n ref Name) Clone() Name {
+	return Name(fmt.Sprintf("copy of %d", len(n)))
+}
+
+type Fault string impl Error
+
+func (f ref Fault) Error() string {
+	return fmt.Sprintf("fault(%d)", len(f))
+}
+
+type Code string impl Error
+
+type Ints []int impl fmt.Stringer, Clone
+
+func (xs ref Ints) String() string {
+	return fmt.Sprintf("ints(%d)", len(xs))
+}
+
+func (xs ref Ints) Clone() Ints {
+	return Ints([]int{len(xs)})
+}
+
+func main() {
+	n := Name("seven c")
+	fmt.Println(n)
+	fmt.Println(Fault("four"))
+	xs := Ints([]int{1, 2, 3})
+	fmt.Println(xs)
+
+	m := map[Name]int{}
+	m[Name("abc")] = 1
+	m[Name("xyz")] = 2 // equal to abc by length: the same key
+	m[Name("ab")] = 3
+	fmt.Println(len(m), m[Name("123")])
+
+	names := []Name{Name("ccc"), Name("a"), Name("bb"), Name("dddd")}
+	names.Sort()
+	for _, x := range names {
+		fmt.Println(x)
+	}
+
+	c := n.Clone()
+	fmt.Println(string(c))
+	ys := xs.Clone()
+	fmt.Println(ys)
+
+	var s fmt.Stringer = Name("five!")
+	fmt.Println(s.String())
+
+	fmt.Printf("%+v\n", Fault("three"))
+	fmt.Println(Code("E42"))
+	var e Error = Code("E7")
+	fmt.Println(e)
+	fmt.Printf("%+v\n", Code("E9"))
+}

@@ -1,0 +1,67 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: an if or a match that gives a borrow gives one from every
+// branch: a branch that is an owned value would be moved into the
+// result, a borrow no one owns, and never dropped. A borrow, a literal,
+// a constant or a panic is a branch that gives a borrow, and a value
+// that only holds one, a struct with a ref field, is owned; a nested if
+// or match is a branch of the type it gives, and a match on a type is a
+// match. Fix: lend the value, ref x,
+// making it a variable first when it is made in the branch, or give
+// every branch an owned value.
+
+package p
+
+struct Holder {
+	r    ref string
+	name string
+}
+
+func owned() string {
+	return "made here".Clone()
+}
+
+func pass(s ref string) int {
+	return len(s)
+}
+
+func returned(c bool, p ref string) ref string {
+	return if c { p } else { owned() } // ERROR "the if gives a borrow, and this branch an owned value"
+}
+
+func declared(c bool, p ref string) int {
+	var q ref string = if c { ref p } else { owned() } // ERROR "the if gives a borrow, and this branch an owned value"
+	return len(q)
+}
+
+func passed(c bool, p ref string) int {
+	return pass(if c { ref p } else { owned() }) // ERROR "the if gives a borrow, and this branch an owned value"
+}
+
+func nested(c bool, d bool, p ref string) ref string {
+	return if c { p } else { (if d { p } else { owned() }) } // ERROR "never drop: make it a variable first and lend that"
+}
+
+func holding(c bool, p ref string) int {
+	a := Holder{r: p, name: "a".Clone()}
+	b := Holder{r: p, name: "b".Clone()}
+	r := if c { ref a } else { b } // ERROR "the if gives a borrow, and this branch an owned value, which it would move into its result and never drop: lend it, ref b"
+	return len(r.name)
+}
+
+func byType<T>(p ref string) int {
+	r := match T {
+		int => p,
+		_ => owned(), // ERROR "the match gives a borrow, and this branch an owned value"
+	}
+	return len(r)
+}
+
+func matched(n int, p ref string) ref string {
+	return match n {
+		0 => p,
+		_ => owned(), // ERROR "the match gives a borrow, and this branch an owned value"
+	}
+}
