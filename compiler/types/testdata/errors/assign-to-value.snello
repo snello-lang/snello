@@ -1,0 +1,36 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: an assignment writes a place: a variable, a field, an element, a
+// map's entry or what a pointer points at. A value an expression makes,
+// a call's result, a ?? or an if, is no place: the statement would drop
+// it, and what was stored in it with it; nor is a constant or a
+// literal. Fix: assign to the place the value was meant to change.
+
+package p
+
+const Limit = 3
+
+struct Count {
+	n int
+}
+
+func made() string {
+	return "made".Clone()
+}
+
+func counter() Count {
+	return Count{n: 0}
+}
+
+func assigned(c bool) {
+	var opt string? = None
+	s := "s".Clone()
+	t := "t".Clone()
+	made() = "x".Clone()                   // ERROR "cannot assign to made(): it is no place"
+	opt ?? s = "y".Clone()                 // ERROR "cannot assign to the ??'s value: it is no place"
+	(if c { s } else { t }) = "z".Clone() // ERROR "cannot assign to the if's value: it is no place"
+	counter().n++                         // ERROR "cannot assign to counter().n: it is no place"
+	Limit = 4                             // ERROR "cannot assign to Limit: a constant or a literal is no place"
+}

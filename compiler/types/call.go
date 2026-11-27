@@ -570,8 +570,7 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 		c.errorf(e.Pos(), b.name+" gives a type's parts to a loop, for f := range "+b.name+"(T), which the compiler writes out once per part; it is no value")
 		return invalidOperand
 	case BuiltinPanic:
-		c.exprs(e.Args)
-		return operand{value, Typ[Never], nil, nil}
+		return c.panicCall(e)
 	case BuiltinClose:
 		return c.closeCall(e)
 	case BuiltinMin, BuiltinMax:
@@ -580,6 +579,35 @@ func (c *Checker) builtinCall(e *ast.CallExpr, b *Builtin) operand {
 
 	c.exprs(e.Args) // print
 	return operand{value, Unit, nil, nil}
+}
+
+// panicCall checks panic(msg) as a call of its declaration,
+// func panic(msg ref string): one message, which takes what a ref
+// string parameter takes, a string owned or lent, or an owned pointer
+// to one, lent for the call. A value of any other type is refused, a
+// type declared over string among them, so that a panic prints the
+// text the program wrote and never a method's.
+func (c *Checker) panicCall(e *ast.CallExpr) operand {
+	never := operand{value, Typ[Never], nil, nil}
+	if len(e.Args) != 1 {
+		c.errorf(e.Lparen, "panic takes one message, the text the program ends with: panic(\"unreachable: the state machine has no other state\")")
+		c.exprs(e.Args)
+		return never
+	}
+
+	x := c.expr(e.Args[0], Typ[String])
+	if x.mode == invalid {
+		return never
+	}
+
+	msg := NewRef(Typ[String], false)
+	if !assignable(x, msg) {
+		c.errorf(e.Args[0].Pos(), "panic takes a string, the message, and "+describe(x)+" is not one: make the text, with fmt.Sprintf for a value fmt prints")
+		return never
+	}
+
+	c.implicitBorrow(x, msg)
+	return never
 }
 
 // minCall checks min(a, b, ...) and max(a, b, ...): two or more numbers

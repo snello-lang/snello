@@ -36,6 +36,7 @@ type passedArg struct {
 // borrows ties it to (callSource).
 type passedTo struct {
 	args     []ast.Expr
+	lent     []ast.Expr // of args, those given to a parameter declared T and a borrow in the call, whose value the result may borrow itself
 	only     bool
 	all      []passedArg  // every argument, with its declared and instance types, for the stores the call makes
 	borrowed []*TypeParam // the type parameters whose arguments hold a borrow
@@ -82,6 +83,12 @@ func (c *Checker) passBorrows(e *ast.CallExpr, fn *Func, inst *Signature) bool {
 		for _, a := range args {
 			if holdsBorrow(a.inst) && !isFuncLit(a.x) { // a closure given to the call borrows nothing it keeps, and returns no borrow of what it captures
 				passed.args = append(passed.args, a.x)
+				if isBorrow(a.inst) && !isBorrow(a.decl) {
+					passed.lent = append(passed.lent, a.x)                                                                                                   // a T taken as a borrow, pick<ref string>(owned()): the result may be the borrow of it; a parameter declared ref T lends it as argEffects sees, the result holding what it holds
+					if _, kind := c.placeOf(a.x); kind == notPlace && !isBorrow(c.info.Types[unparen(a.x)]) && !c.static(a.x) && c.temporaryOf(a.x) == nil { // a part of a temporary already names the whole, mkh() for mkh().name
+						c.markTemporary(a.x, a.x) // a value made for the call and lent, which argEffects could not see from T as declared
+					}
+				}
 			}
 		}
 	}
@@ -161,7 +168,7 @@ func (c *Checker) storeArg(e *ast.CallExpr, a passedArg, others []passedArg) {
 
 	for _, o := range others {
 		if tmp := c.heldTemporary(o.x); tmp != nil {
-			c.errorf(o.x.Pos(), "cannot keep a borrow of a temporary: "+exprText(tmp)+" is dropped when the statement ends")
+			c.errorf(o.x.Pos(), "cannot keep a borrow of a temporary: "+temporaryText(tmp)+" is dropped when the statement ends")
 			continue
 		}
 

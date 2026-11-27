@@ -70,7 +70,9 @@ func (c *Checker) exprInternal(e ast.Expr, expected Type) operand {
 	case *ast.FuncLit:
 		return c.funcLit(e)
 	case *ast.IfExpr:
-		return c.ifExpr(e, expected)
+		op := c.ifExpr(e, expected)
+		c.lentBranches(e, op, "if") // once, at the head of an else-if chain, whose every branch eachBranch walks
+		return op
 	case *ast.PartExpr:
 		return c.partExpr(e)
 	case *ast.MatchExpr:
@@ -1059,8 +1061,8 @@ func (c *Checker) coalesce(e *ast.CoalesceExpr) operand {
 		return invalidOperand
 	}
 
-	inner, m := x.typ, x.mode
-	through := borrowOf(m) // a place reached through a borrow
+	inner := x.typ
+	through := borrowOf(x.mode) // a place reached through a borrow
 	if r, ok := inner.(*Ref); ok {
 		through = r // a borrow variable
 		inner = r.elem
@@ -1078,15 +1080,12 @@ func (c *Checker) coalesce(e *ast.CoalesceExpr) operand {
 		return invalidOperand
 	}
 
-	if through != nil && !isBorrow(x.typ) && IsCopy(result) {
-		m = value // a Copy value reached through a borrow is read, not lent
-	} else if through != nil {
+	if through != nil && (isBorrow(x.typ) || !IsCopy(result)) { // a Copy value reached through a borrow is read, not lent
 		result = NewRef(result, through.mut)
-		m = value
 	}
 
 	c.elseValue(e.Else, result)
-	return operand{m, result, nil, nil}
+	return operand{value, result, nil, nil} // a value the ?? makes, the option's moved out or the else's, which a borrow of it would borrow as a temporary; never the option's place
 }
 
 // elseValue checks the right side of ?? or an else: an expression of
@@ -1275,6 +1274,34 @@ func (c *Checker) ifExpr(e *ast.IfExpr, expected Type) operand {
 	}
 
 	return c.unify(a, b, e.If, "if")
+}
+
+// lentBranches refuses a branch of e, an if or a match, that gives an
+// owned value where e gives a borrow, result being e's operand: an if
+// or a match moves the value of the branch it takes into its result,
+// and a value moved into a borrow no one owns, so nothing drops it and
+// nothing holds it, a borrow of a value that is gone. A branch that is
+// a borrow, a literal or a constant, which lives for the whole program,
+// or one that never yields gives a borrow, and a value that only holds
+// one, a struct with a ref field, is owned; a nested if or match is a
+// branch of the type it gives, having checked its own branches. what
+// names e, for the message.
+func (c *Checker) lentBranches(e ast.Expr, result operand, what string) {
+	if result.mode == invalid || !isBorrow(result.typ) {
+		return
+	}
+
+	eachBranch(e, func(v ast.Expr) {
+		t := c.info.Types[unparen(v)]
+		if t != nil && !isBorrow(t) && !isNever(t) && !c.static(v) { // a value that holds a borrow is still owned: it is moved, the borrow inside it with it
+			fix := "make it a variable first and lend that"
+			if _, kind := c.placeOf(v); kind != notPlace {
+				fix = "lend it, ref " + exprText(v)
+			}
+
+			c.errorf(v.Pos(), "the "+what+" gives a borrow, and this branch an owned value, which it would move into its result and never drop: "+fix+", or give every branch an owned value")
+		}
+	})
 }
 
 // blockValue checks a block whose last statement may be an expression

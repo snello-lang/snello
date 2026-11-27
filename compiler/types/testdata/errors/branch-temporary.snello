@@ -1,0 +1,41 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: an if or a match whose branch is an owned value moves the chosen
+// value into its result, a temporary no variable holds, so a ref slot
+// given it would borrow that temporary past its statement, kept or
+// returned, as ref (if c { s } else { t }) would. Fix: lend each branch,
+// if c { ref s } else { ref t }, or keep the value in a variable.
+
+package p
+
+struct Span {
+	text ref string
+	at   int
+}
+
+enum Held {
+	Holder(ref string)
+	Nothing
+}
+
+func returned(c bool) Span {
+	s := "abcdefgh".Clone()
+	t := "zz".Clone()
+	return Span{text: if c { s } else { t }, at: 0} // ERROR "cannot return a borrow of a temporary: the if's value is dropped when the statement ends"
+}
+
+func kept(c bool) int {
+	s := "abcdefgh".Clone()
+	t := "zz".Clone()
+	sp := Span{text: if c { s } else { t }, at: 0} // ERROR "cannot keep a borrow of a temporary: the if's value is dropped when the statement ends"
+	return sp.at
+}
+
+func variant(n int) int {
+	s := "abcdefgh".Clone()
+	h := Holder(match n { 0 => s, _ => s.Clone() }) // ERROR "cannot keep a borrow of a temporary: the match's value is dropped when the statement ends"
+	_ = h
+	return n
+}

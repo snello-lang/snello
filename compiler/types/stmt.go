@@ -207,9 +207,28 @@ func (c *Checker) operatorAssign(s *ast.AssignStmt, x operand, fn *Func) {
 	c.writable(s.Lhs[0], x)
 }
 
+// writable refuses an assignment to e, typed as x, that writes nowhere a
+// program can read again: a place reached through a ref, which only
+// reads, and a value an expression makes with no place behind it, a
+// call, a ?? or an if, which the statement would drop with what was
+// stored in it. A map's entry, a pointer's target and the blank name
+// are places.
 func (c *Checker) writable(e ast.Expr, x operand) {
 	if x.mode == borrowed {
 		c.errorf(e.Pos(), "cannot assign to "+exprText(e)+" through a ref "+c.throughWhat(e))
+		return
+	}
+
+	if id, ok := unparen(e).(*ast.Ident); x.mode != value || ok && isBlank(id) {
+		return
+	}
+
+	switch _, kind := c.placeOf(e); {
+	case kind != notPlace:
+	case c.static(e):
+		c.errorf(e.Pos(), "cannot assign to "+exprText(e)+": a constant or a literal is no place")
+	default:
+		c.errorf(e.Pos(), "cannot assign to "+temporaryText(e)+": it is no place, but a value the expression makes, which the statement would drop with what it stores")
 	}
 }
 
@@ -463,33 +482,37 @@ func (c *Checker) send(s *ast.SendStmt) {
 	c.kept(v, "sent", s.Value.Pos())
 }
 
-// returnStmt checks the results against the function's result type:
-// none for (), one value, or one tuple value or a list for several.
+// returnStmt checks the result against the function's result type:
+// none for (), or one value, a tuple for several, return a, b being
+// parsed as return (a, b). A tuple of the wrong length is reported by
+// its count, whichever way it is written.
 func (c *Checker) returnStmt(s *ast.ReturnStmt) {
+	if c.sig == nil { // a package variable's initializer, which has no function to return from: x := v ?? return, or a match arm's
+		c.errorf(s.Return, "return is only allowed inside a function")
+		c.exprs(s.Results)
+		return
+	}
+
 	want := c.refine(c.sig.results)
-	switch {
-	case len(s.Results) == 0:
+	if len(s.Results) == 0 {
 		if want != Unit {
 			c.errorf(s.Return, "return needs a value of type "+want.String())
 		}
-	case len(s.Results) == 1:
-		op := c.expr(s.Results[0], want)
-		c.assign(op, want, s.Results[0].Pos(), "return")
-		c.returned(s.Results[0], op)
-	default:
-		t, ok := want.(*Tuple)
-		if !ok || len(t.elems) != len(s.Results) {
-			c.errorf(s.Return, "return has "+strconv.Itoa(len(s.Results))+" values; the function returns "+want.String())
-			c.exprs(s.Results)
+
+		return
+	}
+
+	if tuple, ok := s.Results[0].(*ast.TupleExpr); ok && len(tuple.Elts) > 1 { // a tuple of the wrong length is told by its count; any other mismatch, by the assignment
+		if t, ok := want.Underlying().(*Tuple); ok && len(t.elems) != len(tuple.Elts) {
+			c.errorf(s.Return, "return has "+strconv.Itoa(len(tuple.Elts))+" values; the function returns "+want.String())
+			c.exprs(tuple.Elts)
 			return
 		}
-
-		for i, r := range s.Results {
-			op := c.expr(r, t.elems[i])
-			c.assign(op, t.elems[i], r.Pos(), "return")
-			c.returned(r, op)
-		}
 	}
+
+	op := c.expr(s.Results[0], want)
+	c.assign(op, want, s.Results[0].Pos(), "return")
+	c.returned(s.Results[0], op)
 }
 
 func (c *Checker) ifStmt(s *ast.IfStmt) bool {

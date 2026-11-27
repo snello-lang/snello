@@ -408,6 +408,10 @@ func (c *Checker) resolveFuncDecl(d *ast.FuncDecl, fn *Func) {
 		c.errorf(d.Name.Pos(), "func main must have no type parameters, no parameters and no results: the program calls it with none and reads os.Args for its arguments")
 	}
 
+	if d.Recv == nil && d.Of == nil && d.Name.Name == "init" { // nothing runs before main, and a package function of this name would read as one that does
+		c.errorf(d.Name.Pos(), "a package function cannot be named init: nothing runs before main, and the name says otherwise; give it another name and call it where it is needed, or let a package variable's initializer do the work, which runs once on the variable's first use")
+	}
+
 	if d.Body == nil {
 		switch {
 		case c.pkg.std: // the runtime defines it

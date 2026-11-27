@@ -1,0 +1,46 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a value an expression makes and lends lives to the end of its
+// statement, so a borrow kept past it is refused: the value a ?? makes
+// from an owned option, the option's moved out or the else's, and a
+// value made for a generic call whose instance takes it as a borrow,
+// pick<ref string>(owned()), whose result may be that borrow, and the
+// number an if or a match of number literals copies into its result,
+// where a returned borrow would point after the statement. Fix: keep
+// the value in a variable and lend that, or return it by value.
+
+package p
+
+func owned() string {
+	return "made here".Clone()
+}
+
+func pick<T>(c bool, a T, b T) T {
+	return if c { a } else { b }
+}
+
+func coalesced(s ref string) int {
+	var opt string? = None
+	t := "kept".Clone()
+	var r ref string = opt ?? t // ERROR "cannot keep a borrow of a temporary: the ??'s value is dropped when the statement ends"
+	return len(r) + len(s)
+}
+
+func numbered(c bool) ref int {
+	return if c { 1 } else { 41 } // ERROR "cannot return a borrow of a temporary: the if's value is dropped when the statement ends"
+}
+
+func nested(c bool, d bool) ref int {
+	return if c { (if d { 1 } else { 2 }) } else { 3 } // ERROR "cannot return a borrow of a temporary: the if's value is dropped when the statement ends"
+}
+
+func counted(n int) ref int {
+	return match n { 0 => 100, _ => 300 } // ERROR "cannot return a borrow of a temporary: the match's value is dropped when the statement ends"
+}
+
+func generic(p ref string) int {
+	r := pick<ref string>(true, ref p, owned()) // ERROR "cannot keep a borrow of a temporary: owned() is dropped when the statement ends"
+	return len(r)
+}

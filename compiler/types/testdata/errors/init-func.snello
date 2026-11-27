@@ -1,0 +1,14 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: nothing runs before main, so no package function may be named
+// init, a name that says it runs first: it is refused in every
+// package, called or not. Fix: give it another name and call it where
+// it is needed, or let a package variable's initializer do the work,
+// which runs once on the variable's first use.
+
+package p
+
+func init() { // ERROR "a package function cannot be named init: nothing runs before main"
+}

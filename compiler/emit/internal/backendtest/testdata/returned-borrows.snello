@@ -1,0 +1,142 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Returned borrows inside literals: a borrow of a parameter leaves its
+// function inside a tuple, a struct, an option of a tuple and a tuple
+// within a tuple, and reads what the caller still owns; a tuple of a
+// local's borrow is used within its function; an owned clone is
+// returned in a tuple; and a closure that copies an int leaves inside a
+// tuple as alone; a count of a local beside a borrow of a parameter, the
+// count no borrow; and a slice through a local that holds a borrow of a
+// parameter, alone, in a tuple and through a field; and a ref slot
+// filled by an if and a match whose branches each lend a local; a
+// branch that lends a parameter beside a literal, a slice of it or a
+// match arm that panics; and a coalesce whose option holds a borrow,
+// given a literal or a borrow; an if and a match whose every branch is a
+// literal or a constant, given as a borrow, a nested if and match of
+// string literals among them; and a generic call whose
+// instance takes and gives borrows. The borrows of
+// locals the same literals would carry out are refused,
+// testdata/errors/literal-borrow-escapes.snello.
+
+package main
+
+import "fmt"
+
+struct Span {
+	text ref string
+	at   int
+}
+
+func tupleOf(s ref string) (ref string, int) {
+	return (s[0:4], 1)
+}
+
+func spanOf(s ref string) Span {
+	return Span{text: s[2:6], at: 2}
+}
+
+func someOf(s ref string) (ref string, int)? {
+	return Some((s[0:3], 7))
+}
+
+func nestedOf(s ref string) ((ref string, int), int) {
+	return ((s[4:8], 4), 8)
+}
+
+func owned() (string, int) {
+	s := "owned text".Clone()
+	return (s.Clone(), 5)
+}
+
+func doubler() (func() int, int) {
+	n := 21
+	return (func() int { return n * 2 }, 1)
+}
+
+func counted(p ref string) (ref string, int) {
+	s := "abcabc".Clone()
+	return (p, s.Count("a"))
+}
+
+func through(p ref string) (ref string, int) {
+	r := p
+	return (r[1:3], 1)
+}
+
+func fromField(p ref string) ref string {
+	sp := Span{text: p, at: 0}
+	return sp.text[0:2]
+}
+
+func chosenOf(c bool, p ref string) Span {
+	return Span{text: if c { "literal" } else { p[1:3] }, at: 11}
+}
+
+func armOf(n int, p ref string) Span {
+	return Span{text: match n { 0 => p, 1 => p[0:1], _ => panic("no arm for it") }, at: 12}
+}
+
+func orElse(a ref string?) Span {
+	return Span{text: a ?? "default", at: 13}
+}
+
+const Greeting = "hello"
+
+func literalOf(c bool) ref string {
+	return if c { "literal" } else { Greeting }
+}
+
+func countOf(n int) ref string {
+	return match n { 0 => "zero", _ => "many" }
+}
+
+func nestedText(c bool, d bool, n int) ref string {
+	return if c { (if d { "inner" } else { match n { 0 => "nil", _ => "some" } }) } else { "outer" }
+}
+
+func pick<T>(c bool, a T, b T) T {
+	return if c { a } else { b }
+}
+
+func main() {
+	s := "abcdefgh".Clone()
+	a, n := tupleOf(s)
+	fmt.Println(a, n)
+	sp := spanOf(s)
+	fmt.Println(sp.text, sp.at)
+	if t := someOf(s) {
+		b, m := t
+		fmt.Println(b, m)
+	}
+
+	inner, k := nestedOf(s)
+	c, j := inner
+	fmt.Println(c, j, k)
+	local := (s[6:8], 3)
+	d, i := local
+	fmt.Println(d, i)
+	o, p := owned()
+	fmt.Println(o, p)
+	f, q := doubler()
+	fmt.Println(f(), q)
+	e, g := counted(s)
+	fmt.Println(e, g)
+	h, k2 := through(s)
+	fmt.Println(h, k2, fromField(s))
+	t := "zz".Clone()
+	chosen := Span{text: if len(t) > 1 { ref s } else { ref t }, at: 9}
+	matched := Span{text: match len(t) { 2 => ref t, _ => ref s }, at: 10}
+	fmt.Println(chosen.text, chosen.at, matched.text, matched.at)
+	x, y := chosenOf(true, s), chosenOf(false, s)
+	fmt.Println(x.text, y.text, armOf(0, s).text, armOf(1, s).text)
+	var none ref string? = None
+	u := orElse(none)
+	w := Span{text: none ?? s, at: 14}
+	fmt.Println(u.text, w.text, u.at, w.at)
+	fmt.Println(literalOf(true), literalOf(false), countOf(0), countOf(3))
+	fmt.Println(nestedText(true, true, 0), nestedText(true, false, 0), nestedText(true, false, 1), nestedText(false, true, 0))
+	other := "other".Clone()
+	fmt.Println(pick<ref string>(true, ref s, ref other), pick<ref string>(false, ref s, ref other))
+}

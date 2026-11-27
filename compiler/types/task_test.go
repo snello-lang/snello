@@ -17,7 +17,7 @@ import (
 // load task from says so.
 func TestSpawnHandle(t *testing.T) {
 	const prelude = "package main\nimport \"rc\"\n" +
-		"func n() int { return 1 }\nfunc nothing() {}\nfunc two() (int, string) { return 1, \"a\".Clone() }\n" +
+		"func n() int { return 1 }\nfunc nothing() {}\nfunc two() (int, string) { return (1, \"a\".Clone()) }\n" +
 		"func shared() rc.Rc<int> { return rc.New(1) }\nfunc lent(s ref string) ref string { return s }\n"
 	for _, tt := range []struct {
 		src  string

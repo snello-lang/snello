@@ -1,0 +1,15 @@
+abcd 1
+cdef 2
+abc 7
+efgh 4 8
+gh 3
+owned text 5
+42 1
+abcdefgh 2
+bc 1 ab
+abcdefgh 9 zz 10
+literal bc abcdefgh a
+default abcdefgh 13 14
+literal hello zero many
+inner nil some outer
+abcdefgh other

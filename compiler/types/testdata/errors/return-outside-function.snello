@@ -1,0 +1,23 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a return ends a function, so a package variable's initializer,
+// which runs in none, has none to give: not after ??, in a match arm or
+// in an if's branch. Fix: give the variable a value on every path, or
+// make it a function that returns.
+
+package p
+
+func pick() int? {
+	return None
+}
+
+var x = pick() ?? return // ERROR "return is only allowed inside a function"
+
+var y = match 1 {
+	1 => 2,
+	_ => return, // ERROR "return is only allowed inside a function"
+}
+
+var z = if true { 1 } else { return } // ERROR "return is only allowed inside a function"

@@ -1,0 +1,22 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a tuple holds its elements as a struct holds its fields, so a
+// closure that borrows a local cannot be put in one, which would carry
+// the borrow past the local. Fix: let the closure take what it needs
+// as an argument, or copy a Copy value it reads.
+
+package p
+
+func counter() (func() string, int) {
+	s := "hello, world".Clone()
+	return (func() string { return s.Clone() }, 1) // ERROR "closure captures s by borrow and cannot be stored"
+}
+
+func local() int {
+	s := "hello, world".Clone()
+	t := (func() int { return len(s) }, 1) // ERROR "closure captures s by borrow and cannot be stored"
+	f, n := t
+	return f() + n
+}

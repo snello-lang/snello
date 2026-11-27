@@ -1,0 +1,58 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Tuple types: a function returns a tuple literal as a type declared
+// over a tuple, plain and generic, and its caller takes the value apart
+// as the tuple the type stands for; and a tuple literal's element is
+// converted to its slot as a struct field's value is, a chan int to a
+// <-chan int and a struct to a trait it implements.
+
+package main
+
+import "fmt"
+
+type Pair (int, string)
+
+type Two<A, B> (A, B)
+
+trait Shape {
+	func (s ref Self) Area() f64
+}
+
+struct Square impl Shape {
+	side f64
+}
+
+func (s ref Square) Area() f64 {
+	return s.side * s.side
+}
+
+func pair() Pair {
+	return (1, "one")
+}
+
+func two() Two<int, string> {
+	return (2, "two")
+}
+
+func feed() (<-chan int, int) {
+	ch := make(chan int, 1)
+	ch <- 7
+	return (ch, 3)
+}
+
+func shape() (Shape, int) {
+	return (Square{side: 3.0}, 4)
+}
+
+func main() {
+	a, b := pair()
+	c, d := two()
+	fmt.Println(a, b, c, d)
+	r, n := feed()
+	v := <-r ?? 0
+	fmt.Println(v, n)
+	s, m := shape()
+	fmt.Println(s.Area(), m)
+}

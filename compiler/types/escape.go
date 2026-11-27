@@ -423,7 +423,7 @@ func (c *Checker) returnEscapes(op operand, pos token.Pos) {
 
 	if holdsBorrow(c.sig.results) {
 		if tmp := c.borrowOfTemporary(e); tmp != nil {
-			c.errorf(pos, "cannot return a borrow of a temporary: "+exprText(tmp)+" is dropped when the statement ends")
+			c.errorf(pos, "cannot return a borrow of a temporary: "+temporaryText(tmp)+" is dropped when the statement ends")
 			return
 		}
 
@@ -451,30 +451,27 @@ func (c *Checker) source(e ast.Expr, pos token.Pos) {
 	case *ast.TryExpr:
 		c.source(e.X, pos)
 	case *ast.SliceExpr:
-		c.sourceVar(e.X, pos, true)
+		c.sourceVar(e, pos, true) // a view of the place sliced: through a borrow it holds, the borrow's source
 	case *ast.TupleExpr:
-		for _, elt := range e.Elts {
-			if !c.carriesBorrow(elt) {
-				continue
-			}
-
-			c.source(elt, pos)
+		for i, elt := range e.Elts {
+			c.sourceSlot(elt, c.slotType(e, i, nil), pos)
 		}
 	case *ast.CompositeLit:
-		for _, elt := range e.Elts {
+		for i, elt := range e.Elts {
+			var key ast.Expr
 			if kv, ok := elt.(*ast.KeyValueExpr); ok {
-				elt = kv.Value
+				key, elt = kv.Key, kv.Value
 			}
 
-			if !c.carriesBorrow(elt) {
-				continue // a count beside a borrow in a literal
-			}
-
-			c.source(elt, pos)
+			c.sourceSlot(elt, c.slotType(e, i, key), pos)
 		}
 	case *ast.CallExpr:
-		if _, ok := c.calleeOf(e).(*Variant); ok {
-			for _, arg := range e.Args { // Some(ref n.val)
+		if v, ok := c.calleeOf(e).(*Variant); ok {
+			for i, arg := range e.Args { // Some(ref n.val)
+				if i < len(v.fields) && isBorrow(v.fields[i].typ) && !isBorrow(c.info.Types[arg]) {
+					c.sourceVar(arg, pos, true) // Holder(s) for a ref field: an implicit ref s
+				}
+
 				c.source(arg, pos)
 			}
 		} else if src := c.callSource(e); src != nil && !c.passed[e].only {
@@ -574,7 +571,7 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 		return // an implementation keeping its trait's word returns only what is stored behind its parameters (word.go)
 	}
 
-	throughBorrow := kind == placeBorrowed || kind == placeIndexed && isBorrow(v.typ) // ref ys[0], ys a borrow: what ys borrows, not ys
+	throughBorrow := kind == placeBorrowed || kind == placeIndexed && throughBorrowAt(p) // ref ys[0] or r[0:2], ys or r a borrow, sp.text[0:2] a borrow in a field: what it borrows, not the local
 	if lent && !throughBorrow && !c.isParam(v) {
 		c.errorf(pos, "cannot return a borrow of local "+v.name)
 		return
@@ -666,11 +663,92 @@ func lentReturn(v *Var) string {
 	return "cannot return a borrow of " + v.name + ": the arguments of a variadic ...ref parameter are lent for the call alone"
 }
 
+// sourceSlot checks the element e of a literal, which fills a slot of
+// type slot: the borrow it brings in is the slot's. A slot of a
+// concrete type that holds no borrow, a count beside a borrow, brings
+// in none, whatever e is; a ref slot given an owned value lends it, as
+// ref e would; any other is checked as e is. A slot of a type
+// parameter's type, or none known, falls back to what e itself carries.
+// An if or a match fills the slot from each branch, each checked so.
+func (c *Checker) sourceSlot(e ast.Expr, slot Type, pos token.Pos) {
+	if eachBranch(e, func(v ast.Expr) { c.sourceSlot(v, slot, pos) }) { // a value chosen at run time fills the slot from each of its branches
+		return
+	}
+
+	switch {
+	case slot == nil || holdsTypeParam(slot):
+		if c.carriesBorrow(e) {
+			c.source(e, pos)
+		}
+	case !holdsBorrow(slot):
+	case isBorrow(slot) && !isBorrow(c.info.Types[e]) && !c.optionOfBorrow(e):
+		c.sourceVar(e, pos, true) // Span{text: s}, s owned, a struct holding a borrow among them: an implicit ref s
+	default:
+		c.source(e, pos)
+	}
+}
+
+// optionOfBorrow reports whether e is an option or a result of a borrow,
+// the left side of a ?? whose value fills a ref slot: what it holds is
+// a borrow, checked as it is, not an owned value lent.
+func (c *Checker) optionOfBorrow(e ast.Expr) bool {
+	switch t := c.info.Types[e].(type) {
+	case *Option:
+		return isBorrow(t.elem)
+	case *Result:
+		return isBorrow(t.val)
+	}
+
+	return false
+}
+
+// slotType returns the type of what the i-th element of the literal x
+// is given to: the field key names, or the i-th, a slice's or an
+// array's element, a map's value or a tuple's i-th element; nil when
+// the literal's type is not known. The escape check and the lowering
+// decide what an element brings in by it.
+func (c *Checker) slotType(x ast.Expr, i int, key ast.Expr) Type {
+	if id, ok := key.(*ast.Ident); ok {
+		if f, ok := c.info.Uses[id].(*Var); ok && f.field {
+			return f.typ // a struct's field; a map's key is a value, which says nothing of the slot
+		}
+	}
+
+	t := c.info.Types[x]
+	if t == nil {
+		return nil
+	}
+
+	switch u := t.Underlying().(type) {
+	case *Struct:
+		if i < len(u.fields) {
+			return u.fields[i].typ
+		}
+	case *Slice:
+		return u.elem
+	case *Array:
+		return u.elem
+	case *Map:
+		return u.value
+	case *Tuple:
+		if i < len(u.elems) {
+			return u.elems[i]
+		}
+	}
+
+	return nil
+}
+
 // carriesBorrow reports whether an operand of a literal can bring a
 // borrow into it: anything but a place whose type holds none, such as
 // an int beside a borrow. A place is read for the borrow it holds, so
-// a value is only what the place's type says.
+// a value is only what the place's type says; a slice of a place,
+// s[0:4], is a borrow of it whatever its type holds.
 func (c *Checker) carriesBorrow(e ast.Expr) bool {
+	if _, ok := unparen(e).(*ast.SliceExpr); ok {
+		return true
+	}
+
 	p, kind := c.placeOf(e)
 	return kind == notPlace || holdsBorrow(placeType(p))
 }
@@ -699,6 +777,40 @@ func placeType(p place) Type {
 	}
 
 	return t
+}
+
+// throughBorrowAt reports whether the value at p is reached through a
+// borrow: the variable is one, or a field on the path to the value is,
+// so that what is indexed or sliced there is what the borrow lends, not
+// the local.
+func throughBorrowAt(p place) bool {
+	t := p.v.typ
+	if isBorrow(t) {
+		return true
+	}
+
+	if p.path == "" {
+		return false
+	}
+
+	for _, name := range strings.Split(p.path, ".") {
+		s, ok := stripRef(t).Underlying().(*Struct)
+		if !ok {
+			return false
+		}
+
+		f := fieldNamed(s.fields, name)
+		if f == nil {
+			return false
+		}
+
+		t = f.typ
+		if isBorrow(t) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // isParam reports whether v is the receiver or a parameter of the

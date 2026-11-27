@@ -45,6 +45,7 @@ func (c *Checker) typeMatch(e *ast.MatchExpr, expected Type) operand {
 		c.closeScope()
 	}
 
+	c.lentBranches(e, result, "match") // a match on a type gives a borrow from every arm, as any match does
 	return result
 }
 

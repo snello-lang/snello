@@ -25,6 +25,15 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | A constant is computed by the compiler: from literals, constants, operators and conversions between number types, in its type's arithmetic, with no overflow, division by zero or fraction lost, and from no constant that leads back to it | const-not-constant, const-overflows, const-cycle |
 | A package variable's inferred type is known once its declaration is checked, in the order of the files | global-before-type |
 | A package variable is made on first use, so one named `_`, which nothing can use, is refused | blank-package-var |
+| `panic` takes one message, a string, printed as the program ends; a value of another type is refused, not formatted | panic-not-string |
+| Nothing runs before `main`, so no package function may be named `init`, a name that says it runs first | init-func |
+| A borrow of a local leaves its function in no tuple, struct, option or result, nested or chosen by a branch; a slice of a local is a borrow of it | literal-borrow-escapes |
+| A tuple holds its elements as a struct holds its fields: a closure that borrows a local cannot be put in one | tuple-closure-stored |
+| A return ends a function, so no package variable's initializer holds one, after `??`, in a match arm or in a branch | return-outside-function |
+| An if or a match with an owned branch moves the chosen value into a temporary, which no `ref` slot may keep or return; lend each branch instead | branch-temporary |
+| An if or a match that gives a borrow gives one from every branch: an owned branch would be moved into a borrow no one owns and never dropped | owned-branch-lent |
+| A value an expression makes and lends, a `??` of an owned option, an argument a generic instance takes as a borrow, or a number an if of number literals copies, lives to its statement's end | lent-temporary |
+| An assignment writes a place, never a value an expression makes: a call's result, a `??` or an if | assign-to-value |
 | The blank name drops what it is given, so a value made there whose `Drop` ends what it borrows, a lock's guard, `var _ = m.Lock()`, is refused | blank-guard |
 | A variadic `...T` parameter owns its arguments, a closure that borrows none of them; a `...ref T` one lends them for the call alone, no borrow of them returned; `...` passes a slice to a variadic parameter of the program's alone; a deferred call holds what its variadic arguments lend | variadic-moved, variadic-kept, variadic-lent, variadic-spread, variadic-deferred |
 | A field's default is a constant expression of the field's type, one for each name, none for a field of a type parameter, an embedded one or a trait's; a struct that declares a default has no zero value, so a declaration without a value, `make` and a map read are refused, and a positional literal leaves out only the last fields, those with a default | default-not-constant, default-no-zero |

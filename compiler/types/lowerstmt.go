@@ -299,22 +299,11 @@ func (l *lowering) deferStmt(s *ast.DeferStmt) {
 
 func (l *lowering) returnStmt(s *ast.ReturnStmt) {
 	start := len(l.argStack)
-	switch {
-	case len(s.Results) == 1:
+	if len(s.Results) == 1 { // the parser gives a return one value at most, several being one tuple
 		l.argStack = append(l.argStack, l.value(s.Results[0], l.results))
-	case len(s.Results) > 1:
-		tuple, _ := l.results.(*Tuple)
-		for i, r := range s.Results {
-			var w Type
-			if tuple != nil && i < len(tuple.elems) {
-				w = tuple.elems[i]
-			}
-
-			l.argStack = append(l.argStack, l.value(r, w))
-		}
 	}
 
-	for i, v := range l.argStack[start:] { // one return per value, each with its expression: what each lets out is checked by it
+	for i, v := range l.argStack[start:] { // the return's one value, with its expression: what it lets out is checked by it
 		l.take(v)
 		l.emit(Instr{Op: OpReturn, Args: l.args(v), Expr: s.Results[i], Pos: s.Return})
 	}
