@@ -1,0 +1,9 @@
+# Copyright 2026 The Snello Programming Language. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+# Who is asked to review a pull request, by the files it changes: the
+# maintainer, for every file. The branch rule does not wait on that
+# review, so a pull request of the maintainer's own is not held for an
+# approval its author cannot give.
+* @Tochemey
