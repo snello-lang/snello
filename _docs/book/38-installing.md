@@ -45,7 +45,7 @@ Every release on the [Releases page](https://github.com/snello-lang/snello/relea
 | Windows, arm64 | `snello-VERSION-windows-arm64.zip` |
 
 1. **Download** the archive, and from the same release `SHA256SUMS` and `SHA256SUMS.sigstore.json`, into one directory. Download with `curl` or `gh` rather than a browser: macOS marks what a browser downloads as quarantined and refuses to run it until the binaries are signed, which `xattr -d com.apple.quarantine snello` undoes.
-2. **Check it.** `sha256sum -c --ignore-missing SHA256SUMS`, `shasum -a 256` on macOS, says the archive is the one the release lists. With [cosign](https://github.com/sigstore/cosign) 3 or later, `cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/snello-lang/snello/\.github/workflows/release\.yml@refs/tags/v' SHA256SUMS` says the list was signed by this repository's release workflow and nothing else; with the [GitHub CLI](https://cli.github.com/), `gh attestation verify snello-VERSION-linux-amd64.tar.gz --repo snello-lang/snello` says the workflow on that commit built the archive. The release's notes carry the same lines and every archive's checksum.
+2. **Check it.** `sha256sum -c --ignore-missing SHA256SUMS`, `shasum -a 256` on macOS, says the archive is the one the release lists. With [cosign](https://github.com/sigstore/cosign) 3 or later, `cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/snello-lang/snello/\.github/workflows/release\.yml@refs/tags/v' SHA256SUMS` says the list was signed by this repository's release workflow and nothing else; with the [GitHub CLI](https://cli.github.com/), `gh attestation verify snello-VERSION-linux-amd64.tar.gz --repo snello-lang/snello` says the workflow on that commit built the archive, and the same with `--predicate-type https://spdx.dev/Document/v3` says the workflow attested an SBOM in SPDX 3.0.1 to that archive; the SBOM it vouches for is the one inside the attestation, which `--format json --jq '.[0].verificationResult.statement.predicate'` prints, and `snello-VERSION-linux-amd64.spdx.json` beside the archive is the same document. The release's notes carry the same lines and every archive's checksum.
 3. **Unpack it and put `snello` on your path.** Linux and macOS: `tar -xzf snello-VERSION-linux-amd64.tar.gz`, then `mv snello-VERSION-linux-amd64/snello ~/.local/bin/`, or any directory on your path. Windows: unzip the archive and add its folder to your `Path`, through Settings, or `setx Path "%Path%;C:\path\to\snello-VERSION-windows-amd64"` and a new terminal.
 4. **Install clang** as the next section says, and run `snello doctor`.
 
@@ -96,6 +96,39 @@ snello 0.1.0 (8477985) stable darwin/arm64
 
 A release is a tag `vX.Y.Z` with its archives on the Releases page; a pre-release, `0.1.0-alpha.1`, is one on the way to the version it names, marked as such on the page and never the latest release, so the script and `go install …@latest` take it only while no release exists yet, or when named. A module's `snello` line says which release it was written for, and a pre-release of that version compiles it; [chapter 2](02-getting-started.md) has the module file.
 
+## What is supported
+
+| Platform | Archive | Tier | Oldest system its programs run on |
+|---|---|---|---|
+| Linux, x86-64 | `linux-amd64` | 1 | kernel 5.4 with glibc 2.29 |
+| Linux, arm64 | `linux-arm64` | 1 | kernel 5.4 with glibc 2.29 |
+| macOS, Apple silicon | `darwin-arm64` | 1 | macOS 14.4 |
+| macOS, Intel | `darwin-amd64` | 1 once its tests pass on every change; its archive is smoke-tested before a release as tier 1's are | macOS 14.4 |
+| Windows, x86-64 | `windows-amd64` | 1 | Windows 10, Windows Server 2016 |
+| Windows, arm64 | `windows-arm64` | 2 | Windows 10, Windows Server 2016 |
+
+A tier-1 platform is tested on every change, a failure blocks the change, and a release whose archive fails its smoke test on it is not published; a tier-2 platform's failure is fixed before the next release, and its archive's tier is named in the release notes. [Chapter 34](34-platforms.md) says what each tier promises and why each system's oldest version is the one it is. The `snello` binary itself is a static program and runs on any Linux, musl's included; the column is about the programs it builds.
+
+A build needs **clang 15 or later** beside the binary, as [the section above](#what-a-build-needs-beside-the-binary) says, and `snello doctor` checks it by compiling a line of what Snello writes rather than reading a version number.
+
+**The releases that get fixes** are the latest two minor releases: a fix lands in a patch release of the latest, and of the one before it when it matters there, security fixes in both on the same day. An older release gets none, and a pre-release none: its fixes go into the next pre-release or release. [SECURITY.md](../../SECURITY.md) says how to report a vulnerability.
+
+**A `0.x` release may break programs.** Until `1.0.0`, a minor release, or a pre-release on the way to one, may change the language, the library or the command for every module, so that a program needs changing; its release notes say what changed and what to write instead, under **Breaking changes**, before anything else. A module's `snello` line names the release it was written for, and a compiler older than that release refuses the module and says to install a newer one; the line is also what lets a later release tell which modules were written before a change. From `1.0.0` on, a program written for `1.x` builds with every later `1.y`.
+
 ## Not there yet
 
 Homebrew and winget packages, and a container image, come after the first release; until then the script is the way to keep current. The binaries are not yet signed with an Apple Developer ID or an Authenticode certificate, which is why a browser download is quarantined on macOS and warned about on Windows while the script's and `curl`'s are not.
+
+## For maintainers: making a release
+
+A release is a decision, made by a maintainer and by nothing else: no push, pull request or schedule releases anything. [`release/README.md`](../../release/README.md) is the procedure, step by step with the reason for each step, and the [distribution design note](../design/14-distribution.md) the decisions behind it; in short:
+
+1. **Prepare it in a pull request.** On a branch from `main`, `make release-prepare VERSION=0.2.0` writes the version into `compiler/version/version.go`, the release's notes from the commits since the last release into `changelogs/0.2.0.md`, and their line at the top of `CHANGELOG.md`. Read the notes and keep what reads well; a change that breaks programs goes under **Breaking changes**, written by hand, with what to write instead. Merge the pull request like any other.
+2. **Try it.** Start the **Release** workflow by hand from the Actions page, on `main`: a dry run builds, checks and smoke-tests everything a tag would, runs the install scripts against the latest release, and publishes nothing.
+3. **Push the tag** on the merge commit: `git tag -a v0.2.0 -m 'snello 0.2.0' && git push origin v0.2.0`. That is the release.
+
+The tag starts `release.yml`, which builds the six archives twice, on an x86-64 and an arm64 machine, and stops if the two differ; smoke-tests each archive on its own platform, where a tier-1 failure publishes nothing; signs `SHA256SUMS` through Sigstore under the workflow's own identity, records each archive's provenance, writes an SBOM for each and attests it to its archive; publishes the release with the version's changelog file as its notes, a version with a suffix as a pre-release; and then installs the release with both scripts on Linux, macOS and Windows.
+
+**Verifying a release** is what any user can do, [by hand](#by-hand-from-a-release): `SHA256SUMS` and the archive's digest, the signature with `cosign verify-blob`, the provenance and the SBOM with `gh attestation verify`. The release's notes carry the same commands.
+
+**A release found broken after it is published** is never changed: its tag stays, its files stay, and its version is never used again, since a version names one set of bytes for good, as Semantic Versioning requires. Fix the cause on `main`, prepare a patch release, and tag it; then add a line at the top of the broken release's notes on the Releases page saying what is wrong and which release fixes it. A vulnerability is fixed as [SECURITY.md](../../SECURITY.md) says, in a private advisory published with the patch releases. A failure before publishing, a smoke test or the two builds differing, publishes nothing, and `release/README.md` says what to do for each.

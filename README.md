@@ -15,6 +15,32 @@
 
 Snello is a compiled language with Go's syntax and memory safety without a garbage collector. Every value has one owner and is freed where its owner dies; the compiler checks every use, and you never write a lifetime annotation. A program builds to one native executable, with tasks and channels on Snello's own scheduler. *Snello* is the Italian word for lean and nimble: a program carries nothing it does not need, and the language carries nothing a Go developer has to learn twice.
 
+## Install
+
+Linux and macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/snello-lang/snello/main/release/install.sh | sh
+```
+
+Windows, in PowerShell 5.1 or later:
+
+```powershell
+irm https://raw.githubusercontent.com/snello-lang/snello/main/release/install.ps1 | iex
+```
+
+The script installs the latest release, checks what it downloaded against the release's checksums, and its provenance when the GitHub CLI is signed in, and offers to install clang when a build still needs it: Snello builds through the system's **clang, version 15 or later**, which `snello doctor` checks. Every release also has an archive per platform on the [Releases page](https://github.com/snello-lang/snello/releases), and to work on the compiler, `go build -o bin/snello ./cmd/snello` in a clone builds it with Go alone. [Chapter 38](_docs/book/38-installing.md) has every way to install, upgrade and uninstall, how to verify a download, and the platforms and releases that are supported.
+
+Then:
+
+```sh
+snello new hello
+cd hello
+snello run .
+```
+
+[Chapter 2](_docs/book/02-getting-started.md) takes it from there, and [chapter 32](_docs/book/32-the-snello-command.md) has every command.
+
 ## Features
 
 ### The language
@@ -84,36 +110,13 @@ The [VS Code extension](https://github.com/snello-lang/vscode-extension) starts 
 
 Performance is measured against Go on every pull request: the same programs in both languages, timed on x86-64 and arm64. The latest run's table is in the `bench` job's summary, and `SNELLO_BENCH=1 go test ./bench -run TestBenchmarks -v` prints any machine's own.
 
-## Quick start
-
-Linux and macOS:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/snello-lang/snello/main/release/install.sh | sh
-```
-
-Windows, in PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/snello-lang/snello/main/release/install.ps1 | iex
-```
-
-Then:
-
-```sh
-snello new hello
-cd hello
-snello run .
-```
-
-The script installs the latest release, checks what it downloaded, and offers to install clang when a build still needs it. [Chapter 38](_docs/book/38-installing.md) has every way to install, [chapter 2](_docs/book/02-getting-started.md) takes it from there, and [chapter 32](_docs/book/32-the-snello-command.md) has every command.
-
 ## Documentation
 
 - [The book](_docs/book/): the language, one feature per chapter, from [the introduction](_docs/book/01-introduction.md).
 - [The design](_docs/design/): every decision behind the language and the reasoning for it.
 - [Examples](examples/): programs that build and run, and programs that break each rule with the message the compiler gives.
 - `snello doc -http`: the standard library's documentation, and your module's, in a browser.
+- [Security](SECURITY.md): how to report a vulnerability privately, and the releases that get fixes.
 
 ## Contributing
 

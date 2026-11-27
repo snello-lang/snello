@@ -393,3 +393,13 @@ Unchanged: the names and the arguments of `math`'s functions and their special c
 | `go doc strings.Builder` | `snello doc strings.Builder`, whose signatures show how each argument is passed, `ref`, `mut` or by value |
 | `go doc Reader` prints the first package it finds with the name | `snello doc Reader` names every package that has it, `bufio, io and strings`, and a package settles it |
 | A type's page cannot say which interfaces it satisfies | A type's declaration names the traits it implements, and a trait's page lists the types that implement it |
+
+## Chapter 38: Installing Snello
+
+| In Go | In Snello |
+|---|---|
+| An archive or an installer per platform from go.dev/dl, its SHA256 on the page | The one-line install script, which checks the archive against the release's `SHA256SUMS`, or an archive per platform from the Releases page, with the list signed through Sigstore and each archive's provenance attested |
+| `go install golang.org/dl/go1.x.y@latest` for another version | `SNELLO_VERSION=0.1.0` before the install line |
+| A `go` line newer than the toolchain downloads that toolchain, under `GOTOOLCHAIN=auto` | A `snello` line newer than the compiler is refused, with what to do: install that release |
+| `go version` | `snello version`, which adds the commit and the channel, `stable` for a release and `devel` for a build from source |
+| Each major release is supported until two newer ones are out | The latest two minor releases get fixes, as Go's two do, and a `0.x` minor may break programs, saying how under **Breaking changes** in its notes |

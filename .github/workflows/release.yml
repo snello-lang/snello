@@ -18,8 +18,9 @@
 # is recorded in the release notes. Only then are the archives
 # published, with SHA256SUMS signed by Sigstore under this workflow's
 # own identity, build provenance for each archive, and an SBOM for
-# each; the release's notes are the version's changelog file, then
-# each archive's tier and checksum and how to verify them.
+# each in SPDX 3.0.1, attested to its archive; the release's notes are
+# the version's changelog file, then each archive's tier and checksum
+# and how to verify them.
 name: Release
 
 on:
@@ -184,6 +185,7 @@ jobs:
             echo 'sha256sum -c --ignore-missing SHA256SUMS'
             echo "cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity-regexp '^$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/\.github/workflows/release\.yml@refs/tags/v' --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS # cosign 3 or later"
             echo "gh attestation verify snello-*-linux-amd64.tar.gz --repo $GITHUB_REPOSITORY"
+            echo "gh attestation verify snello-*-linux-amd64.tar.gz --repo $GITHUB_REPOSITORY --predicate-type https://spdx.dev/Document/v3 # its SBOM"
             echo '```'
           } >> "$notes"
           cat "$notes"
@@ -225,7 +227,47 @@ jobs:
             dist/*.zip
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       - name: Write an SBOM for each archive
-        run: for f in dist/*.tar.gz dist/*.zip; do base=${f%.tar.gz}; base=${base%.zip}; syft scan "file:$f" -o "spdx-json=$base.spdx.json" --quiet; done
+        run: for f in dist/*.tar.gz dist/*.zip; do base=${f%.tar.gz}; base=${base%.zip}; syft scan "file:$f" -o "spdx-json@3.0=$base.spdx.json" --quiet; done # SPDX 3, the 3.0.1 model
+      # Each SBOM is attested to its archive under the workflow's own
+      # identity, as the provenance is, so that `gh attestation verify
+      # ARCHIVE --predicate-type https://spdx.dev/Document/v3` checks
+      # that this workflow wrote it for that archive. The predicate is
+      # named as in-toto's SPDX 3 predicate names it, and passed whole,
+      # since the action recognises an SBOM only in SPDX 2's layout; it
+      # takes one predicate a step.
+      - name: Name the archives
+        id: archives
+        run: echo "base=dist/snello-${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.archives.outputs.base }}-linux-amd64.tar.gz
+          predicate-type: https://spdx.dev/Document/v3
+          predicate-path: ${{ steps.archives.outputs.base }}-linux-amd64.spdx.json
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.archives.outputs.base }}-linux-arm64.tar.gz
+          predicate-type: https://spdx.dev/Document/v3
+          predicate-path: ${{ steps.archives.outputs.base }}-linux-arm64.spdx.json
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.archives.outputs.base }}-darwin-amd64.tar.gz
+          predicate-type: https://spdx.dev/Document/v3
+          predicate-path: ${{ steps.archives.outputs.base }}-darwin-amd64.spdx.json
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.archives.outputs.base }}-darwin-arm64.tar.gz
+          predicate-type: https://spdx.dev/Document/v3
+          predicate-path: ${{ steps.archives.outputs.base }}-darwin-arm64.spdx.json
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.archives.outputs.base }}-windows-amd64.zip
+          predicate-type: https://spdx.dev/Document/v3
+          predicate-path: ${{ steps.archives.outputs.base }}-windows-amd64.spdx.json
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.archives.outputs.base }}-windows-arm64.zip
+          predicate-type: https://spdx.dev/Document/v3
+          predicate-path: ${{ steps.archives.outputs.base }}-windows-arm64.spdx.json
       - name: Publish the release
         # A draft until every file is up, since the creation and the
         # uploads are separate requests: a release with a file missing

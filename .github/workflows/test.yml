@@ -39,17 +39,17 @@
 name: Tests
 
 # A change that touches no code, Markdown anywhere, the design and the
-# book under _docs/, the changelogs, the release's scripts and
-# workflow, every PowerShell script, and Renovate's configuration,
+# book under _docs/, the changelogs, the release's scripts and workflow,
+# every PowerShell script, Renovate's configuration and the code owners,
 # runs none of the checks but the scripts' parse and the lints: the
 # first job lists what changed and answers whether code did, and every
 # other job runs only then. The last job, all checks, is the one the
 # branch rule requires: it waits for every other and fails when one
-# failed or was cancelled, and passes when they passed or were
-# skipped; the rule cannot name the matrix jobs, since a skipped matrix
-# job is recorded under its unexpanded name and the names the rule
-# would require never appear. The parse of every script and the lints
-# of commit messages and pull request titles run on every change.
+# failed or was cancelled, and passes when they passed or were skipped;
+# the rule cannot name the matrix jobs, since a skipped matrix job is
+# recorded under its unexpanded name and the names the rule would
+# require never appear. The parse of every script and the lints of
+# commit messages and pull request titles run on every change.
 # release/archive is Go, and counts as code.
 on:
   pull_request:
@@ -91,6 +91,7 @@ jobs:
               - '!**/*.ps1'
               - '!.github/workflows/release.yml'
               - '!.github/renovate.json'
+              - '!.github/CODEOWNERS'
 
   checks:
     name: gofmt and go vet
