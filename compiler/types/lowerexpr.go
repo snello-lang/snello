@@ -92,22 +92,7 @@ func (l *lowering) valueOf(e ast.Expr, want Type) Operand {
 	case *ast.TryExpr:
 		return l.try(x)
 	case *ast.SliceExpr:
-		if x.Low != nil {
-			l.value(x.Low, Typ[Int])
-		}
-
-		if x.High != nil {
-			l.value(x.High, Typ[Int])
-		}
-
-		p, ok := l.placeOrPart(x.X) // xs[i:j] is a borrow of xs, lent for the statement unless a call takes it
-		if !ok {
-			p = l.value(x.X, nil) // a slice of a value made here borrows the temporary that holds it
-		}
-
-		view := l.lend(p, x.X, isMut(l.typeOf(e)))
-		l.f.Temps[view.Temp].View = true
-		return view
+		return l.view(x, false, x.X.Pos())
 	}
 
 	if p, ok := l.placeOrPart(e); ok {
@@ -115,6 +100,37 @@ func (l *lowering) valueOf(e ast.Expr, want Type) Operand {
 	}
 
 	return l.made(e, nil, false)
+}
+
+// view lowers the slice expression x: its bounds, then a borrow of what
+// it slices made at pos. A view lent mut, mut xs[1:], borrows mut, so
+// that what it lends for changing is lent so where the view is made,
+// and its header, which mut points at, is a slot of the function, as
+// both backends store it: any variable may keep the view while it is
+// not written again, and nothing past the function's end.
+func (l *lowering) view(x *ast.SliceExpr, mut bool, pos token.Pos) Operand {
+	if x.Low != nil {
+		l.value(x.Low, Typ[Int])
+	}
+
+	if x.High != nil {
+		l.value(x.High, Typ[Int])
+	}
+
+	p, ok := l.placeOrPart(x.X) // xs[i:j] is a borrow of xs, lent for the statement unless a call takes it
+	if !ok {
+		p = l.value(x.X, nil) // a slice of a value made here borrows the temporary that holds it
+	}
+
+	v := l.temp(l.ref(l.typeOf(x.X), mut), !mut, x.X)
+	l.borrowInto(v, p, x.X, pos)
+	if mut {
+		l.ownBySlot(v)
+	}
+
+	l.f.Temps[v.Temp].View = true
+	l.f.Temps[v.Temp].Expr = x // the view a message names, s[1:]
+	return v
 }
 
 // placeOrPart returns the operand of a place: a variable with its path,
@@ -233,9 +249,15 @@ func (l *lowering) refOf(t Type, want *Ref) *Ref {
 // lendAs is lendAt, the borrow made of the type ref.
 func (l *lowering) lendAs(p Operand, e ast.Expr, ref *Ref, pos token.Pos) Operand {
 	tmp := l.temp(ref, true, e)
+	l.borrowInto(tmp, p, e, pos)
+	return tmp
+}
+
+// borrowInto writes the borrow of the place p into the temporary tmp.
+func (l *lowering) borrowInto(tmp, p Operand, e ast.Expr, pos token.Pos) {
+	ref := l.f.Temps[tmp.Temp].Type.(*Ref)
 	l.derives(tmp, p)
 	l.emit(Instr{Op: OpBorrow, Place: p, To: tmp, Mut: ref.mut, Expr: e, Pos: pos})
-	return tmp
 }
 
 // made writes the making of a value from its parts into a temporary,
@@ -284,7 +306,13 @@ func (l *lowering) unary(x *ast.UnaryExpr, want Type) Operand {
 			return tmp
 		}
 
-		v := l.value(x.X, nil) // a borrow of a value made here, which the statement holds until its end
+		var v Operand
+		if sl, ok := unparen(x.X).(*ast.SliceExpr); ok && x.Op == token.MUT {
+			v = l.view(sl, true, x.Pos()) // mut xs[1:]: the view lends what it slices mut, from where mut is written
+		} else {
+			v = l.value(x.X, nil) // a borrow of a value made here, which the statement holds until its end
+		}
+
 		t := l.temp(l.typeOf(x), false, x)
 		l.derives(t, v)
 		l.emit(Instr{Op: OpMake, To: t, Args: l.args(v), Expr: x, Pos: x.Pos()})

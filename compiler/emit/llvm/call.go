@@ -459,8 +459,14 @@ func (e *Emitter) packageOf(x ast.Expr) *types.PkgName {
 // conversion writes T(x): between number types a change of width
 // extends by the source's sign or truncates and a change of kind
 // rounds toward zero or converts exactly as the IR defines; between a
-// string and its bytes a copy through the runtime.
+// string and its bytes a copy through the runtime. A borrow seen as
+// another type is the borrow itself, the same words under the other
+// type's name.
 func (e *Emitter) conversion(x ast.Expr, to types.Type) value {
+	if _, view := to.(*types.Ref); view {
+		return e.expr(x)
+	}
+
 	from := lower.ValueType(e.typeOf(x))
 	switch {
 	case isString(from) && isByteSlice(to):

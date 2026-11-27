@@ -1,0 +1,76 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a value that holds a mut borrow, a borrow variable, an option,
+// a tuple or a struct of one, carries the borrow wherever it is moved,
+// so the place it borrows cannot be changed between the borrow and the
+// move: the move uses what the variable holds, as a read does, given
+// to another variable, a call, an if binding, a match, a ?? or Expect.
+// Fix: move the value before changing what it borrows, or borrow again
+// after.
+
+package p
+
+struct H {
+    r mut string
+    n int
+}
+
+func eat(s mut string) {}
+
+func eatH(h H) {}
+
+func spoil(xs mut []string) {
+    xs.Push("filler".Clone())
+}
+
+func given() {
+    xs := []string{"first".Clone()}
+    p := mut xs[0]
+    spoil(mut xs)                           // ERROR "cannot borrow xs as mut: xs is already borrowed as mut by p"
+    q := p
+    eat(q)
+}
+
+func bound() {
+    xs := []string{"first".Clone()}
+    o := Some(mut xs[0])
+    spoil(mut xs)                           // ERROR "cannot borrow xs as mut: xs is already borrowed as mut by o"
+    if s := o {
+        eat(s)
+    }
+}
+
+func matched() {
+    xs := []string{"first".Clone()}
+    o := Some(mut xs[0])
+    spoil(mut xs)                           // ERROR "cannot borrow xs as mut: xs is already borrowed as mut by o"
+    match o {
+        Some(s) => eat(s),
+        None => {},
+    }
+}
+
+func expected() {
+    xs := []string{"first".Clone()}
+    o := Some(mut xs[0])
+    spoil(mut xs)                           // ERROR "cannot borrow xs as mut: xs is already borrowed as mut by o"
+    eat(o.Expect("there"))
+}
+
+func byValue() {
+    xs := []string{"first".Clone()}
+    h := H{r: mut xs[0], n: 1}
+    spoil(mut xs)                           // ERROR "cannot borrow xs as mut: xs is already borrowed as mut by h"
+    eatH(h)
+}
+
+func apart() {
+    xs := []string{"first".Clone()}
+    t := (mut xs[0], 1)
+    spoil(mut xs)                           // ERROR "cannot borrow xs as mut: xs is already borrowed as mut by t"
+    s, n := t
+    eat(s)
+    print(n)
+}

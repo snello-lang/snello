@@ -104,8 +104,12 @@ func (e *Emitter) valueTo(x ast.Expr, want types.Type) string {
 	}
 
 	if depth(have) < depth(want) {
-		if !e.isPlace(x) { // a value built here and lent mut lives in a temporary for the statement
+		if !e.isPlace(x) { // a value built here and lent mut lives in a temporary for the statement; a view's header in a slot of the function
 			tmp := e.spill(e.expr(x), have, x.Pos())
+			if isView(x) {
+				tmp = e.slot(tmp, have, x.Pos())
+			}
+
 			if needsDrop(have) {
 				e.hold(tmp, have)
 			}
@@ -1304,8 +1308,13 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 // conversion writes T(x): a C cast between numbers, or between a
 // string and its bytes a copy, since the checker reads the operand and
 // leaves it to its owner; a temporary built for it is dropped with the
-// statement.
+// statement. A borrow seen as another type is the borrow itself, the
+// same words under the other type's name.
 func (e *Emitter) conversion(x ast.Expr, to types.Type) string {
+	if _, view := to.(*types.Ref); view {
+		return e.expr(x)
+	}
+
 	from := lower.ValueType(e.typeOf(x))
 	switch {
 	case isString(from) && isByteSlice(to):

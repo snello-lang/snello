@@ -9,7 +9,11 @@
 // slice of it is sorted, Clone when it is cloned, String through a
 // trait value's table, and Error in the chain %+v prints; and a derived
 // Error over a string, the backend's own helper, which takes the value
-// at its address, printed directly, through a trait value and by %+v.
+// at its address, printed directly, through a trait value and by %+v;
+// and a view of each type, which has the type's methods, a mut one
+// changing what it views, which passes for a read where a view of []int
+// is wanted and converts to a view of its underlying type, ref or mut,
+// in the package that declares it, and compares with a literal.
 
 package main
 
@@ -55,6 +59,31 @@ func (xs ref Ints) Clone() Ints {
 	return Ints([]int{len(xs)})
 }
 
+func total(xs ref []int) int {
+	t := 0
+	for _, x := range xs {
+		t += x
+	}
+
+	return t
+}
+
+func shout(s ref string) string {
+	return s.ToUpper()
+}
+
+func bumpAll(xs mut []int) {
+	for i := 0; i < len(xs); i += 1 {
+		xs[i] += 100
+	}
+}
+
+func (xs mut Ints) Bump() {
+	for i := 0; i < len(xs); i += 1 {
+		xs[i] += 1
+	}
+}
+
 func main() {
 	n := Name("seven c")
 	fmt.Println(n)
@@ -87,4 +116,11 @@ func main() {
 	var e Error = Code("E7")
 	fmt.Println(e)
 	fmt.Printf("%+v\n", Code("E9"))
+
+	zs := Ints([]int{1, 2, 3})
+	(mut zs[1:]).Bump()
+	fmt.Println(zs[1:].String(), total(zs[1:]), total(ref zs), []int(ref zs))
+	bumpAll([]int(mut zs[1:]))
+	w := n[2:5]
+	fmt.Println(w.String(), w == "ven", shout(string(w)), shout(string(ref n)), zs)
 }

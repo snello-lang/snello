@@ -42,13 +42,24 @@ const (
 	evReturn                 // the return i lends a borrow its function's source must hold
 )
 
+// A useKind says how a variable's first use found for a message reads
+// what it holds.
+type useKind uint8
+
+const (
+	usedPlainly    useKind = iota // read, or lent
+	usedByDrop                    // by its Drop, where it is dropped
+	usedByReplaced                // by the Drop of the value it is given another value in place of
+)
+
 // A flowEvent is one thing a block does, in the order it does them.
 type flowEvent struct {
-	kind flowKind
-	v    *Var
-	path string
-	i    int
-	pos  token.Pos
+	kind     flowKind
+	replaced bool // a use by the Drop of the value v is given another value in place of
+	v        *Var
+	path     string
+	i        int
+	pos      token.Pos
 }
 
 // A flowBlock is a straight run of events and the blocks control may
@@ -133,6 +144,13 @@ type flowError struct {
 	pos    token.Pos
 	msg    string
 	access bool
+	kept   bool // a borrow kept past the drop the error's seq is of
+	held   bool // ... naming the holder that keeps it
+	lent   bool // ... lent for a call, a copy of what a holder holds
+
+	returned  bool // a borrow a return gives out of what it may not
+	stored    *Var // the parameter a borrow is stored in, where the caller cannot follow it
+	temporary bool // ... a borrow of a temporary, a mut view's header, stored with what it lends
 }
 
 // A bitset is a set of small integers.
@@ -157,6 +175,8 @@ type flow struct {
 	outside      map[*Var]*Var // what the caller owns behind each parameter that carries a borrow, and the parameter
 	held         map[*Var]bool // of those, each that stands for a borrow a parameter taken by value holds, in a body that keeps a trait's word (word.go)
 	temporaries  []*Var        // the holders standing for temporaries, which a returned borrow may not be of
+	slots        []*Var        // ... those of them that are mut views' headers, slots of the function
+	loopHolders  []*Var        // the holders standing for range loops, which hold what they range over for every pass
 	goneReported []*Var        // the variables a borrow kept past whose drop was refused, which a copy lent for a call reports no more
 	parent       *flow         // for a closure's body, the graph of the body it is written in
 	loops        []loopSpan    // the blocks of each loop, for a message: a use reached by coming back round the loop is in its next pass
@@ -200,7 +220,7 @@ func (c *Checker) freeFlow(f *flow) {
 	f.loans, f.accesses, f.drops, f.copies, f.rets, f.errs = f.loans[:0], f.accesses[:0], f.drops[:0], f.copies[:0], f.rets[:0], f.errs[:0]
 	f.loops, f.seq = f.loops[:0], 0
 	f.deferred, f.parent, f.outside, f.held, f.back = f.deferred[:0], nil, nil, nil, false
-	f.temporaries, f.loopOf, f.goneReported = f.temporaries[:0], f.loopOf[:0], f.goneReported[:0]
+	f.temporaries, f.slots, f.loopHolders, f.loopOf, f.goneReported = f.temporaries[:0], f.slots[:0], f.loopHolders[:0], f.loopOf[:0], f.goneReported[:0]
 	f.spare, f.holders = append(f.spare, f.holders...), f.holders[:0]
 	flows.Put(f)
 }
@@ -251,6 +271,12 @@ func (c *Checker) flowUse(v *Var, pos token.Pos) {
 	if t := v.typ; t == Typ[Invalid] || holdsBorrow(t) || isSignature(t) {
 		c.flowAdd(flowEvent{kind: evUse, v: v, pos: pos})
 	}
+}
+
+// flowReplacedUse records the use of v by the Drop of the value it is
+// given another value in place of, at pos, which reads what it borrows.
+func (c *Checker) flowReplacedUse(v *Var, pos token.Pos) {
+	c.flowAdd(flowEvent{kind: evUse, v: v, pos: pos, replaced: true})
 }
 
 // flowAssign records that v, or the part path of it, is given a value.
@@ -396,6 +422,21 @@ func dropRuns(t Type) bool { return holdsBorrow(t) && dropReads(t) }
 // holdsTemporary records that the holder v stands for a temporary,
 // which a returned borrow may not be of.
 func (c *Checker) holdsTemporary(v *Var) { c.flow.temporaries = append(c.flow.temporaries, v) }
+
+// holdsSlot records that the holder v of a temporary stands for a mut
+// view's header, a slot of the function, which is dropped when the
+// function returns.
+func (c *Checker) holdsSlot(v *Var) { c.flow.slots = append(c.flow.slots, v) }
+
+// temporaryEnd says where the temporary the holder v stands for is
+// dropped, for a message.
+func (c *Checker) temporaryEnd(v *Var) string {
+	if slices.Contains(c.flow.slots, v) {
+		return "when the function returns"
+	}
+
+	return "when its statement ends"
+}
 
 // newHolder makes a variable standing in the graph for what no variable
 // of the program holds, a temporary's or a loop's borrows, assigned at
@@ -561,7 +602,11 @@ func (c *Checker) solve() {
 // eachFlowError calls report with each error the body's graph found, in
 // the order the pass met what they are about, two accesses at one
 // position being one seen twice, as the operand of a borrow is read and
-// then lent: the later, more specific message wins.
+// then lent: the later, more specific message wins. A borrow kept past
+// a drop, by its holder and by a call lent what the holder holds, is
+// one refusal too: the one naming its holder wins; a mut view stored in a parameter is one,
+// named by the owner of what it lends; and a return is one, by the
+// first of the ways it reaches what it may not give out.
 func (c *Checker) eachFlowError(report func(flowError)) {
 	f := c.flow
 	slices.SortStableFunc(f.errs, func(a, b flowError) int { return a.seq - b.seq })
@@ -570,8 +615,38 @@ func (c *Checker) eachFlowError(report func(flowError)) {
 			continue
 		}
 
+		if e.kept && e.lent && c.heldKept(e.seq) || e.temporary && c.storedOwner(e, i) || e.returned && i > 0 && f.errs[i-1].returned && f.errs[i-1].seq == e.seq && f.errs[i-1].pos == e.pos {
+			continue
+		}
+
 		report(e)
 	}
+}
+
+// storedOwner reports whether the store e, the i-th refusal, of a
+// temporary's borrow into a parameter is refused already: for what the
+// temporary lends, whose owner the message names, or for another
+// temporary the stored value may be, v of one view or of the next.
+func (c *Checker) storedOwner(e flowError, i int) bool {
+	for j, o := range c.flow.errs {
+		if o.stored == e.stored && o.pos == e.pos && (!o.temporary || j < i) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// heldKept reports whether a refusal of a borrow kept past the drop seq
+// names the holder that keeps it.
+func (c *Checker) heldKept(seq int) bool {
+	for _, e := range c.flow.errs {
+		if e.seq == seq && e.held {
+			return true
+		}
+	}
+
+	return false
 }
 
 // liveAtExit reports whether v outlives the body: a variable from
@@ -928,7 +1003,7 @@ func (c *Checker) checkGone(li int, dropped, reported bitset) {
 	f.goneReported = append(f.goneReported, b.v)
 	for _, d := range f.drops {
 		if d.v == b.v {
-			f.errs = append(f.errs, flowError{seq: d.seq, pos: b.pos, msg: "cannot keep a borrow of " + b.v.name + ": " + b.v.name + " is dropped" + dropWhere(d.why) + c.lineCol(d.pos)})
+			f.errs = append(f.errs, flowError{seq: d.seq, pos: b.pos, msg: "cannot keep a borrow of " + b.v.name + ": " + b.v.name + " is dropped" + dropWhere(d.why) + c.lineCol(d.pos), kept: true, lent: b.call})
 			return
 		}
 	}
@@ -954,7 +1029,12 @@ func (c *Checker) checkEscape(li int, reported bitset) {
 
 	if param := f.outside[b.holder]; param != nil && f.outside[b.v] != param {
 		reported.set(li)
-		f.errs = append(f.errs, flowError{seq: f.seq, pos: b.pos, msg: "cannot store a borrow of " + what + " in " + param.name + ": " + param.name + " is the caller's, and a signature cannot say that it borrows " + what})
+		why, temporary := param.name+" is the caller's, and a signature cannot say that it borrows "+what, slices.Contains(f.temporaries, b.v)
+		if temporary {
+			why = what + " is a mut view, whose header lives in this function, and " + param.name + " is the caller's"
+		}
+
+		f.errs = append(f.errs, flowError{seq: f.seq, pos: b.pos, msg: "cannot store a borrow of " + what + " in " + param.name + ": " + why, stored: param, temporary: temporary})
 		return
 	}
 
@@ -1110,10 +1190,11 @@ func (c *Checker) liveAfter(bi, ei int) bitset {
 	return live
 }
 
-// holderText names a loan's holder for a message.
+// holderText names a loan's holder for a message: "" for a holder no
+// variable is, a call's, which a message names by where it lent.
 func (c *Checker) holderText(b *borrow) string {
 	switch {
-	case b.loop, b.holder.name == "" && (c.flow == nil || !slices.Contains(c.flow.deferred, b.holder)): // a loop's holder has no name, and one copied from what the loop ranges over is still the loop's
+	case b.loop, c.flow != nil && slices.Contains(c.flow.loopHolders, b.holder): // a loop's holder has no name, and holds what it copies from what it ranges over
 		return "the range loop"
 	case c.flow != nil && slices.Contains(c.flow.deferred, b.holder):
 		return "the deferred call"
@@ -1128,16 +1209,22 @@ func (c *Checker) holderText(b *borrow) string {
 // reached straight on is not, though it stands before, as the place an
 // assignment writes, reached after its value.
 func (c *Checker) useText(b *borrow, bi, ei int) string {
-	use, drop, again := c.findUse(b, bi, ei)
+	use, by, again := c.findUse(b, bi, ei)
 	switch {
 	case slices.Contains(c.flow.deferred, b.holder):
 		return ", and the deferred call runs when the function returns"
 	case use == token.NoPos && c.liveAtExit(b.holder):
-		return ", and " + c.holderText(b) + " outlives the closure"
+		if by := c.holderText(b); by != "" {
+			return ", and " + by + " outlives the closure"
+		}
+
+		return ", and the borrow outlives the closure"
 	case use == token.NoPos:
 		return ""
-	case drop:
+	case by == usedByDrop:
 		return ", used when " + b.holder.name + " is dropped at " + c.lineCol(use) + ", by its Drop"
+	case by == usedByReplaced:
+		return ", used when " + b.holder.name + " is given another value at " + c.lineCol(use) + ", by the Drop of the one it had"
 	case again:
 		return ", used in the next pass of the loop at " + c.lineCol(use)
 	}
@@ -1151,7 +1238,7 @@ func (c *Checker) checkAccess(a *flowAccess, in, live bitset, bi, ei int) {
 	f := c.flow
 	in.each(func(li int) bool {
 		b := &f.loans[li]
-		if !b.collides(a.p, a.what) || !c.loanLive(li, live) {
+		if !b.collides(a.p, a.what) || !c.loanLive(li, live, bi, ei) {
 			return true
 		}
 
@@ -1171,7 +1258,7 @@ func (c *Checker) checkDrop(d *flowDrop, in, live bitset, reported bitset, bi, e
 	f := c.flow
 	in.each(func(li int) bool {
 		b := &f.loans[li]
-		if b.v != d.v || b.holder == d.v || reported.has(li) || !c.loanLive(li, live) {
+		if b.v != d.v || b.holder == d.v || reported.has(li) || !c.loanLive(li, live, bi, ei) {
 			return true
 		}
 
@@ -1185,40 +1272,61 @@ func (c *Checker) checkDrop(d *flowDrop, in, live bitset, reported bitset, bi, e
 
 		reported.set(li)
 		f.goneReported = append(f.goneReported, d.v)
-		msg := "cannot keep a borrow of " + d.v.name + " in " + c.holderText(b) + ": " + d.v.name + " is dropped" + dropWhere(d.why) + c.lineCol(d.pos)
-		f.errs = append(f.errs, flowError{seq: d.seq, pos: b.pos, msg: msg + c.useText(b, bi, ei)})
+		in := ""
+		if by := c.holderText(b); by != "" {
+			in = " in " + by
+		}
+
+		msg := "cannot keep a borrow of " + d.v.name + in + ": " + d.v.name + " is dropped" + dropWhere(d.why) + c.lineCol(d.pos)
+		f.errs = append(f.errs, flowError{seq: d.seq, pos: b.pos, msg: msg + c.useText(b, bi, ei), kept: true, held: true})
 		return true
 	})
 }
 
-// loanLive reports whether the loan li, in effect, is live: whether its
-// holder is. What reaches a place through a holder copied the holder's
-// loans when it did, so a holder's own liveness is all there is.
-func (c *Checker) loanLive(li int, live bitset) bool {
+// loanLive reports whether the loan li, in effect just after the event
+// ei of block bi, is live: whether its holder is, and for a loan held in
+// a part of its holder, whether some path reaches a use of the holder
+// before that part is given another value, so that c.r = grow(mut a)
+// lets go of what c.r held before grow lends a. What reaches a place
+// through a holder copied the holder's loans when it did, so the
+// holder's own liveness and the part's are all there is. A holder that
+// outlives the body is live whatever its parts are given.
+func (c *Checker) loanLive(li int, live bitset, bi, ei int) bool {
 	f := c.flow
-	return live.has(f.vars[f.loans[li].holder])
+	b := &f.loans[li]
+	if !live.has(f.vars[b.holder]) {
+		return false
+	}
+
+	if b.hpath == "" || b.loop || c.liveAtExit(b.holder) {
+		return true
+	}
+
+	use, _, _ := c.firstUse(b.holder, b.hpath, bi, ei)
+	return use != token.NoPos
 }
 
 // findUse finds the first use of the loan b's holder that some path
 // from just after the event ei of block bi reaches before the holder
-// is given another value or dropped, whether it is the holder's Drop,
-// and whether it is in a loop's next pass; none for a range loop, whose
+// is given another value or dropped, how it uses the holder, and
+// whether it is in a loop's next pass; none for a range loop, whose
 // use is its next pass. It runs only for a message.
-func (c *Checker) findUse(b *borrow, bi, ei int) (token.Pos, bool, bool) {
+func (c *Checker) findUse(b *borrow, bi, ei int) (token.Pos, useKind, bool) {
 	if b.loop {
-		return token.NoPos, false, false
+		return token.NoPos, usedPlainly, false
 	}
 
-	return c.firstUse(b.holder, bi, ei)
+	return c.firstUse(b.holder, b.hpath, bi, ei)
 }
 
 // firstUse finds the first use of v some path from just after the event
-// ei of block bi reaches before v is given another value or dropped,
-// whether it is the drop, and whether it is in a loop's next pass: the
+// ei of block bi reaches before v, or its part part when part is not
+// the whole, "", is given another value, or v is dropped, how it uses
+// v, and whether it is in a loop's next pass: the
 // path came back round a loop, to a block made no later than the one it
 // left, and the use is among that loop's blocks. A use after the loop,
 // or in the pass of an outer loop, is reached straight on.
-func (c *Checker) firstUse(v *Var, bi, ei int) (token.Pos, bool, bool) {
+func (c *Checker) firstUse(v *Var, part string, bi, ei int) (token.Pos, useKind, bool) {
 	f := c.flow
 	seen := make([]bool, len(f.blocks))
 	type at struct {
@@ -1237,11 +1345,13 @@ func (c *Checker) firstUse(v *Var, bi, ei int) (token.Pos, bool, bool) {
 			}
 
 			switch {
+			case ev.kind == evUse && ev.replaced:
+				return ev.pos, usedByReplaced, f.inLoop(q.loop, q.block)
 			case ev.kind == evUse:
-				return ev.pos, false, f.inLoop(q.loop, q.block)
+				return ev.pos, usedPlainly, f.inLoop(q.loop, q.block)
 			case ev.kind == evDrop && f.drops[ev.i].runs:
-				return f.drops[ev.i].pos, true, f.inLoop(q.loop, q.block)
-			case ev.kind == evDrop, ev.kind == evAssign && ev.path == "":
+				return f.drops[ev.i].pos, usedByDrop, f.inLoop(q.loop, q.block)
+			case ev.kind == evDrop, ev.kind == evAssign && pathWithin(part, ev.path):
 				stop = true
 			}
 
@@ -1267,7 +1377,7 @@ func (c *Checker) firstUse(v *Var, bi, ei int) (token.Pos, bool, bool) {
 		}
 	}
 
-	return token.NoPos, false, false
+	return token.NoPos, usedPlainly, false
 }
 
 // isHead reports whether block b is the head of a loop, where its passes

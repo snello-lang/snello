@@ -170,8 +170,8 @@ func assignable(op operand, t Type) bool {
 		}
 
 		if vr, ok := v.(*Ref); ok && (vr.mut || !r.mut) {
-			if Identical(vr.elem, r.elem) {
-				return true // a mut passed on as a ref
+			if Identical(vr.elem, r.elem) || !r.mut && forgets(vr.elem, r.elem) {
+				return true // a mut passed on as a ref; a declared type read as its underlying type, ref Ints as ref []int
 			}
 
 			if p, ok := vr.elem.(*Pointer); ok && Identical(p.elem, r.elem) {
@@ -187,6 +187,18 @@ func assignable(op operand, t Type) bool {
 	}
 
 	return false
+}
+
+// forgets reports whether a borrow of a value of type v passes for a
+// read as a borrow of t with nothing written: v is a declared type and
+// t its underlying type, a type of no name, as an Ints is assignable to
+// a []int, the same words in the compiled program. Only reading passes
+// so: a read cannot break what the declared type keeps; a mut borrow,
+// or a borrow seen as a declared type, is a conversion the declaring
+// package writes (viewRefused).
+func forgets(v, t Type) bool {
+	n, ok := v.(*Named)
+	return ok && !isNamed(t) && Identical(t, n.Underlying())
 }
 
 // valueType is the type an operand has when it is read as a value: a

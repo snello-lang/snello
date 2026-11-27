@@ -25,6 +25,16 @@ import (
 // says what it lends where it is stored, by its expression, so that
 // what a variable holds is decided in the form's order.
 
+// A storedFrom says where the value a store puts in its place comes
+// from, which decides how what the value lends is followed.
+type storedFrom uint8
+
+const (
+	storedValue storedFrom = iota // a value made here, or a place read whole
+	storedPart                    // a part of a temporary, an element ranged over or what a pattern binds
+	storedApart                   // a part of a place a pattern takes apart
+)
+
 // borrowPasses keeps the scratch of the borrow pass for reuse across
 // bodies and checkers, as the lowering's and the graphs are kept.
 var borrowPasses = sync.Pool{New: func() any { return new(formBorrows) }}
@@ -74,6 +84,7 @@ type formBorrows struct {
 	lent      []lentPlace // what the value last followed lends
 
 	fieldNames []string // scratch for the fields a struct literal's operands are given to
+	seenNamed  []*Named // scratch for the named types canHold has looked into
 }
 
 // formBorrows runs the borrow pass over f, the form of a body of
@@ -151,7 +162,7 @@ func (m *formBorrows) step(in *Instr) {
 		p, kind, _ := m.placeOf(in.Place)
 		if kind == notPlace {
 			if in.Place.Temp != NoTemp && m.holders[in.Place.Temp] == nil {
-				m.made(in.Place, in.Pos, false) // a value chosen by an if or a match, read where its arms join: made here
+				m.made(in.Place, in.Pos) // a value chosen by an if or a match, read where its arms join: made here
 			}
 
 			m.use(in.Place, in.Pos)
@@ -171,6 +182,7 @@ func (m *formBorrows) step(in *Instr) {
 		}
 
 		if p, kind, _ := m.placeOf(in.Place); kind == placeOwned {
+			c.flowUse(p.v, basePos(in.Expr)) // what the value holds goes with it: a use of what the variable holds, as a read is
 			c.access(in.Expr, p, moveAccess, in.Expr.Pos())
 		} else {
 			m.use(in.Place, in.Pos)
@@ -185,7 +197,7 @@ func (m *formBorrows) step(in *Instr) {
 		}
 
 		m.uses(in.Args, in.Pos)
-		m.made(in.To, in.Pos, in.Op == OpCall)
+		m.made(in.To, in.Pos)
 		if call, ok := in.Expr.(*ast.CallExpr); ok && in.Op == OpCall {
 			m.stores(call, in.Args)
 		}
@@ -196,18 +208,18 @@ func (m *formBorrows) step(in *Instr) {
 		}
 	case OpDrop:
 		if in.Place.IsTemp() {
-			if h := m.holders[in.Place.Temp]; h != nil {
-				t := &f.Temps[in.Place.Temp]
-				c.flowDrop(h, in.Pos, in.why, isBorrow(t.Type) && !t.Loop) // a borrow made here is lent until the statement drops it; a value's loans end with its last use, and a loop's holder is read at each pass
-			}
-
+			m.dropTemp(in.Place.Temp, in.Pos, in.why)
 			return
 		}
 
 		m.dropVar(f.Vars[in.Place.Var], in.Pos, in.why)
 	case OpLeave:
 		for _, a := range in.Args {
-			m.dropVar(f.Vars[a.Var], in.Pos, in.why)
+			if a.IsTemp() {
+				m.dropTemp(a.Temp, in.Pos, in.why)
+			} else {
+				m.dropVar(f.Vars[a.Var], in.Pos, in.why)
+			}
 		}
 	case OpDefer:
 		m.uses(in.Args, in.Pos)
@@ -287,7 +299,7 @@ func (m *formBorrows) returned(in *Instr) {
 	}
 
 	if tmp := m.lends(in.Args[0]); tmp != NoTemp {
-		c.errorf(pos, "cannot return a borrow of a temporary: "+temporaryText(m.form.Temps[tmp].Expr)+" is dropped when the statement ends")
+		c.errorf(pos, "cannot return a borrow of a temporary: "+temporaryText(m.form.Temps[tmp].Expr)+" is dropped "+m.droppedWhere(tmp))
 		return
 	}
 
@@ -333,8 +345,13 @@ func (m *formBorrows) borrowed(in *Instr) {
 		return
 	}
 
-	c.access(in.Expr, p, borrowAccess(in.Mut), in.Expr.Pos())
+	c.flowUse(p.v, basePos(in.Expr)) // what the variable holds is reached through the borrow, a use of it as a read is
 	h := m.holder(in.To, in.Pos, t.Named)
+	if t.Slot { // the header's slot written again, as a variable assigned: refused while an earlier borrow of it is used, unless the borrow of what the view slices is refused for it there
+		c.access(t.Expr, place{h, ""}, writeAccess, in.Expr.Pos())
+	}
+
+	c.access(in.Expr, p, borrowAccess(in.Mut), in.Expr.Pos())
 	if t.Loop {
 		p, _ = through(p, kind)
 		c.loopLoan(h, p, in.Mut, in.Pos)
@@ -466,6 +483,7 @@ func (m *formBorrows) uses(args []Operand, pos token.Pos) {
 // walks what it holds.
 func (m *formBorrows) eachPass(h *Var, pos token.Pos) {
 	fl := m.checker.flow
+	fl.loopHolders = append(fl.loopHolders, h) // named the range loop in a message
 	for _, s := range m.form.Blocks[fl.cur].Succs {
 		if m.form.Blocks[s].Head {
 			cur := fl.cur
@@ -478,15 +496,15 @@ func (m *formBorrows) eachPass(h *Var, pos token.Pos) {
 }
 
 // made gives the temporary t, filled by a make, a call or the arms of
-// an if or a match, a holder of what its value lends, when the value is or holds a borrow and a call or a statement
-// with several values takes it, or it is carried, or a binding is taken
-// from a part of it. A value taken by a call lends each source where
-// the source stands, with an access to it there when a call made the
-// value; a carried value holds what it lends where the place is stored;
-// a literal, a tuple, a variant or a closure holds what its parts lend.
-// The loans live while the temporary is used, as the loans lent for a
-// call do.
-func (m *formBorrows) made(t Operand, pos token.Pos, call bool) {
+// an if or a match, a holder of what its value lends, when the value is
+// or holds a borrow and a call or a statement with several values takes
+// it, or it is carried, or a binding is taken from a part of it. A value
+// taken by a call lends each source where the source stands, which the
+// instruction that lends it accessed; a carried value holds what it
+// lends where the place is stored; a literal, a tuple, a variant or a
+// closure holds what its parts lend. The loans live while the temporary
+// is used, as the loans lent for a call do.
+func (m *formBorrows) made(t Operand, pos token.Pos) {
 	if t.Temp == NoTemp {
 		return
 	}
@@ -505,22 +523,15 @@ func (m *formBorrows) made(t Operand, pos token.Pos, call bool) {
 	}
 
 	f := c.flow
-	first := len(f.loans)
+	first, firstCopy := len(f.loans), len(f.copies)
 	switch {
 	case isFuncLit(e) || isSignature(info.Type):
 		c.holdValue(h, "", info.Type, e, pos) // a closure holds what it captures
 	case info.Carried:
 		m.holdMade(h, "", info.Type, t, pos) // what a variable the value is stored in would hold
 	default:
-		mut, _ := borrowIn(info.Type)
-		m.lends(t) // what the value lends, followed on the form
+		m.lends(t) // what the value lends, followed on the form; each place was accessed where it is lent, as the borrow made there
 		for _, lp := range m.lent {
-			if call && lp.at != token.NoPos {
-				if p, kind, _ := m.placeOf(lp.place); kind != notPlace {
-					c.access(lp.expr, p, borrowAccess(mut), lp.at) // the call's result lends the place: accessed where it is lent for the call
-				}
-			}
-
 			m.holdLent(h, "", info.Type, lp, pos)
 		}
 	}
@@ -528,6 +539,12 @@ func (m *formBorrows) made(t Operand, pos token.Pos, call bool) {
 	for i := first; i < len(f.loans); i++ {
 		if f.loans[i].holder == h {
 			f.loans[i].call = true // lent for a call or a statement, held by no variable
+		}
+	}
+
+	for i := firstCopy; i < len(f.copies); i++ {
+		if f.copies[i].to == h {
+			f.copies[i].call = true // what a borrow variable given to the call holds, lent for the call as well
 		}
 	}
 }
@@ -581,11 +598,39 @@ func (m *formBorrows) keptTemporary(args []Operand, i int, lent bool) ast.Expr {
 		tmp = m.lends(args[i])
 	}
 
-	if tmp != NoTemp {
+	if tmp = m.statementTemporary(tmp); tmp != NoTemp {
 		return m.form.Temps[tmp].Expr
 	}
 
 	return nil
+}
+
+// statementTemporary is the first temporary a value lends that its
+// statement drops, which nothing past the statement may keep, given
+// tmp, the first one lends found, with the rest in m.lent; NoTemp when
+// each is a mut view's header, which its block drops: what keeps one
+// holds a loan of it, and the header's drop ends the loan.
+func (m *formBorrows) statementTemporary(tmp int) int {
+	if tmp == NoTemp || !m.form.Temps[tmp].Slot {
+		return tmp
+	}
+
+	for _, lp := range m.lent {
+		if t := lp.place.Temp; lp.place.IsTemp() && t != NoTemp && !m.form.Temps[t].Slot {
+			return t
+		}
+	}
+
+	return NoTemp
+}
+
+// droppedWhere says where the temporary t is dropped, for a message.
+func (m *formBorrows) droppedWhere(t int) string {
+	if m.form.Temps[t].Slot {
+		return "when the function returns"
+	}
+
+	return "when the statement ends"
 }
 
 // storedElement records what a predeclared method that stores an
@@ -643,7 +688,10 @@ func keepTemporary(tmp ast.Expr) string {
 }
 
 // store records a store: the access to the place, what it lets go of,
-// and what it holds once the value is in it.
+// and what it holds once the value is in it. A store is one assignment
+// wherever its value comes from, a value made here, a part of a
+// temporary or a part of a place a pattern takes apart, x, n = f() as
+// x = f(): only how what the value lends is followed differs.
 func (m *formBorrows) store(in *Instr) {
 	c := m.checker
 	if in.Place.IsTemp() { // an arm's value, into the temporary of the if or the match that chooses it: what it lends is decided where the chosen value is read, or stored, by the expression
@@ -653,30 +701,19 @@ func (m *formBorrows) store(in *Instr) {
 
 	p, kind, t := m.placeOf(in.Place)
 	pos := in.Expr.Pos()
-	if in.To.IsValue() && (in.To.Path != "" || m.form.Temps[m.form.Temps[in.To.Temp].Origin].Bound) { // a part of a temporary, an element ranged over or what a pattern binds, the whole or a part: the place holds the temporary, dropped where its statement ends, and what the value lends
-		if in.Decl {
-			c.flowAssign(p.v, "")
-		}
-
-		if holdsBorrow(p.v.typ) {
-			m.bind(p.v, p.path, t, in.To, pos) // what the binding holds, followed on the form: a statement's temporary among it is held, and its drop ends the binding's use
-		}
-
-		return
-	}
-
-	if r := root(in.To); !in.To.IsTemp() && r.Path != in.To.Path { // a pattern takes a place apart: the binding holds what the whole lends
-		c.flowAssign(p.v, "")
+	from, whole := storedValue, Operand{}
+	if r := root(in.To); in.To.IsValue() && (in.To.Path != "" || m.form.Temps[m.form.Temps[in.To.Temp].Origin].Bound) {
+		from = storedPart // a part of a temporary, an element ranged over or what a pattern binds: the place holds the temporary, dropped where its statement ends, and what the value lends
+	} else if !in.To.IsTemp() && r.Path != in.To.Path {
+		from, whole = storedApart, r // a pattern takes a place apart: the place holds what the whole lends
 		if v := m.form.Vars[r.Var]; r.Path == "" && isBorrow(v.typ) && !bindsInto(p.v.typ, partType(v.typ, in.To.Path)) {
-			r = r.sub("*") // matched through a borrow, a binding of the part's own type reads what is stored there: what the borrow points at holds it
+			whole = r.sub("*") // matched through a borrow, a binding of the part's own type reads what is stored there: what the borrow points at holds it
 		}
-
-		m.holdPlace(p.v, "", p.v.typ, r, pos)
-		return
 	}
 
-	if p.path != "" || kind != placeOwned {
-		c.flowUse(p.v, basePos(in.Expr)) // a store into a part reaches it through the variable, a use of what it holds
+	through := m.storedThrough(in.Place, p, kind)
+	if kind != placeOwned || through != "" {
+		c.flowUse(p.v, basePos(in.Expr)) // a store through a borrow, or into an element, reaches the place through what the variable holds, a use of it; a field of a value the variable owns is written in place, reading nothing it holds
 	}
 
 	if c.flow.outer != token.NoPos && t != nil && (holdsBorrow(t) && m.brings(in.To) || isSignature(t) && m.closureBorrows(in.To, pos)) && c.closureStore(p, pos) {
@@ -684,19 +721,19 @@ func (m *formBorrows) store(in *Instr) {
 	}
 
 	if in.Decl {
-		if isSignature(p.v.typ) && !in.To.IsTemp() {
+		if from == storedValue && isSignature(p.v.typ) && !in.To.IsTemp() {
 			m.usedWhereMade(in.To, "copied to another variable", pos)
 		}
 
 		c.flowAssign(p.v, "") // a declaration gives the variable its value: what it held on a loop's last pass is let go
-		m.hold(p.v, "", p.v.typ, in)
+		m.holdStored(from, p.v, "", p.v.typ, in, whole, pos)
 		return
 	}
 
 	if kind == placeOwned && p.path == "" && isBorrow(p.v.typ) {
 		c.access(in.Expr, p, rebindAccess, accessPos(in.Expr)) // a closure that reads it when called would see the new borrow
 		c.flowAssign(p.v, "")                                  // the assignment points it somewhere else
-		m.hold(p.v, "", p.v.typ, in)
+		m.holdStored(from, p.v, "", p.v.typ, in, whole, pos)
 		return
 	}
 
@@ -706,12 +743,49 @@ func (m *formBorrows) store(in *Instr) {
 		m.usedWhereMade(in.To, "assigned with =", pos)
 		c.flowAssign(p.v, "")
 	case t != nil && holdsBorrow(t):
-		prefix := ""
-		if kind == placeOwned {
-			prefix = refPrefix(p)
-		}
+		c.storeHolds(p, kind, through, t, func(part string) { m.holdStored(from, p.v, part, t, in, whole, pos) }, pos)
+	}
+}
 
-		c.storeHolds(p, kind, prefix, t, func(part string) { m.hold(p.v, part, t, in) }, pos)
+// storedThrough returns the part of the place p, the variable's own
+// value reached as kind, that is a borrow the store into o goes
+// through, or "": a borrow field the path continues past, w.m.src
+// through w.m, or one the path dereferences, *h.r through h.r, whose
+// store changes what h.r points at and not h.r.
+func (m *formBorrows) storedThrough(o Operand, p place, kind placeKind) string {
+	if kind != placeOwned {
+		return ""
+	}
+
+	if prefix := refPrefix(p); prefix != "" {
+		return prefix
+	}
+
+	if i := strings.Index(o.Path, "*"); i > 0 {
+		if fields := strings.TrimSuffix(o.Path[:i], "."); fields == p.path && isBorrow(placeType(place{p.v, fields})) {
+			return fields
+		}
+	}
+
+	return ""
+}
+
+// holdStored records that the part path of v, of type t, holds what the
+// value the store in puts there lends, followed as from says it comes:
+// a part of a temporary by what the binding holds, a statement's
+// temporary among it held, and its drop ending the binding's use; a
+// part of a place a pattern takes apart by what the place whole lends;
+// any other value by its own expression.
+func (m *formBorrows) holdStored(from storedFrom, v *Var, path string, t Type, in *Instr, whole Operand, pos token.Pos) {
+	switch from {
+	case storedPart:
+		if holdsBorrow(t) {
+			m.bind(v, path, t, in.To, pos)
+		}
+	case storedApart:
+		m.holdPlace(v, path, t, whole, pos)
+	default:
+		m.hold(v, path, t, in)
 	}
 }
 
@@ -770,7 +844,7 @@ func (m *formBorrows) hold(v *Var, path string, t Type, in *Instr) {
 	}
 
 	if _, ok := borrowIn(t); ok {
-		if tmp := m.lends(in.To); tmp != NoTemp {
+		if tmp := m.statementTemporary(m.lends(in.To)); tmp != NoTemp {
 			c.errorf(in.Expr.Pos(), keepTemporary(m.form.Temps[tmp].Expr)) // what the value lends, followed through the instructions that make it, whatever its shape
 			return
 		}
@@ -998,13 +1072,18 @@ func (m *formBorrows) brings(o Operand) bool {
 }
 
 // temporaryHolder returns the holder standing for the temporary t in
-// the graph, made at pos when t has none yet, marked as a temporary:
-// a borrow of it returned is refused, and its drop where its statement
-// ends ends what borrows it.
+// the graph, made at pos when t has none yet and named by t's
+// expression, which a message about what keeps it reads, marked as a
+// temporary: a borrow of it returned is refused, and its drop, where its
+// statement or for a mut view's header its block ends, ends what
+// borrows it.
 func (m *formBorrows) temporaryHolder(t int, pos token.Pos) *Var {
 	h := m.holders[t]
-	if h == nil {
+	switch {
+	case h == nil:
 		h = m.holder(Temp(t), pos, exprText(unparen(m.form.Temps[t].Expr)))
+	case h.name == "":
+		h.name = exprText(unparen(m.form.Temps[t].Expr)) // made unnamed, as a borrow is, and lent now
 	}
 
 	if !m.marked[t] {
@@ -1019,6 +1098,21 @@ func (m *formBorrows) temporaryHolder(t int, pos token.Pos) *Var {
 func (m *formBorrows) markTemporary(t int, h *Var) {
 	m.marked[t] = true
 	m.checker.holdsTemporary(h)
+	if m.form.Temps[t].Slot {
+		m.checker.holdsSlot(h)
+	}
+}
+
+// dropTemp records the drop of the temporary t, when it has a holder. A
+// borrow made here is lent until the statement drops it; a value's
+// loans end with its last use, a loop's holder is read at each pass,
+// and a mut view's header, which its block drops, lends while what
+// keeps it is used.
+func (m *formBorrows) dropTemp(t int, pos token.Pos, why dropWhy) {
+	if h := m.holders[t]; h != nil {
+		info := &m.form.Temps[t]
+		m.checker.flowDrop(h, pos, why, isBorrow(info.Type) && !info.Loop && !info.Slot)
+	}
 }
 
 // dropVar records the drop of a variable where its scope ends or a

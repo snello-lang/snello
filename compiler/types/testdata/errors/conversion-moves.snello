@@ -4,10 +4,10 @@
 
 // Rule: a conversion between a declared type and its underlying type
 // gives the value itself under the other name, so it moves a value
-// that is not Copy, as passing it by value does, and cannot take a
-// borrowed one, which would leave two owners to free it. Fix: use the
-// converted value, convert a clone, Name(s.Clone()), or take the
-// parameter by value.
+// that is not Copy, as passing it by value does; a borrow converted is a
+// view, a borrow of the other type, which owns nothing to give. Fix: use
+// the converted value, convert a clone, Name(s.Clone()), or return the
+// view as a borrow.
 
 package p
 
@@ -30,5 +30,5 @@ func whole(p P) P2 {
 }
 
 func borrowed(n ref Name) string {
-	return string(n)                   // ERROR "cannot convert ref Name to string: the conversion takes the value, and a borrow lends it"
+	return string(n)                   // ERROR "cannot use a value of type ref string as string in return"
 }

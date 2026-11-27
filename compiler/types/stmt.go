@@ -395,7 +395,7 @@ func (c *Checker) storeHolds(p place, kind placeKind, prefix string, t Type, hol
 		c.flowThrough(p.v, prefix, part, pos)
 	case kind == placeOwned:
 		if dropReads(t) {
-			c.flowUse(p.v, pos) // the old value's Drop runs here and reads what it borrows
+			c.flowReplacedUse(p.v, pos) // the old value's Drop runs here and reads what it borrows
 		}
 
 		c.flowAssign(p.v, p.path) // the part given a value lets go of what it held
@@ -815,7 +815,7 @@ func (c *Checker) deferHold(holder *Var, t Type, e ast.Expr, pos token.Pos) {
 // variable among them, held until the function returns, so that none
 // is given a new value or moved away before then, which would free what
 // the saved view sees, unless its type is Copy and the saved value a
-// copy; a view made for the call, s.Trim(), by its sources, since the
+// copy, which holds what the place holds when it holds a borrow; a view made for the call, s.Trim(), by its sources, since the
 // view is the call's own and nothing else reads it.
 // A call that reaches a variable when it runs holds it by deferHold
 // instead, which lets it change. A part of a value the defer statement
@@ -828,8 +828,11 @@ func (c *Checker) deferView(holder *Var, e, part ast.Expr, pos token.Pos) {
 	}
 
 	if p, kind := c.placeOf(unparen(e)); kind == placeOwned && !isBorrow(p.v.typ) {
-		if !IsCopy(placeType(p)) { // a Copy value saved is a copy, which owns nothing the place could free
+		switch t := placeType(p); {
+		case !IsCopy(t):
 			c.flowLoan(borrow{holder: holder, place: p, pos: pos}) // an owned place the saved view sees: s, t.name, xs[i]
+		case holdsBorrow(t):
+			c.flowCopy(holder, p.v, p.path, "", pos) // a Copy value saved is a copy, which owns nothing the place could free, but a borrow in it still points where it did: the call holds what the place holds, c.r of c := C{r: ref a}
 		}
 
 		return

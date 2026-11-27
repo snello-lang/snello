@@ -57,6 +57,13 @@ func (in *inference) match(param, arg Type, exact bool) {
 		return
 	}
 
+	switch param.(type) {
+	case *Pointer, *Option, *Result, *Slice, *Array, *Map, *Chan, *Tuple, *Signature:
+		if a, ok := arg.(*Named); ok {
+			arg = a.Underlying() // a declared type against a type of no name, by its underlying type, as it is assignable to one: an Ints against []T binds T to int
+		}
+	}
+
 	switch p := param.(type) {
 	case *TypeParam:
 		if _, bound := in.m[p]; bound || !in.owns(p) {

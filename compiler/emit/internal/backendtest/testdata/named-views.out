@@ -13,3 +13,5 @@ fault(5)
 E42
 E7
 E9
+ints(2) 7 8 [1 3 4]
+name(3) true VEN SEVEN C ints(3)
