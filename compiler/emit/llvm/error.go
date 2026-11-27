@@ -106,8 +106,8 @@ func (e *Emitter) chainer(t types.Type, pos token.Pos) string {
 		case *types.Named:
 			m, _ := e.methodNameOf(nil, u, "Error", pos)
 			s, _ := e.methodNameOf(nil, u, "Source", pos)
-			msg = e.op("call %sn_string @"+m+"(ptr %v)", "%sn_string")
-			src = e.op("call "+ir+" @"+s+"(ptr %v)", ir)
+			msg = e.op("call %sn_string @"+m+"("+e.argsTo(u, "Error", pos, "%v")+")", "%sn_string")
+			src = e.op("call "+ir+" @"+s+"("+e.argsTo(u, "Source", pos, "%v")+")", ir)
 		case *types.Trait:
 			msg = e.traitMessage("%v", u)
 			src = e.traitSource("%v", u, ir)

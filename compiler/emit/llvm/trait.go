@@ -97,9 +97,13 @@ func (e *Emitter) adapter(name string, from *types.Named, fn *types.Func, pos to
 
 	e.helper(name, e.resultType(sig.Results(), pos), params, func() {
 		free := false
-		if _, borrow := tsig.Recv().Type().(*types.Ref); !borrow { // the receiver is Self, ref Self or mut Self, as the checker insists
+		recv, borrow := tsig.Recv().Type().(*types.Ref)
+		switch {
+		case !borrow: // the receiver is Self, ref Self or mut Self, as the checker insists
 			args[0] = e.load(e.irType(from, pos), "%p") // a value receiver takes the data; the trait value was consumed
 			free = true
+		case view(recv) && !from.Method(fn.Name()).Derived(): // a ref of a string or a slice is its view, as a direct call passes it, to a method the program wrote; a derived one is the backend's helper, which takes the address
+			args[0] = e.load(e.irType(from, pos), "%p")
 		}
 
 		r := e.callValues(target, tsig, wants, args, pos)

@@ -96,6 +96,42 @@ func view(t *types.Ref) bool {
 	return !t.Mut() && viewed(t.Elem())
 }
 
+// argsTo returns the arguments that pass the values at addrs, the
+// receiver's first, to the method name of n as methodNameOf names it.
+// A method the program wrote takes them as a direct call passes them,
+// a ref of a string or a slice as the view's words, loaded, and any
+// other borrow as the address; a derived method is the backend's
+// helper for the type, which takes every value at its address. The
+// helpers that call a type's String, Error, Source, Eq, Hash, Cmp or
+// Clone hold the values at addresses and pass them through here.
+func (e *Emitter) argsTo(n *types.Named, name string, pos token.Pos, addrs ...string) string {
+	fn := n.Method(name)
+	sig := fn.Type().(*types.Signature)
+	args := make([]string, len(addrs))
+	for i, p := range addrs {
+		want := sig.Recv().Type()
+		if i > 0 {
+			want = sig.Params()[i-1].Type()
+		}
+
+		args[i] = e.passAt(p, want, fn.Derived(), pos)
+	}
+
+	return strings.Join(args, ", ")
+}
+
+// passAt returns the argument that passes the value at address p to a
+// parameter of type want: the view's words, loaded, for a ref of a
+// string or a slice, unless helper says the callee is the backend's own
+// helper, which takes the address; the address for any other borrow.
+func (e *Emitter) passAt(p string, want types.Type, helper bool, pos token.Pos) string {
+	if r, ok := want.(*types.Ref); ok && view(r) && !helper {
+		return e.load(e.irType(r.Elem(), pos), p).typed()
+	}
+
+	return "ptr " + p
+}
+
 // viewed reports whether a ref borrow of a value of type t is a view:
 // whether t is a string or a slice.
 func viewed(t types.Type) bool {
