@@ -226,12 +226,6 @@ type Checker struct {
 	// by the index of the file, which entering a file makes current.
 	fileState []fileState
 
-	// temporary maps an expression lent to a call or a ref to the
-	// temporary its value is or borrows: an owned value no variable
-	// holds, which the statement drops at its end, so that a borrow of
-	// it cannot be kept past the statement or returned.
-	temporary map[ast.Expr]ast.Expr
-
 	// passed maps a call of a generic function whose type arguments
 	// hold a borrow to the arguments whose borrows its result holds
 	// (passing.go).

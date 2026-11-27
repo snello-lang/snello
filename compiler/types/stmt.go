@@ -701,8 +701,10 @@ func (c *Checker) deferStmt(s *ast.DeferStmt) {
 // deferHolds records what the deferred call holds until the function
 // returns, by holder: what a deferred closure captures, the receiver,
 // and each argument, as deferHold and deferView say; rest are the
-// operands of the call's variadic arguments, checked last.
-func (c *Checker) deferHolds(holder *Var, call *ast.CallExpr, sig *Signature, rest []operand, pos token.Pos) {
+// operands of the call's variadic arguments, checked last. partOf gives
+// the value the defer statement made that the i-th argument is a part
+// of, or nil.
+func (c *Checker) deferHolds(holder *Var, call *ast.CallExpr, sig *Signature, rest []operand, pos token.Pos, partOf func(i int) ast.Expr) {
 	switch fun := unparen(call.Fun).(type) {
 	case *ast.FuncLit:
 		for _, cap := range c.captured[fun] {
@@ -728,8 +730,8 @@ func (c *Checker) deferHolds(holder *Var, call *ast.CallExpr, sig *Signature, re
 	if sig == nil {
 		if id, ok := unparen(call.Fun).(*ast.Ident); ok {
 			if _, builtin := c.refersTo(id).(*Builtin); builtin {
-				for _, arg := range call.Args { // print(s), close(ch): saved when the defer runs, so what they read is held until the call does
-					c.deferView(holder, arg, pos)
+				for i, arg := range call.Args { // print(s), close(ch): saved when the defer runs, so what they read is held until the call does
+					c.deferView(holder, arg, partOf(i), pos)
 				}
 			}
 		}
@@ -746,7 +748,7 @@ func (c *Checker) deferHolds(holder *Var, call *ast.CallExpr, sig *Signature, re
 	for i, arg := range call.Args {
 		if i >= fixed && kind == VariadicAny {
 			if k := i - fixed; k < len(rest) && rest[k].mode != invalid {
-				c.deferView(holder, arg, pos) // fmt.Println(t) saves t as a view, any lent, whatever its type
+				c.deferView(holder, arg, partOf(i), pos) // fmt.Println(t) saves t as a view, any lent, whatever its type
 			}
 
 			continue
@@ -816,10 +818,12 @@ func (c *Checker) deferHold(holder *Var, t Type, e ast.Expr, pos token.Pos) {
 // copy; a view made for the call, s.Trim(), by its sources, since the
 // view is the call's own and nothing else reads it.
 // A call that reaches a variable when it runs holds it by deferHold
-// instead, which lets it change.
-func (c *Checker) deferView(holder *Var, e ast.Expr, pos token.Pos) {
-	if tmp := c.temporaryOf(e); tmp != nil && unparen(tmp) != unparen(e) { // a part of a value the defer statement drops, which the call would read after
-		c.errorf(e.Pos(), "a deferred call reads what it prints when it runs, after the defer statement drops "+exprText(unparen(tmp))+": keep "+exprText(unparen(tmp))+" in a variable first, and print from it")
+// instead, which lets it change. A part of a value the defer statement
+// made, part, is refused: the statement drops the value before the call
+// reads it.
+func (c *Checker) deferView(holder *Var, e, part ast.Expr, pos token.Pos) {
+	if part != nil {
+		c.errorf(e.Pos(), "a deferred call reads what it prints when it runs, after the defer statement drops "+exprText(unparen(part))+": keep "+exprText(unparen(part))+" in a variable first, and print from it")
 		return
 	}
 

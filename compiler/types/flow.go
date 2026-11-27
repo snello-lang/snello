@@ -112,6 +112,7 @@ type flowCopy struct {
 	flat         bool // the loans copied all go in the part toPath: a borrow of what a borrow variable points to reaches whatever it holds, in parts its own type does not name
 	lent         bool // a place behind the borrow variable from was lent, which is why to takes what from holds (borrow.lent)
 	selfStored   bool // reported storing a borrow of a borrowed parameter's own place behind it (copyPair)
+	call         bool // the loans it gives are lent for a call or a statement, as the loan it is made beside (borrow.call)
 	pos          token.Pos
 	pairs        [][3]int
 }
@@ -144,27 +145,28 @@ type loopSpan struct{ head int }
 
 // A flow is the graph of one function's or closure's body.
 type flow struct {
-	blocks      []flowBlock
-	cur         int
-	loans       []borrow
-	accesses    []flowAccess
-	drops       []flowDrop
-	copies      []flowCopy
-	rets        []flowReturn
-	errs        []flowError
-	deferred    []*Var        // the holders of what deferred calls borrow, live until the function returns
-	outside     map[*Var]*Var // what the caller owns behind each parameter that carries a borrow, and the parameter
-	held        map[*Var]bool // of those, each that stands for a borrow a parameter taken by value holds, in a body that keeps a trait's word (word.go)
-	temporaries []*Var        // the holders standing for temporaries, which a returned borrow may not be of
-	parent      *flow         // for a closure's body, the graph of the body it is written in
-	loops       []loopSpan    // the blocks of each loop, for a message: a use reached by coming back round the loop is in its next pass
-	loopOf      []int         // the head of the innermost loop each block is in, or -1
-	holders     []*Var        // the variables standing in the graph for temporaries and loops (newHolder), given back to spare when the graph is freed
-	spare       []*Var
-	outer       token.Pos // for a closure's body, where the closure begins: a variable declared before it may be used after the body
-	seq         int
-	back        bool         // an edge goes to a block made before its source, a loop: the passes iterate to a fixed point; without one, each block is reached from blocks made before it, and one pass in that order decides
-	vars        map[*Var]int // the variables the solver numbers, kept and emptied for each body solved
+	blocks       []flowBlock
+	cur          int
+	loans        []borrow
+	accesses     []flowAccess
+	drops        []flowDrop
+	copies       []flowCopy
+	rets         []flowReturn
+	errs         []flowError
+	deferred     []*Var        // the holders of what deferred calls borrow, live until the function returns
+	outside      map[*Var]*Var // what the caller owns behind each parameter that carries a borrow, and the parameter
+	held         map[*Var]bool // of those, each that stands for a borrow a parameter taken by value holds, in a body that keeps a trait's word (word.go)
+	temporaries  []*Var        // the holders standing for temporaries, which a returned borrow may not be of
+	goneReported []*Var        // the variables a borrow kept past whose drop was refused, which a copy lent for a call reports no more
+	parent       *flow         // for a closure's body, the graph of the body it is written in
+	loops        []loopSpan    // the blocks of each loop, for a message: a use reached by coming back round the loop is in its next pass
+	loopOf       []int         // the head of the innermost loop each block is in, or -1
+	holders      []*Var        // the variables standing in the graph for temporaries and loops (newHolder), given back to spare when the graph is freed
+	spare        []*Var
+	outer        token.Pos // for a closure's body, where the closure begins: a variable declared before it may be used after the body
+	seq          int
+	back         bool         // an edge goes to a block made before its source, a loop: the passes iterate to a fixed point; without one, each block is reached from blocks made before it, and one pass in that order decides
+	vars         map[*Var]int // the variables the solver numbers, kept and emptied for each body solved
 
 	// The loans each variable holds, as a chain through the loans: the
 	// first and last loan of each variable, by its number, and the loan
@@ -198,7 +200,7 @@ func (c *Checker) freeFlow(f *flow) {
 	f.loans, f.accesses, f.drops, f.copies, f.rets, f.errs = f.loans[:0], f.accesses[:0], f.drops[:0], f.copies[:0], f.rets[:0], f.errs[:0]
 	f.loops, f.seq = f.loops[:0], 0
 	f.deferred, f.parent, f.outside, f.held, f.back = f.deferred[:0], nil, nil, nil, false
-	f.temporaries, f.loopOf = f.temporaries[:0], f.loopOf[:0]
+	f.temporaries, f.loopOf, f.goneReported = f.temporaries[:0], f.loopOf[:0], f.goneReported[:0]
 	f.spare, f.holders = append(f.spare, f.holders...), f.holders[:0]
 	flows.Put(f)
 }
@@ -302,6 +304,10 @@ func (c *Checker) flowCopyOf(cp flowCopy) {
 	f := c.flow
 	if f == nil {
 		return
+	}
+
+	if n := len(f.copies); n < cap(f.copies) {
+		cp.pairs = f.copies[:n+1][n].pairs[:0] // the pairs of a copy of a graph freed before, kept for reuse as the graph's lists are
 	}
 
 	f.copies = append(f.copies, cp)
@@ -628,7 +634,7 @@ func (c *Checker) copyLoans() {
 					continue
 				}
 
-				grew = c.copyPair(cp, a, -1, borrow{holder: cp.to, place: la.place, mut: la.mut, pos: cp.pos, hpath: hpath, loop: la.loop, variable: la.variable, lent: cp.lent || la.lent, read: la.read}) || grew
+				grew = c.copyPair(cp, a, -1, borrow{holder: cp.to, place: la.place, mut: la.mut, pos: cp.pos, hpath: hpath, loop: la.loop, variable: la.variable, lent: cp.lent || la.lent, read: la.read, call: cp.call}) || grew
 			}
 		}
 	}
@@ -864,6 +870,10 @@ func (c *Checker) checkFlow(reported bitset) {
 			case evCopy:
 				for _, p := range f.copies[ev.i].pairs {
 					if in.has(p[0]) && (p[1] < 0 || in.has(p[1])) {
+						if f.copies[ev.i].call && slices.Contains(f.goneReported, f.loans[p[2]].v) {
+							continue // lent for a call, of a variable a keeping of it was already refused for
+						}
+
 						c.checkGone(p[2], dropped, reported)
 						c.checkEscape(p[2], reported)
 					}
@@ -915,6 +925,7 @@ func (c *Checker) checkGone(li int, dropped, reported bitset) {
 	}
 
 	reported.set(li)
+	f.goneReported = append(f.goneReported, b.v)
 	for _, d := range f.drops {
 		if d.v == b.v {
 			f.errs = append(f.errs, flowError{seq: d.seq, pos: b.pos, msg: "cannot keep a borrow of " + b.v.name + ": " + b.v.name + " is dropped" + dropWhere(d.why) + c.lineCol(d.pos)})
@@ -1173,6 +1184,7 @@ func (c *Checker) checkDrop(d *flowDrop, in, live bitset, reported bitset, bi, e
 		}
 
 		reported.set(li)
+		f.goneReported = append(f.goneReported, d.v)
 		msg := "cannot keep a borrow of " + d.v.name + " in " + c.holderText(b) + ": " + d.v.name + " is dropped" + dropWhere(d.why) + c.lineCol(d.pos)
 		f.errs = append(f.errs, flowError{seq: d.seq, pos: b.pos, msg: msg + c.useText(b, bi, ei)})
 		return true

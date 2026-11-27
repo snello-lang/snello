@@ -401,89 +401,13 @@ func heldIn(f *flow, v *Var, pos token.Pos) *borrow {
 // returned records what the value of a return statement says of the
 // function: a parameter returned is one the function keeps, which its
 // callers are checked against. What else the value lets out, the borrow
-// pass decides (returnEscapes).
+// pass decides (returned in formborrows.go).
 func (c *Checker) returned(e ast.Expr, op operand) {
 	if op.mode == invalid {
 		return
 	}
 
 	c.keepParam(op, "returned", e.Pos()) // a parameter returned is what the function keeps, checked at its calls; what else the value lets out the borrow pass decides
-}
-
-// returnEscapes checks what the returned value op, no parameter, lets
-// out of the function: a closure that borrows cannot leave, and a
-// borrow must come from the function's source, followed through the
-// loans in effect at the return.
-func (c *Checker) returnEscapes(op operand, pos token.Pos) {
-	e := op.expr
-	if isSignature(op.typ) {
-		c.cannotBe(op, "returned", pos)
-		return
-	}
-
-	if holdsBorrow(c.sig.results) {
-		if tmp := c.borrowOfTemporary(e); tmp != nil {
-			c.errorf(pos, "cannot return a borrow of a temporary: "+temporaryText(tmp)+" is dropped when the statement ends")
-			return
-		}
-
-		c.source(e, pos)
-	}
-}
-
-// source finds the places the borrows in e come from and checks each,
-// in every branch of a value chosen at run time.
-func (c *Checker) source(e ast.Expr, pos token.Pos) {
-	if eachBranch(e, func(v ast.Expr) { c.source(v, pos) }) {
-		return
-	}
-
-	switch e := e.(type) {
-	case *ast.ParenExpr:
-		c.source(e.X, pos)
-	case *ast.UnaryExpr:
-		switch e.Op {
-		case token.REF, token.MUT:
-			c.sourceVar(e.X, pos, true)
-		case token.MUL:
-			c.source(e.X, pos) // *r lent on, first(*r): what r points at, so the borrow r holds
-		}
-	case *ast.TryExpr:
-		c.source(e.X, pos)
-	case *ast.SliceExpr:
-		c.sourceVar(e, pos, true) // a view of the place sliced: through a borrow it holds, the borrow's source
-	case *ast.TupleExpr:
-		for i, elt := range e.Elts {
-			c.sourceSlot(elt, c.slotType(e, i, nil), pos)
-		}
-	case *ast.CompositeLit:
-		for i, elt := range e.Elts {
-			var key ast.Expr
-			if kv, ok := elt.(*ast.KeyValueExpr); ok {
-				key, elt = kv.Key, kv.Value
-			}
-
-			c.sourceSlot(elt, c.slotType(e, i, key), pos)
-		}
-	case *ast.CallExpr:
-		if v, ok := c.calleeOf(e).(*Variant); ok {
-			for i, arg := range e.Args { // Some(ref n.val)
-				if i < len(v.fields) && isBorrow(v.fields[i].typ) && !isBorrow(c.info.Types[arg]) {
-					c.sourceVar(arg, pos, true) // Holder(s) for a ref field: an implicit ref s
-				}
-
-				c.source(arg, pos)
-			}
-		} else if src := c.callSource(e); src != nil && !c.passed[e].only {
-			c.source(src, pos)
-		}
-
-		for _, x := range c.passed[e].args {
-			c.source(x, pos) // a generic call's result holds what its arguments hold
-		}
-	case *ast.Ident, *ast.SelectorExpr, *ast.IndexExpr:
-		c.sourceVar(e, pos, false)
-	}
 }
 
 // callSource is the operand a call's result borrows from, by rule 3:
@@ -545,13 +469,12 @@ func borrowedParam(sig *Signature) int {
 	return -1
 }
 
-// sourceVar follows the place e reaches to the variable that owns what
-// is returned, through the borrows held by the variables on the way,
-// and reports a borrow of anything but the function's source. lent
-// says the place itself is borrowed, as in ref s, rather than read for
-// the borrow it holds.
-func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
-	p, kind := c.placeOf(e)
+// sourcePlace follows the place p, reached as kind says, to the
+// variable that owns what is returned, through the borrows held by the
+// variables on the way, and reports a borrow of anything but the
+// function's source. lent says the place itself is borrowed, as in ref
+// s, rather than read for the borrow it holds.
+func (c *Checker) sourcePlace(p place, kind placeKind, lent bool, pos token.Pos) {
 	if kind == notPlace {
 		return
 	}
@@ -571,14 +494,14 @@ func (c *Checker) sourceVar(e ast.Expr, pos token.Pos, lent bool) {
 		return // an implementation keeping its trait's word returns only what is stored behind its parameters (word.go)
 	}
 
-	throughBorrow := kind == placeBorrowed || kind == placeIndexed && throughBorrowAt(p) // ref ys[0] or r[0:2], ys or r a borrow, sp.text[0:2] a borrow in a field: what it borrows, not the local
+	throughBorrow := kind == placeBorrowed || kind == placeIndexed && behindBorrow(v, returnedPart{path: p.path, indexed: true}) // ref ys[0] or r[0:2], ys or r a borrow, sp.text[0:2] a borrow in a field: what it borrows, not the local
 	if lent && !throughBorrow && !c.isParam(v) {
 		c.errorf(pos, "cannot return a borrow of local "+v.name)
 		return
 	}
 
 	if !c.isParam(v) {
-		c.flowReturn(v, pos, returnedPart{path: p.path, lent: lent, indexed: kind == placeIndexed}) // followed to its source through the loans in effect at the return, at the function's end
+		c.flowReturn(v, pos, returnedPart{path: p.path, lent: lent, indexed: kind == placeIndexed, behind: kind == placeBorrowed}) // followed to its source through the loans in effect at the return, at the function's end
 		return
 	}
 
@@ -611,6 +534,19 @@ func (c *Checker) followReturn(v *Var, part returnedPart, pos token.Pos, seq int
 
 	if c.isParam(v) {
 		c.sourceParam(v, pos, report)
+		return
+	}
+
+	if part.lent && !part.read && !v.global && !behindBorrow(v, part) { // a borrow of the variable's own place, reached by borrows of places alone, not one it holds: what it holds does not keep it alive
+		switch {
+		case slices.Contains(f.temporaries, v):
+			report(pos, "cannot return a borrow of a temporary: "+v.name+" is dropped when its statement ends")
+		case f.outer != token.NoPos && v.pos < f.outer:
+			report(pos, "cannot return a borrow of "+v.name+" from a closure: "+v.name+" is captured, and a closure's returned borrow is tied to its parameters")
+		default:
+			report(pos, "cannot return a borrow of local "+v.name)
+		}
+
 		return
 	}
 
@@ -663,45 +599,6 @@ func lentReturn(v *Var) string {
 	return "cannot return a borrow of " + v.name + ": the arguments of a variadic ...ref parameter are lent for the call alone"
 }
 
-// sourceSlot checks the element e of a literal, which fills a slot of
-// type slot: the borrow it brings in is the slot's. A slot of a
-// concrete type that holds no borrow, a count beside a borrow, brings
-// in none, whatever e is; a ref slot given an owned value lends it, as
-// ref e would; any other is checked as e is. A slot of a type
-// parameter's type, or none known, falls back to what e itself carries.
-// An if or a match fills the slot from each branch, each checked so.
-func (c *Checker) sourceSlot(e ast.Expr, slot Type, pos token.Pos) {
-	if eachBranch(e, func(v ast.Expr) { c.sourceSlot(v, slot, pos) }) { // a value chosen at run time fills the slot from each of its branches
-		return
-	}
-
-	switch {
-	case slot == nil || holdsTypeParam(slot):
-		if c.carriesBorrow(e) {
-			c.source(e, pos)
-		}
-	case !holdsBorrow(slot):
-	case isBorrow(slot) && !isBorrow(c.info.Types[e]) && !c.optionOfBorrow(e):
-		c.sourceVar(e, pos, true) // Span{text: s}, s owned, a struct holding a borrow among them: an implicit ref s
-	default:
-		c.source(e, pos)
-	}
-}
-
-// optionOfBorrow reports whether e is an option or a result of a borrow,
-// the left side of a ?? whose value fills a ref slot: what it holds is
-// a borrow, checked as it is, not an owned value lent.
-func (c *Checker) optionOfBorrow(e ast.Expr) bool {
-	switch t := c.info.Types[e].(type) {
-	case *Option:
-		return isBorrow(t.elem)
-	case *Result:
-		return isBorrow(t.val)
-	}
-
-	return false
-}
-
 // slotType returns the type of what the i-th element of the literal x
 // is given to: the field key names, or the i-th, a slice's or an
 // array's element, a map's value or a tuple's i-th element; nil when
@@ -739,20 +636,6 @@ func (c *Checker) slotType(x ast.Expr, i int, key ast.Expr) Type {
 	return nil
 }
 
-// carriesBorrow reports whether an operand of a literal can bring a
-// borrow into it: anything but a place whose type holds none, such as
-// an int beside a borrow. A place is read for the borrow it holds, so
-// a value is only what the place's type says; a slice of a place,
-// s[0:4], is a borrow of it whatever its type holds.
-func (c *Checker) carriesBorrow(e ast.Expr) bool {
-	if _, ok := unparen(e).(*ast.SliceExpr); ok {
-		return true
-	}
-
-	p, kind := c.placeOf(e)
-	return kind == notPlace || holdsBorrow(placeType(p))
-}
-
 // placeType returns the type of the value at p: the variable's own, or
 // the last field's on the path, each field reached through the borrows
 // and pointers in front of the value holding it.
@@ -762,7 +645,9 @@ func placeType(p place) Type {
 		return t
 	}
 
-	for _, name := range strings.Split(p.path, ".") {
+	for path := p.path; path != ""; {
+		name, rest, _ := strings.Cut(path, ".") // walked in place: a place's type is asked for at every loan
+		path = rest
 		s, ok := stripRef(t).Underlying().(*Struct)
 		if !ok {
 			return t
@@ -779,21 +664,20 @@ func placeType(p place) Type {
 	return t
 }
 
-// throughBorrowAt reports whether the value at p is reached through a
-// borrow: the variable is one, or a field on the path to the value is,
-// so that what is indexed or sliced there is what the borrow lends, not
-// the local.
-func throughBorrowAt(p place) bool {
-	t := p.v.typ
+// behindBorrow reports whether the part of v a returned borrow lends is
+// behind a borrow v is or holds, and so not v's own: the variable is a
+// borrow, a field before the last on the path is one, or the part is an
+// element of a field that is one. A field that is a borrow, lent
+// itself, is v's own slot.
+func behindBorrow(v *Var, part returnedPart) bool {
+	t := v.typ
 	if isBorrow(t) {
 		return true
 	}
 
-	if p.path == "" {
-		return false
-	}
-
-	for _, name := range strings.Split(p.path, ".") {
+	for path := part.path; path != ""; {
+		name, rest, _ := strings.Cut(path, ".")
+		path = rest
 		s, ok := stripRef(t).Underlying().(*Struct)
 		if !ok {
 			return false
@@ -805,7 +689,7 @@ func throughBorrowAt(p place) bool {
 		}
 
 		t = f.typ
-		if isBorrow(t) {
+		if isBorrow(t) && (path != "" || part.indexed) {
 			return true
 		}
 	}

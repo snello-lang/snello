@@ -20,6 +20,39 @@ import (
 // an owned place given where a borrow is wanted is lent; any other
 // place is moved.
 func (l *lowering) value(e ast.Expr, want Type) Operand {
+	o := l.valueOf(e, want)
+	if r, ok := want.(*Ref); ok && o.IsValue() && o.Path == "" {
+		if t := l.f.Temps[o.Temp].Type; t != nil && (!isBorrow(t) || Identical(r.elem, t)) && !isNever(t) && t != Typ[Invalid] {
+			if p, ok := l.borrowedPlace(o); ok && isBorrow(t) { // ref x of a borrow variable, which the typing reads as x's own borrow: where a borrow of it is wanted, x's slot is lent
+				lent := l.lendAs(p, e, r, e.Pos())
+				l.f.Temps[lent.Temp].Itself = true
+				return lent
+			}
+
+			lent := l.lendAs(o, e, l.refOf(t, r), e.Pos()) // a value made here given where a borrow is wanted is lent, as an owned place is: the statement holds it, and what takes the borrow holds a borrow of it
+			l.f.Temps[lent.Temp].Itself = isBorrow(t)      // a borrow made here lent where a borrow of it is wanted: its own slot, the temporary
+			return lent
+		}
+	}
+
+	return o
+}
+
+// borrowedPlace returns the variable's place the temporary o was just
+// made a borrow of, when the last instruction written is that borrow.
+func (l *lowering) borrowedPlace(o Operand) (Operand, bool) {
+	if n := len(l.f.Instrs); n > 0 {
+		if in := &l.f.Instrs[n-1]; in.Op == OpBorrow && in.To == o && !in.Place.IsTemp() {
+			return in.Place, true
+		}
+	}
+
+	return Operand{}, false
+}
+
+// valueOf is value but for the borrow of a value made here that a
+// borrow is wanted of, which value makes.
+func (l *lowering) valueOf(e ast.Expr, want Type) Operand {
 	if e == nil { // an expression the parser could not finish
 		return Temp(NoTemp)
 	}
@@ -45,8 +78,8 @@ func (l *lowering) value(e ast.Expr, want Type) Operand {
 		return l.composite(x)
 	case *ast.TupleExpr:
 		start := len(l.argStack)
-		for _, elt := range x.Elts {
-			l.argStack = append(l.argStack, l.keptValue(elt, "stored", nil)) // a tuple holds its elements as a struct holds its fields: a closure that borrows cannot be put in one
+		for i, elt := range x.Elts {
+			l.argStack = append(l.argStack, l.keptValue(elt, "stored", l.c.slotType(x, i, nil))) // a tuple holds its elements as a struct holds its fields: a closure that borrows cannot be put in one
 		}
 
 		return l.madeFrom(e, start, true)
@@ -67,11 +100,14 @@ func (l *lowering) value(e ast.Expr, want Type) Operand {
 			l.value(x.High, Typ[Int])
 		}
 
-		if p, ok := l.placeOrPart(x.X); ok { // xs[i:j] is a borrow of xs, lent for the statement unless a call takes it
-			return l.lend(p, x.X, isMut(l.typeOf(e)))
+		p, ok := l.placeOrPart(x.X) // xs[i:j] is a borrow of xs, lent for the statement unless a call takes it
+		if !ok {
+			p = l.value(x.X, nil) // a slice of a value made here borrows the temporary that holds it
 		}
 
-		return l.lend(l.value(x.X, nil), x.X, isMut(l.typeOf(e))) // a slice of a value made here borrows the temporary that holds it
+		view := l.lend(p, x.X, isMut(l.typeOf(e)))
+		l.f.Temps[view.Temp].View = true
+		return view
 	}
 
 	if p, ok := l.placeOrPart(e); ok {
@@ -137,9 +173,23 @@ func (l *lowering) root(e ast.Expr) Operand {
 }
 
 // use reads, lends or moves the place p for a use of its value where a
-// value of type want is wanted.
+// value of type want is wanted; a borrow stored behind a borrow, wanted
+// as it is, is read through the outer one, and a borrow given where a
+// borrow of it is wanted is lent itself.
 func (l *lowering) use(p Operand, e ast.Expr, want Type) Operand {
 	t := l.typeOf(e)
+	if r, ok := want.(*Ref); ok && isBorrow(t) && Identical(r.elem, t) { // a borrow given where a borrow of it is wanted: its own place is lent, as ref r lends it
+		tmp := l.lendAs(p, e, r, e.Pos())
+		l.f.Temps[tmp.Temp].Itself = true
+		return tmp
+	}
+
+	if r, ok := t.(*Ref); ok && isBorrow(r.elem) && want != nil && !AssignableTo(t, want) && AssignableTo(r.elem, want) { // a borrow read out through a borrow of it, x of type ref ref string where a ref string is wanted: what x points at is the value
+		through := l.sub(p, []byte("*"))
+		l.emit(Instr{Op: OpRead, Place: through, Expr: e, Pos: e.Pos()})
+		return through
+	}
+
 	if r, ok := want.(*Ref); ok && !isBorrow(t) {
 		return l.lendAs(p, e, l.refOf(t, r), e.Pos())
 	}
@@ -722,12 +772,13 @@ func (l *lowering) guardOf(x *ast.MatchExpr, arm *ast.MatchArm, hasNext bool, ne
 	l.start(taken)
 }
 
-// armBody lowers an arm's body, an expression or a statement, storing
-// an expression's value into result, then drops the arm's names.
+// armBody lowers an arm's body, an expression, a block or a statement,
+// storing the value of an expression, or of the expression a block ends
+// with, into result, then drops the arm's names.
 func (l *lowering) armBody(arm *ast.MatchArm, result Operand) {
 	switch body := arm.Body.(type) {
 	case *ast.BlockStmt:
-		l.block(body)
+		l.blockValue(body, result) // a block ending in an expression gives the arm's value, as an if's arm does
 	case ast.Expr:
 		if l.cur != noBlock {
 			l.armValue(body, result)

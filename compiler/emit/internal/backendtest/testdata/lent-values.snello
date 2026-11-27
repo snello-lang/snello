@@ -1,0 +1,203 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Values lent where a borrow is wanted, followed through the steps that
+// make them: a variant's ref field given an owned variable lends it,
+// which is still the variable's, used after and dropped once; Some
+// given one for an option of a borrow lends it too; a string chosen
+// among literals is lent through a call and kept past its statement,
+// its bytes being the program's; an element of a tuple made here holds
+// what that element lends, a parameter's borrow, which is returned,
+// beside an element borrowing a value made here, used within its
+// statement; a value read through a borrow of a local is returned by
+// value; and a borrow read out of a local, through a borrow of it, a
+// field, an element, a part matched through a borrow, an element ranged
+// over through one or a tuple taken apart through one, is returned,
+// what the local holds being the parameter's, kept in a variable first
+// or read through two borrows; a borrow written ref of a borrow variable
+// or a field holding one, which passes the borrow on; the result of a
+// ref ref parameter, which holds what the slot holds; a borrow of a
+// borrow variable's slot used while the variable keeps its value; and a
+// struct of borrows rebuilt from its own fields field by field. The borrows the same
+// steps would carry past their owners are refused,
+// testdata/errors/lent-through-values.snello.
+
+package main
+
+import "fmt"
+
+struct Span {
+	text ref string
+	at   int
+}
+
+struct Two {
+	a ref string
+	b ref string
+}
+
+enum Held {
+	Holder(ref string)
+	Empty
+}
+
+enum Both {
+	Pair(ref string, int)
+	Nothing
+}
+
+func show(h ref Held) string {
+	return match h {
+		Holder(t) => t.Clone(),
+		Empty => "empty",
+	}
+}
+
+func id(x ref string) ref string {
+	return x
+}
+
+func made() string {
+	return "made here".Clone()
+}
+
+func chosen(c bool) ref string {
+	return id(if c { "alpha" } else { "beta" })
+}
+
+func first(p ref string) ref string {
+	match (p, ref made()) {
+		(a, b) => {
+			fmt.Println(len(b))
+			return a
+		},
+	}
+}
+
+func copied(p ref string) Span {
+	x := Span{text: p, at: 5}
+	r := ref x
+	return *r
+}
+
+func field(p ref string) ref string {
+	sp := Span{text: p, at: 1}
+	r := ref sp
+	x := r.text
+	return x
+}
+
+func element(p ref string) ref string {
+	parts := p.Split(",")
+	x := parts[1]
+	return x
+}
+
+func matched(p ref string) ref string {
+	h := Pair(p, 2)
+	r := ref h
+	return match r {
+		Pair(x, n) => x,
+		_ => "none",
+	}
+}
+
+func optional(p ref string) ref string {
+	o := Some(p)
+	return match ref o {
+		Some(x) => x,
+		None => "none",
+	}
+}
+
+func ranged(p ref string) ref string {
+	parts := p.Split(",")
+	for x := range ref parts {
+		return *x
+	}
+
+	return "none"
+}
+
+func apart(p ref string) ref string {
+	t := (p, 1)
+	r := ref t
+	a, b := *r
+	return a
+}
+
+func kept(p ref string) ref string {
+	o := Some(p)
+	m := match ref o {
+		Some(x) => x,
+		None => "none",
+	}
+
+	return m
+}
+
+func twice(p ref string) ref string {
+	parts := p.Split(",")
+	r := ref parts
+	q := ref r
+	x := q[0]
+	return x
+}
+
+func passedOn(p ref string) ref string {
+	sp := Span{text: p, at: 1}
+	r := ref sp
+	return ref r.text
+}
+
+func viaLocal(xs ref []int) ref []int {
+	ys := xs
+	return ref ys
+}
+
+func inner(x ref ref string) ref string {
+	return *x
+}
+
+func outer(p ref string) ref string {
+	var y ref string = p
+	return inner(y)
+}
+
+func slot(p ref string) string {
+	var x ref string = p
+	var rr ref ref string = ref x
+	return (*rr).Clone()
+}
+
+func rebuilt(p ref string) string {
+	var t Two = Two{a: p, b: "lit"}
+	{
+		y := "inner".Clone()
+		t.b = y
+		t = Two{a: t.b, b: t.a}
+		t.a = "q"
+	}
+
+	return t.a.Clone() + " " + t.b.Clone()
+}
+
+func main() {
+	s := "hello, world".Clone()
+	h := Holder(s)
+	fmt.Println(show(h))
+	fmt.Println(s)
+	var o (ref string)? = Some(s)
+	fmt.Println(o ?? "none")
+	k := id(if len(s) > 3 { "long" } else { "short" })
+	fmt.Println(k, chosen(false))
+	fmt.Println(first(s))
+	sp := copied(s)
+	fmt.Println(sp.text, sp.at)
+	q := "left,right".Clone()
+	fmt.Println(field(q), element(q), matched(q), optional(q), ranged(q), apart(q))
+	fmt.Println(kept(q), twice(q))
+	xs := []int{4, 5, 6}
+	fmt.Println(passedOn(q), viaLocal(xs)[1], outer(q), slot(q), rebuilt(q))
+}

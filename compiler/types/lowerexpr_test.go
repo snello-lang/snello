@@ -18,12 +18,16 @@ import (
 // one between a string and its bytes reads; ?? moves an owned payload
 // and makes the value on its two paths into one temporary, the option
 // a call made taken by the result and not dropped; an if among a
-// literal's parts drops nothing of the parts made before it; and a
-// match guard's blocks hold what the guard evaluates, the arm's body
-// and the path to the next arm leaving them.
+// literal's parts drops nothing of the parts made before it; a match
+// guard's blocks hold what the guard evaluates, the arm's body and the
+// path to the next arm leaving them; a value made here, the value an
+// if chooses and a slice of one, given where a borrow is wanted, is
+// lent, the statement dropping it at its end; and a borrow bound
+// through a borrow of it, given where the borrow is wanted, is read
+// through the binding.
 func TestLowerExpressions(t *testing.T) {
 	const decls = "struct Row { name string }\nstruct L { r ref Row; n int }\nstruct P { a string; n int }\ntype Name string\nenum E { A(string); B(int) }\n" +
-		"func keep(s string) {}\nfunc take(s string) int { return 0 }\nfunc mk() string { return \"a\".Clone() }\nfunc opt() string? { return None }\n"
+		"func keep(s string) {}\nfunc take(s string) int { return 0 }\nfunc mk() string { return \"a\".Clone() }\nfunc opt() string? { return None }\nfunc id(x ref string) ref string { return x }\n"
 	tests := []struct{ src, want string }{
 		{"func f() { e := A(mk()); keep(\"x\") }", `b0:
   t0 = call()
@@ -157,6 +161,72 @@ b7:
   t7 = make()
   store t0 <- t7
   -> b1
+`},
+		{"func f() { print(id(mk())) }", `b0:
+  t0 = call()
+  t1 = borrow ref t0
+  t2 = call(t1)
+  t3 = call(t2)
+  drop t0
+  leave()
+  ->
+`},
+		{"func f(c bool) { print(id(if c { \"a\" } else { \"b\" })) }", `b0:
+  read c
+  -> b1 b2
+b1:
+  t1 = make()
+  store t0 <- t1
+  -> b3
+b2:
+  t2 = make()
+  store t0 <- t2
+  -> b3
+b3:
+  read t0
+  t3 = borrow ref t0
+  t4 = call(t3)
+  t5 = call(t4)
+  drop t0
+  leave(c)
+  ->
+`},
+		{"func f(p ref string) ref string { o := Some(p); return match ref o { Some(x) => x, None => p } }", `b0:
+  read p
+  t0 = borrow ref p
+  t1 = make(t0)
+  store o <- t1
+  t3 = borrow ref o
+  -> b2 b3
+b1:
+  read t2
+  return(t2)
+  drop t3
+  leave(o, p)
+  ->
+b2:
+  store x <- t3.?Some.?0
+  read x.*
+  store t2 <- x.*
+  drop x
+  -> b1
+b3:
+  -> b4
+b4:
+  read p
+  store t2 <- p
+  -> b1
+`},
+		{"func f() { print(id(mk()[0:1])) }", `b0:
+  t0 = make()
+  t1 = make()
+  t2 = call()
+  t3 = borrow ref t2
+  t4 = call(t3)
+  t5 = call(t4)
+  drop t2
+  leave()
+  ->
 `},
 	}
 	for _, tt := range tests {

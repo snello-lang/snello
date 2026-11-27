@@ -11,11 +11,12 @@ import "testing"
 // reads the receiver first and lends it after the arguments; a mut
 // method the same; a variadic call gives each extra argument to the
 // element type and a spread gives the slice; a variant written as a
-// call makes its value; a closure held in a variable is read before
-// its arguments; and a temporary receiver given by value is the
-// callee's, not dropped by the statement.
+// call makes its value, a ref field of it, and Some of an option of a
+// borrow, lending an owned variable given them; a closure held in a
+// variable is read before its arguments; and a temporary receiver given
+// by value is the callee's, not dropped by the statement.
 func TestLowerCalls(t *testing.T) {
-	const decls = "struct B { n int; name string }\nenum State { Closed; Open(id int) }\n" +
+	const decls = "struct B { n int; name string }\nenum State { Closed; Open(id int) }\nenum Held { Holder(ref string); Empty }\n" +
 		"func (b ref B) Get(k int) int { return b.n }\nfunc (b mut B) Set(k int) { b.n = k }\nfunc (b B) Consume() int { return 0 }\n" +
 		"func taken(s string) int { return 0 }\nfunc many(xs ...string) {}\nfunc mkb() B { return B{n: 0, name: \"b\"} }\n"
 	tests := []struct{ src, want string }{
@@ -81,6 +82,24 @@ func TestLowerCalls(t *testing.T) {
   read n
   t1 = call(n)
   leave(n, s, g)
+  ->
+`},
+		{"func f(s string) { h := Holder(s); print(s) }", `b0:
+  t0 = borrow ref s
+  t1 = make(t0)
+  store h <- t1
+  read s
+  t2 = call(s)
+  leave(h, s)
+  ->
+`},
+		{"func f(s string) { var o (ref string)? = Some(s); print(s) }", `b0:
+  t0 = borrow ref s
+  t1 = make(t0)
+  store o <- t1
+  read s
+  t2 = call(s)
+  leave(o, s)
   ->
 `},
 	}

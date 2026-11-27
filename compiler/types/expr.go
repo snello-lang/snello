@@ -252,7 +252,6 @@ func (c *Checker) selector(e *ast.SelectorExpr) operand {
 				}
 
 				c.recordUse(e.Sel, f)
-				c.markPart(e, e.X, x) // row().name lives in the row the statement holds
 				return operand{m, f.typ, f, nil}
 			}
 		}
@@ -384,8 +383,6 @@ func (c *Checker) receiver(e *ast.SelectorExpr, x operand, sig *Signature) {
 	} else if r.mut && isBorrow(x.typ) && !isMut(x.typ) { // the receiver is itself a ref borrow
 		c.errorf(e.X.Pos(), "cannot borrow "+exprText(e.X)+" as mut: "+exprText(e.X)+" is a ref "+c.throughWhat(e.X))
 	}
-
-	c.noteTemporary(e.X, x)
 }
 
 // typeFunc checks T.Name, a function of the type t, func Point.Parse,
@@ -650,11 +647,9 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 	switch t := base.Underlying().(type) {
 	case *Slice:
 		c.intIndex(e.Index)
-		c.markPart(e, e.X, x) // row().tags[0] lives in the row the statement holds
 		return operand{m, t.elem, nil, nil}
 	case *Array:
 		c.intIndex(e.Index)
-		c.markPart(e, e.X, x)
 		return operand{m, t.elem, nil, nil}
 	case *Map:
 		if c.noUse { // m[k] = v: the map keeps the key, taken as it is evaluated, before the value
@@ -667,7 +662,6 @@ func (c *Checker) index(e *ast.IndexExpr) operand {
 			c.zeroRead(e, t)
 		}
 
-		c.markPart(e, e.X, x)
 		return operand{m, t.value, nil, nil}
 	case *Basic:
 		if t.kind == String {
@@ -723,7 +717,6 @@ func (c *Checker) sliceExpr(e *ast.SliceExpr) operand {
 		c.readOnly[e] = true
 	}
 
-	c.markPart(e, e.X, x) // a view of row().tags borrows the row the statement holds
 	switch t := base.Underlying().(type) {
 	case *Slice:
 		return operand{value, NewRef(t, false), nil, nil} // a view: it never owns or grows the elements, so it is never mut
@@ -856,11 +849,6 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 			c.lentMode = mutBorrowed // a mut borrow lent on lends the place it borrows
 		}
 
-		c.noteTemporary(e.X, x)
-		if tmp := c.temporaryOf(e.X); tmp != nil {
-			c.markTemporary(e, tmp) // ref s.Clone() borrows the clone
-		}
-
 		return operand{value, NewRef(t, e.Op == token.MUT), nil, nil}
 	case token.AND:
 		var hint Type
@@ -889,7 +877,6 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 
 			return operand{m, t.elem, nil, nil}
 		case *Pointer:
-			c.markPart(e, e.X, x) // *boxed() lives in the pointer the statement holds
 			return operand{variable, t.elem, nil, nil}
 		}
 

@@ -85,6 +85,7 @@ func TestPassing(t *testing.T) {
 		{"func f(s ref string) { v := Id(View{s: s}); print(v) }", nil},
 		{"func f() View { t := \"a\".Clone(); return Id(View{s: ref t}) }", []string{"cannot return a borrow of local t"}},
 		{"func f() View? { t := \"a\".Clone(); return Back(View{s: ref t}) }", []string{"cannot return a borrow of local t"}},
+		{"struct Slot<T> { v T }\nfunc set<T>(c mut Slot<T>, x T) { c.v = x }\nfunc mk() string { return \"m\".Clone() }\nfunc f(p ref string) int { c := Slot<ref string>{v: p}; set(mut c, mk()); return len(c.v) }", []string{"cannot keep a borrow of a temporary: mk() is dropped when the statement ends"}}, // a value made here, which the store would keep
 		{"func f() { s := \"a\".Clone(); o := View{s: ref s}; { t := \"b\".Clone(); Into(mut o, View{s: ref t}) }; print(o.s.Len()) }", []string{"cannot keep a borrow of t in o: t is dropped at the end of its block"}},
 		{"func f(o mut View, s ref string) { Into(o, View{s: s}) }", []string{"cannot keep a borrow in o: Into may store what View{...} holds in it, where the checker cannot follow it"}},
 		{"func f() { c := Cell<ref string>{v: None}; t := \"t\".Clone(); r := ref t; Put<ref string>(Sink<ref string>{c: mut c}, r); print(c.v) }", []string{"cannot pass Sink<ref string>{...} to Put beside r: Sink<ref string>{...} holds a mut borrow, through which Put may store what r holds"}},

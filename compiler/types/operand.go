@@ -67,24 +67,11 @@ func (c *Checker) condition(e ast.Expr) {
 }
 
 // assign reports an error when op cannot be used where a value of type
-// t is wanted; what says the role, for the message. A place that fits
-// is moved there, unless t lends it.
+// t is wanted; what says the role, for the message. An owned value
+// given where a borrow is wanted is lent there, which the lowering
+// writes as a borrow of it.
 func (c *Checker) assign(op operand, t Type, pos token.Pos, what string) {
-	if !c.fits(op, t, pos, what) {
-		return
-	}
-
-	c.implicitBorrow(op, t)
-}
-
-// implicitBorrow notes op as a temporary when it is an owned value no
-// variable holds, lent where t, a borrow, is wanted without a ref
-// written: var r ref Row = boxed() borrows the pointer the statement
-// holds, as ref boxed() would.
-func (c *Checker) implicitBorrow(op operand, t Type) {
-	if _, ok := t.(*Ref); ok && op.expr != nil && !isBorrow(op.typ) {
-		c.noteTemporary(op.expr, op)
-	}
+	c.fits(op, t, pos, what)
 }
 
 // fits reports whether op can be used where t is wanted, reporting the

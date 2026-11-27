@@ -74,7 +74,7 @@ func parts() {
 }
 
 func wrapped() {
-    var q ref Row = (boxed())             // ERROR "cannot keep a borrow of a temporary: (boxed()) is dropped"
+    var q ref Row = (boxed())             // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
     h := Hold(boxed())                    // ERROR "cannot keep a borrow of a temporary: boxed() is dropped"
     match h {
         Hold(r) => fmt.Println(r.name, q.name),

@@ -5,8 +5,6 @@
 package types
 
 import (
-	"slices"
-
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/token"
 )
@@ -145,35 +143,12 @@ func borrowAccess(mut bool) access {
 	return refAccess
 }
 
-// holdIn records that the part path of v, of type t, holds the borrow e
-// carries: h.src = ref t makes h hold t.
-func (c *Checker) holdIn(v *Var, path string, t Type, e ast.Expr, pos token.Pos) {
-	if e == nil {
-		return
-	}
-
-	if _, ok := borrowIn(t); ok {
-		if tmp := c.borrowOfTemporary(e); tmp != nil {
-			c.errorf(pos, "cannot keep a borrow of a temporary: "+temporaryText(tmp)+" is dropped when the statement ends")
-			return
-		}
-	}
-
-	c.holdValue(v, path, t, e, pos)
-}
-
-// holdValue is holdIn once e is known to lend no temporary that v
-// would keep: v takes what e holds.
+// holdValue records that the part path of v, of type t, holds what the
+// closure or function value e holds: what a closure written here
+// captures, or what the value's expression lends.
 func (c *Checker) holdValue(v *Var, path string, t Type, e ast.Expr, pos token.Pos) {
 	if _, ok := unparen(e).(*ast.Ident); ok && isSignature(t) {
 		return // a closure variable copied: refused where the store is made, by the operand
-	}
-
-	if id, ok := unparen(e).(*ast.Ident); ok && isMut(t) {
-		if p, kind := c.placeOf(id); kind == placeOwned {
-			c.flowCopy(v, p.v, "", path, pos) // q := p moves a mut borrow: q holds what p held
-			return
-		}
 	}
 
 	if caps := c.capturesOf(e); caps != nil {
@@ -188,72 +163,7 @@ func (c *Checker) holdValue(v *Var, path string, t Type, e ast.Expr, pos token.P
 		return
 	}
 
-	if lit, ok := unparen(e).(*ast.CompositeLit); ok {
-		for _, elt := range lit.Elts { // l := Lexer{src: ref s}: l holds s, in its field src
-			part := path
-			if kv, ok := elt.(*ast.KeyValueExpr); ok {
-				if key, ok := kv.Key.(*ast.Ident); ok {
-					part = joinPath(path, key.Name)
-				}
-
-				elt = kv.Value
-			}
-
-			c.derive(v, part, t, elt, pos)
-		}
-
-		return
-	}
-
-	if call, ok := unparen(e).(*ast.CallExpr); ok {
-		if _, ok := c.calleeOf(call).(*Variant); ok {
-			for _, arg := range call.Args { // p := Pair(ref a, ref b): p holds both
-				c.derive(v, path, t, arg, pos)
-			}
-
-			return
-		}
-	}
-
 	c.derive(v, path, t, e, pos)
-}
-
-// noteTemporary records that e, lent to a call or a ref, is a
-// temporary when its value is owned and no variable holds it, other
-// than a literal or a constant, which live for the whole program, and
-// an expression that never finishes, panic(...), which makes no value.
-func (c *Checker) noteTemporary(e ast.Expr, x operand) {
-	if x.mode == value && !isBorrow(x.typ) && !isNever(x.typ) && !c.static(e) && c.temporaryOf(e) == nil { // a part of a temporary already names the whole, row() for row().name
-		c.markTemporary(e, e)
-	}
-}
-
-// markTemporary records that the value of e is, or borrows, the
-// temporary tmp.
-func (c *Checker) markTemporary(e, tmp ast.Expr) {
-	if c.temporary == nil {
-		c.temporary = make(map[ast.Expr]ast.Expr)
-	}
-
-	c.temporary[unparen(e)] = tmp
-}
-
-// temporaryOf returns the temporary the value of e is, borrows or is a
-// part of, or nil.
-func (c *Checker) temporaryOf(e ast.Expr) ast.Expr {
-	return c.temporary[unparen(e)]
-}
-
-// markPart records that e, a field, an element or a piece of the value
-// of x, or what x points at, lives where that value does: in x itself when x is a value no
-// variable holds, boxed().name, or in the temporary x is a part of,
-// (*boxed()).name. A borrow of such a part is a borrow of the temporary.
-func (c *Checker) markPart(e, x ast.Expr, op operand) {
-	if tmp := c.temporaryOf(x); tmp != nil {
-		c.markTemporary(e, tmp)
-	} else if op.mode == value && !isBorrow(op.typ) && !isNever(op.typ) && !c.static(x) {
-		c.markTemporary(e, x)
-	}
 }
 
 // static reports whether e is a literal or a constant, this package's
@@ -273,70 +183,6 @@ func (c *Checker) static(e ast.Expr) bool {
 	return false
 }
 
-// borrowOfTemporary returns the temporary a borrow in e was lent
-// from, looking through parentheses, ?? and ?, and into the elements
-// of a literal or tuple, or nil when every borrow in e comes from a
-// place.
-func (c *Checker) borrowOfTemporary(e ast.Expr) ast.Expr {
-	var tmp ast.Expr
-	if eachBranch(e, func(v ast.Expr) { // a branch that lends a temporary
-		if tmp == nil {
-			tmp = c.borrowOfTemporary(v)
-		}
-	}) {
-		if tmp == nil && !c.staticBranches(e) {
-			tmp = c.temporaryOf(e) // the if or the match itself, whose owned value a borrow was lent from: its branches moved into it, unless each is a literal or a constant, which lives for the whole program
-		}
-
-		return tmp
-	}
-
-	switch x := e.(type) {
-	case *ast.ParenExpr:
-		return c.borrowOfTemporary(x.X)
-	case *ast.TryExpr:
-		return c.borrowOfTemporary(x.X)
-	case *ast.TupleExpr:
-		for _, elt := range x.Elts {
-			if tmp := c.borrowOfTemporary(elt); tmp != nil {
-				return tmp
-			}
-		}
-	case *ast.CompositeLit:
-		for _, elt := range x.Elts {
-			if kv, ok := elt.(*ast.KeyValueExpr); ok {
-				elt = kv.Value
-			}
-
-			if tmp := c.borrowOfTemporary(elt); tmp != nil {
-				return tmp
-			}
-		}
-	case *ast.CallExpr:
-		if _, ok := c.calleeOf(x).(*Variant); ok { // Some(boxed()) holds what its argument lends
-			for _, arg := range x.Args {
-				if tmp := c.borrowOfTemporary(arg); tmp != nil {
-					return tmp
-				}
-			}
-		}
-
-		passed := c.passed[x]
-		for _, arg := range passed.args { // a generic call's result holds what its arguments hold
-			held := c.heldTemporary
-			if slices.Contains(passed.lent, arg) {
-				held = c.borrowOfTemporary // a temporary lent to a ref parameter is a borrow the result may be, pick<ref string>(owned())
-			}
-
-			if tmp := held(arg); tmp != nil {
-				return tmp
-			}
-		}
-	}
-
-	return c.temporaryOf(e)
-}
-
 // temporaryText names the temporary e for a message: an if's or a
 // match's value by the construct, since its text is its branches, and
 // any other by its text.
@@ -351,36 +197,6 @@ func temporaryText(e ast.Expr) string {
 	}
 
 	return exprText(e)
-}
-
-// staticBranches reports whether every branch of e, an if or a match,
-// is a string literal or constant, never yields, or is an if or a match
-// whose own branches are so: text that lives for the whole program,
-// which a borrow of the if's value views where it lies. A number is
-// copied into the if's result, a temporary, which a borrow would point
-// at after the statement drops it, so an if of number literals is no
-// exception. e that is no if or match has no branches to be so.
-func (c *Checker) staticBranches(e ast.Expr) bool {
-	all := true
-	branching := eachBranch(e, func(v ast.Expr) {
-		t := c.info.Types[unparen(v)]
-		if !isNever(t) && !(c.static(v) && isString(t)) && !c.staticBranches(v) {
-			all = false
-		}
-	})
-
-	return branching && all
-}
-
-// heldTemporary returns a temporary that what e holds borrows, or nil:
-// a borrow of a temporary inside e, but not e itself, which may be a
-// temporary lent to a call that keeps only what it holds.
-func (c *Checker) heldTemporary(e ast.Expr) ast.Expr {
-	if tmp := c.borrowOfTemporary(e); tmp != unparen(e) {
-		return tmp
-	}
-
-	return nil
 }
 
 // derive records that the part path of v, of type t, holds what e
@@ -423,7 +239,12 @@ func (c *Checker) derivePlace(v *Var, path string, mut bool, p place, kind place
 	}
 
 	if p, kind := through(p, kind); kind != notPlace {
-		c.flowLoan(borrow{holder: v, place: p, mut: mut, pos: pos, hpath: path, read: read && isBorrow(placeType(p))})
+		at := placeType(p)
+		if kind == placeIndexed {
+			at = stepType(at, "[]") // an element read: the borrow it is, not the slice's
+		}
+
+		c.flowLoan(borrow{holder: v, place: p, mut: mut, pos: pos, hpath: path, read: read && isBorrow(at)})
 	}
 }
 
@@ -458,24 +279,17 @@ func unparen(e ast.Expr) ast.Expr {
 	}
 }
 
-// borrowSources finds the place expressions a borrow-valued expression
-// lends from: the operand of ref or mut, the receiver of a method or
-// the argument a function's result borrows (callSource), the operand
-// of a slice expression, or the place itself when a borrow is read out
-// of a variable, field or element. A value chosen at run time lends
-// from every place it may come from: both sides of ??, and each branch
-// of an if or match expression. None when there is none.
-func (c *Checker) borrowSources(e ast.Expr) []ast.Expr {
-	var srcs []ast.Expr
-	c.sources(e, func(src ast.Expr, _, _ bool) { srcs = append(srcs, src) })
-	return srcs
-}
-
-// sources calls f with each place borrowSources finds, whether the
-// borrow is read out of the place, a borrow the place holds, rather
-// than lent from it: r in q := r, h.src in r = h.src, against s in ref
-// s and m in m.Get(k); and whether it was reached through a *, x := *r,
-// which reads what the borrow r points at and not r's own borrow of it.
+// sources calls f with each place expression a borrow-valued
+// expression lends from: the operand of ref or mut, the receiver of a
+// method or the argument a function's result borrows (callSource), the
+// operand of a slice expression, or the place itself when a borrow is
+// read out of a variable, field or element, and every place a value
+// chosen at run time may come from, both sides of ??, and each branch
+// of an if or match expression. It says whether the borrow is read out
+// of the place, a borrow the place holds, rather than lent from it: r in
+// q := r, h.src in r = h.src, against s in ref s and m in m.Get(k); and
+// whether it was reached through a *, x := *r, which reads what the
+// borrow r points at and not r's own borrow of it.
 func (c *Checker) sources(e ast.Expr, f func(src ast.Expr, read, deref bool)) {
 	c.sourcesLent(e, false, false, f)
 }

@@ -310,6 +310,9 @@ var handledErrors = map[string]bool{
 	"lent-temporary.snello": true,
 	// An assignment writes a place, never a value an expression makes.
 	"assign-to-value.snello": true,
+	// A value lends what the values it is made of lend, followed through
+	// every step that makes it.
+	"lent-through-values.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

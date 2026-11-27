@@ -84,10 +84,9 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 	calling := c.calling
 	c.calling = f.obj
 	defer func() { c.calling = calling }() // an argument's own call sets its own
-	var tmp ast.Expr
 	switch {
 	case sig.tparams != nil:
-		if sig, tmp = c.genericCall(e, sig, f.obj, expected); sig == nil {
+		if sig = c.genericCall(e, sig, f.obj, expected); sig == nil {
 			return invalidOperand
 		}
 	case len(e.TypeArgs) > 0:
@@ -95,12 +94,11 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		c.exprs(e.Args)
 		return invalidOperand
 	default:
-		tmp = c.args(e, sig)
+		c.args(e, sig)
 	}
 
-	passedOnly := false
 	if fn, ok := f.obj.(*Func); ok {
-		passedOnly = c.passBorrows(e, fn, sig) // a type argument that holds a borrow: what the call passes along
+		c.passBorrows(e, fn, sig) // a type argument that holds a borrow: what the call passes along
 		c.recordHideEdge(e, fn, sig)
 	}
 
@@ -112,24 +110,10 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 		c.checkTimeLayout(e, exprText(e.Fun), parsed)
 	}
 
-	if sel, ok := e.Fun.(*ast.SelectorExpr); ok && sig.recv != nil {
+	if _, ok := e.Fun.(*ast.SelectorExpr); ok && sig.recv != nil {
 		if n, ok := receiverBase(sig.recv.typ).(*Named); ok && n.orig != nil {
 			c.recordCall(n.orig.tparams, n.targs, e.Lparen, n.obj.name) // the method is an instance's, made per type argument
 		}
-
-		if _, ok := sig.recv.typ.(*Ref); ok {
-			if t := c.temporaryOf(sel.X); t != nil {
-				tmp = t
-			}
-		}
-
-		if f.obj == nil {
-			c.storedElement(e, sel, sig)
-		}
-	}
-
-	if _, ok := borrowIn(sig.results); ok && tmp != nil && !passedOnly {
-		c.markTemporary(e, tmp) // the result borrows what the receiver or argument did; one whose borrow came through a type argument holds only what they hold
 	}
 
 	if diverges(f.obj) {
@@ -137,46 +121,6 @@ func (c *Checker) callInner(e *ast.CallExpr, expected Type) operand {
 	}
 
 	return operand{value, sig.results, nil, nil}
-}
-
-// storedElement records what a predeclared method that stores an
-// element keeps, when the element holds a borrow: Push, Insert and
-// Extend on the pieces Split and Fields lend put more borrows into the
-// slice, which then holds what each argument holds, as an assignment's
-// target holds what its value does, so that the slice is not used past
-// the string another piece came from. Only a slice a variable owns can
-// be such a receiver, since no other place can be given its type.
-func (c *Checker) storedElement(e *ast.CallExpr, sel *ast.SelectorExpr, sig *Signature) {
-	arg, elem := -1, Type(nil)
-	switch sel.Sel.Name {
-	case "Push":
-		arg, elem = 0, paramType(sig, 0)
-	case "Insert":
-		arg, elem = 1, paramType(sig, 1)
-	case "Extend":
-		if r, ok := paramType(sig, 0).(*Ref); ok {
-			if s, ok := r.elem.(*Slice); ok {
-				arg, elem = 0, s
-			}
-		}
-	}
-
-	if arg < 0 || arg >= len(e.Args) || elem == nil || !holdsBorrow(elem) {
-		return
-	}
-
-	x := e.Args[arg]
-	if u, ok := unparen(x).(*ast.UnaryExpr); ok && u.Op == token.REF {
-		x = u.X // ref ys: the slice takes what ys holds, not a borrow of ys
-	}
-
-	p, kind := through(c.placeOf(sel.X))
-	if kind != placeOwned { // through a mut borrow of the slice, r := mut parts, the borrow variable is not what holds the pieces
-		c.errorf(x.Pos(), "cannot keep a borrow in "+exprText(sel.X)+": "+sel.Sel.Name+" stores it where the checker cannot follow it")
-		return
-	}
-
-	c.holdIn(p.v, p.path, placeType(p), x, x.Pos())
 }
 
 // conversionTakes reports whether the conversion of a value of type v
@@ -201,13 +145,12 @@ func paramType(sig *Signature, i int) Type {
 // argument past the fixed parameters is checked against the variadic
 // parameter's element, T for ...T and ref T for ...ref T, as if it were
 // a parameter of its own, or, after ..., the one argument against the
-// parameter's slice. It returns the temporary a borrowed argument
-// lends, if any.
-func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
+// parameter's slice.
+func (c *Checker) args(e *ast.CallExpr, sig *Signature) {
 	fixed := sig.fixed()
 	if !c.argCount(e, sig) {
 		c.exprs(e.Args)
-		return nil
+		return
 	}
 
 	kind, each := sig.variadicArg()
@@ -226,12 +169,8 @@ func (c *Checker) args(e *ast.CallExpr, sig *Signature) (tmp ast.Expr) {
 			continue
 		}
 
-		if t := c.argEffects(e, arg, op, p, pt, at, packed); t != nil {
-			tmp = t
-		}
+		c.argEffects(e, arg, op, p, at, packed)
 	}
-
-	return tmp
 }
 
 // noSpread refuses ... in a call that passes no slice: of a built-in, a
@@ -370,9 +309,7 @@ func (c *Checker) genericVariant(e *ast.CallExpr, v *Variant, expected Type) ope
 
 	fields := en.variants[v.index].fields
 	for i, op := range ops {
-		if c.fits(op, fields[i].typ, e.Args[i].Pos(), "field "+fields[i].name) {
-			c.implicitBorrow(op, fields[i].typ)
-		}
+		c.fits(op, fields[i].typ, e.Args[i].Pos(), "field "+fields[i].name)
 	}
 
 	return operand{value, t, nil, nil}
@@ -381,10 +318,9 @@ func (c *Checker) genericVariant(e *ast.CallExpr, v *Variant, expected Type) ope
 // argEffects runs what passing op for the parameter p does, once the
 // argument fits: a kept or spawned argument may not be a borrow, an
 // argument for a ref or mut parameter is lent for the call, and any
-// other is moved unless it is Copy. It returns the temporary the
-// argument lends, if any. Only the parameter's shape matters, so a
-// generic call runs it before its type arguments are known.
-func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var, pt Type, i int, packed bool) (tmp ast.Expr) {
+// other is moved unless it is Copy. Only the parameter's shape matters,
+// so a generic call runs it before its type arguments are known.
+func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var, i int, packed bool) {
 	switch {
 	case c.keepArg(op, i, arg.Pos()):
 		if e == c.spawning {
@@ -397,23 +333,15 @@ func (c *Checker) argEffects(e *ast.CallExpr, arg ast.Expr, op operand, p *Var, 
 		c.kept(op, "spawned", arg.Pos())
 		c.spawnArg(arg, op)
 	}
-
-	if _, ok := pt.(*Ref); ok {
-		c.noteTemporary(arg, op)
-		tmp = c.temporaryOf(arg)
-	}
-
-	return tmp
 }
 
 // genericCall checks the arguments of a call of a generic function or
 // method: the type arguments written at the call come first, the rest
 // are inferred from the arguments and then from the type the context
 // expects of the result, and the arguments are checked against the
-// signature with them in place, which it returns, nil after an error,
-// with the temporary an argument lends. The instance is recorded for
-// the backend.
-func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, obj Object, expected Type) (*Signature, ast.Expr) {
+// signature with them in place, which it returns, nil after an error.
+// The instance is recorded for the backend.
+func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, obj Object, expected Type) *Signature {
 	name := exprText(e.Fun)
 	in := newInference(sig.tparams)
 	if fn, ok := obj.(*Func); ok && fn.origin != nil {
@@ -423,13 +351,13 @@ func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, obj Object, expec
 	}
 	if !c.explicit(in, e.TypeArgs, name, e.Fun) {
 		c.exprs(e.Args)
-		return nil, nil
+		return nil
 	}
 
 	fixed := sig.fixed()
 	if !c.argCount(e, sig) {
 		c.exprs(e.Args)
-		return nil, nil
+		return nil
 	}
 
 	kind, each := sig.variadicArg()
@@ -444,12 +372,9 @@ func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, obj Object, expec
 		_, slots[i], _, _ = argSlot(sig, i, spread, kind, each)
 	}
 
-	var tmp ast.Expr
 	ops := c.evaluate(in, e.Args[:checked], slots, func(i int, op operand) {
 		p, _, at, packed := argSlot(sig, i, spread, kind, each)
-		if t := c.argEffects(e, e.Args[i], op, p, slots[i], at, packed); t != nil {
-			tmp = t
-		}
+		c.argEffects(e, e.Args[i], op, p, at, packed)
 	})
 	var rest []operand
 	for _, arg := range e.Args[checked:] {
@@ -460,7 +385,7 @@ func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, obj Object, expec
 	in.unify(sig.results, expected)
 	targs, ok := c.complete(in, name, e.Fun)
 	if !ok {
-		return nil, nil
+		return nil
 	}
 
 	inst := in.apply(sig).(*Signature)
@@ -476,7 +401,7 @@ func (c *Checker) genericCall(e *ast.CallExpr, sig *Signature, obj Object, expec
 		c.info.Instances[id] = Instance{targs, inst}
 	}
 
-	return inst, tmp
+	return inst
 }
 
 // calleeName is the name a call's function is written with: f, or the
@@ -606,7 +531,6 @@ func (c *Checker) panicCall(e *ast.CallExpr) operand {
 		return never
 	}
 
-	c.implicitBorrow(x, msg)
 	return never
 }
 
