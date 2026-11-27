@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/version"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // TestNewModule starts a module as snello new does: the module file
@@ -39,12 +40,12 @@ func TestNewModule(t *testing.T) {
 
 	for _, backend := range []string{"llvm", "c"} {
 		var out, errs strings.Builder
-		if code := run([]string{testCommand, "-backend", backend, dir}, &out, &errs); code != exitSuccess || !strings.HasPrefix(out.String(), "ok  \thello\t") {
+		if code := runWith([]string{testCommand, "-backend", backend, dir}, &out, &errs, testproc.Command); code != exitSuccess || !strings.HasPrefix(out.String(), "ok  \thello\t") {
 			t.Errorf("%s: the module's tests exited %d, printed %q and said %q", backend, code, out.String(), errs.String())
 		}
 
 		out.Reset()
-		if code := run([]string{runCommand, "-backend", backend, dir}, &out, &errs); code != exitSuccess || out.String() != "Hello, Snello!\n" {
+		if code := runWith([]string{runCommand, "-backend", backend, dir}, &out, &errs, testproc.Command); code != exitSuccess || out.String() != "Hello, Snello!\n" {
 			t.Errorf("%s: the module's program exited %d and printed %q", backend, code, out.String())
 		}
 	}

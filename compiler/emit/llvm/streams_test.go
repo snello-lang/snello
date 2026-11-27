@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snello-lang/snello/compiler/platform"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // The standard streams as a program's caller sees them: in order, with
@@ -54,7 +54,7 @@ func main() {
 }
 `)
 	var both bytes.Buffer
-	cmd := exec.Command(bin)
+	cmd := testproc.Command(bin)
 	cmd.Stdout, cmd.Stderr = &both, &both
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func main() {
 	fmt.Printf("got %d\n", line.Len())
 }
 `)
-	cmd := exec.Command(bin)
+	cmd := testproc.Command(bin)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func main() {
 		t.Fatal(err)
 	}
 
-	out, err := exec.Command("sh", "-c", `exec "$0" "$1" <&-`, bin, file).CombinedOutput()
+	out, err := testproc.Command("sh", "-c", `exec "$0" "$1" <&-`, bin, file).CombinedOutput()
 	if err != nil || string(out) != "stdin 0\n" {
 		t.Errorf("%v: %q, want %q", err, out, "stdin 0\n")
 	}
@@ -184,7 +184,7 @@ func main() {
 }
 `)
 	file := filepath.Join(t.TempDir(), "out")
-	cmd := exec.Command("sh", "-c", `trap '' XFSZ; ulimit -f 32; exec "$0" > "$1"`, bin, file)
+	cmd := testproc.Command("sh", "-c", `trap '' XFSZ; ulimit -f 32; exec "$0" > "$1"`, bin, file)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -238,7 +238,7 @@ func main() {
 
 	defer os.Chmod(locked, 0o755) // so that the test's own cleanup can remove it
 
-	out, err := exec.Command(bin, dir).CombinedOutput()
+	out, err := testproc.Command(bin, dir).CombinedOutput()
 	want := `Err("unlinkat ` + filepath.Join(locked, "f") + `: permission denied")`
 	if err != nil || strings.TrimSpace(string(out)) != want {
 		t.Errorf("%v: %s, want %s", err, out, want)

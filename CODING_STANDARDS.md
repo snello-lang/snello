@@ -115,6 +115,7 @@ Compile time is a feature, and in Go the way to lose it is allocation: every obj
   2. the error message for each kind of bad input,
   3. a sweep over every program in `examples/`.
 - A test failure message shows the input, what was produced, and what was expected.
+- A test that runs a program, one it built or any other, starts it with `testproc.Command` or `testproc.CommandContext` from `internal/testproc`, never `exec.Command`: a test binary that times out, crashes or is killed runs none of its deferred calls, and a program it started would run on without it. The toolchain a test calls to build, a compiler or `git`, is exempt.
 - Helpers used only by tests live at the bottom of the test file.
 
 ## Snello code in `examples/` and `std/`

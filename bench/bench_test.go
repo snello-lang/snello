@@ -35,6 +35,7 @@ import (
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
 	"github.com/snello-lang/snello/internal/measure"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // programs are the benchmarks, by the stem of their files.
@@ -378,7 +379,7 @@ func buildGo(t *testing.T, dir, name string) string {
 // output runs a binary and returns what it printed.
 func output(t *testing.T, bin string) string {
 	t.Helper()
-	out, err := exec.Command(bin).Output()
+	out, err := testproc.Command(bin).Output()
 	if err != nil {
 		t.Fatalf("%s: %v", bin, err)
 	}

@@ -7,11 +7,12 @@ package measure
 import (
 	"fmt"
 	"io"
-	"os/exec"
 	"syscall"
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // readCounters is the access GetProcessMemoryInfo asks of a handle,
@@ -46,7 +47,7 @@ func New(testing.TB) *Measurer {
 // to stdout and its standard error to stderr, and measures it. A
 // program that fails gives an error.
 func (m *Measurer) Run(stdout, stderr io.Writer, path string, args ...string) (Result, error) {
-	cmd := exec.Command(path, args...)
+	cmd := testproc.Command(path, args...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	start := time.Now()
 	if err := cmd.Start(); err != nil {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/version"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // TestHelp holds the help to every command and its line, printed on
@@ -138,7 +139,7 @@ func TestVersionStamp(t *testing.T) {
 			t.Fatalf("building with channel %q: %v\n%s", channel, err, out)
 		}
 
-		out, err := exec.Command(bin, versionCommand).Output()
+		out, err := testproc.Command(bin, versionCommand).Output()
 		if line := string(out); err != nil || !strings.HasPrefix(line, "snello "+version.Current+" ") || !strings.Contains(line, want) {
 			t.Errorf("channel %q: version printed %q, %v, want %q in it", channel, line, err, want)
 		}
@@ -193,7 +194,7 @@ func TestTestJSON(t *testing.T) {
 	}
 
 	var out, errs strings.Builder
-	if code := run([]string{testCommand, "-json", "-run", "Greeting", dir}, &out, &errs); code != exitSuccess || errs.Len() > 0 {
+	if code := runWith([]string{testCommand, "-json", "-run", "Greeting", dir}, &out, &errs, testproc.Command); code != exitSuccess || errs.Len() > 0 {
 		t.Fatalf("test -json exited %d and said %q", code, errs.String())
 	}
 
@@ -240,17 +241,17 @@ func TestOutputFlags(t *testing.T) {
 		t.Fatalf("build -o exited %d", code)
 	}
 
-	if printed, err := exec.Command(prog).Output(); err != nil || string(printed) != "Hello, Snello!\n" {
+	if printed, err := testproc.Command(prog).Output(); err != nil || string(printed) != "Hello, Snello!\n" {
 		t.Errorf("the program build -o wrote printed %q, %v", printed, err)
 	}
 
 	tests := filepath.Join(out, "hello.test"+exe)
 	var errs strings.Builder
-	if code := run([]string{testCommand, "-c", "-debug", "-o", tests, dir}, io.Discard, &errs); code != exitSuccess {
+	if code := runWith([]string{testCommand, "-c", "-debug", "-o", tests, dir}, io.Discard, &errs, testproc.Command); code != exitSuccess {
 		t.Fatalf("test -c exited %d and said %q", code, errs.String())
 	}
 
-	cmd := exec.Command(tests, "-v", "-run", "^TestGreeting$")
+	cmd := testproc.Command(tests, "-v", "-run", "^TestGreeting$")
 	cmd.Dir = dir
 	if printed, err := cmd.Output(); err != nil || !strings.Contains(string(printed), "--- PASS: TestGreeting") {
 		t.Errorf("the program test -c wrote printed %q, %v", printed, err)

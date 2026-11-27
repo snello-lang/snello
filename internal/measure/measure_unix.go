@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 const (
@@ -124,7 +126,7 @@ func (m *Measurer) Run(stdout, stderr io.Writer, path string, args ...string) (R
 	}
 	defer r.Close()
 
-	cmd := exec.Command(m.path, append([]string{program}, args...)...)
+	cmd := testproc.Command(m.path, append([]string{program}, args...)...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.ExtraFiles = []*os.File{w}
 	err = cmd.Start()

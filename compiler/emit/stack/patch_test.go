@@ -17,6 +17,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // patchSource is a program laid out as a Snello program is for Patch:
@@ -117,7 +118,7 @@ func TestPatch(t *testing.T) {
 		t.Fatalf("table %v, %v, want %d and unbounded", table, err, bounds[0].Bytes)
 	}
 
-	out, err := exec.Command(bin).CombinedOutput()                      // on macOS, a binary whose signature no longer matched would be killed
+	out, err := testproc.Command(bin).CombinedOutput()                  // on macOS, a binary whose signature no longer matched would be killed
 	got := strings.ReplaceAll(string(out), windowsLineEnd, unixLineEnd) // Windows' C library writes a line's end as two bytes to a stream in text mode
 	if want := fmt.Sprintf("%d %d\n", table[0], table[1]); err != nil || got != want {
 		t.Fatalf("the patched program: %v, %q, want %q", err, got, want)

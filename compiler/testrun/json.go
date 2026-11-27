@@ -98,11 +98,12 @@ type Event struct {
 }
 
 // RunJSON builds the tests of the package in dir through the backend,
-// in work, and runs the program with args, writing what happens to w as events,
-// one JSON object a line, and returns the program's exit code. A
+// in work, and runs the program with args through command, writing
+// what happens to w as events, one JSON object a line, and returns the
+// program's exit code. A
 // package that cannot be built is an event of its own: its error as the
 // package's output, and the package's failure.
-func RunJSON(dir, backend string, args []string, w io.Writer, work Work) int {
+func RunJSON(dir, backend string, args []string, w io.Writer, work Work, command Command) int {
 	j := newConverter(w, mainLabel(dir), dir)
 	p, err := PlanDir(dir)
 	if err == nil {
@@ -116,7 +117,7 @@ func RunJSON(dir, backend string, args []string, w io.Writer, work Work) int {
 
 	if err == nil {
 		var code int
-		code, err = p.run(dir, backend, append([]string{jsonFlag}, args...), j, j, work)
+		code, err = p.run(dir, backend, append([]string{jsonFlag}, args...), j, j, work, command)
 		if err == nil {
 			j.finish(code)
 			return code

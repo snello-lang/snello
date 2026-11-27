@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"text/tabwriter"
 	"time"
 
 	"github.com/snello-lang/snello/compiler/emit/lower"
 	"github.com/snello-lang/snello/compiler/platform"
+	"github.com/snello-lang/snello/compiler/testrun"
 	"github.com/snello-lang/snello/compiler/version"
 )
 
@@ -166,6 +168,14 @@ type command struct {
 // write to the process's own streams, as the compiler's errors always
 // have.
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWith(args, stdout, stderr, exec.Command)
+}
+
+// runWith is run, the programs that run and test build, and the
+// debugger debug starts, started through start: exec.Command for the
+// command, and for a test the command that ends them with the test
+// binary (internal/testproc).
+func runWith(args []string, stdout, stderr io.Writer, start testrun.Command) int {
 	if len(args) == 0 {
 		printCommands(stderr)
 		return exitUsage
@@ -176,7 +186,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitSuccess
 	}
 
-	c := lookup(args[0])
+	c := lookupIn(commandsFor(start), args[0])
 	if c == nil {
 		fmt.Fprintf(stderr, "%s: unknown command %q; run %s %s\n", program, args[0], program, helpCommand)
 		return exitUsage
@@ -203,15 +213,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // commands returns snello's commands in the order the help lists them,
-// by name. It is a function and not a variable since help's work looks
-// commands up, which a variable's initialization could not refer to. It
-// allocates the list.
+// by name, as the command runs them. It is a function and not a
+// variable since help's work looks commands up, which a variable's
+// initialization could not refer to. It allocates the list.
 func commands() []*command {
+	return commandsFor(exec.Command)
+}
+
+// commandsFor is commands, run and test starting the program they
+// build, and debug its debugger, through start.
+func commandsFor(start testrun.Command) []*command {
 	return []*command{
 		{name: addCommand, args: addArgs, minArgs: 2, maxArgs: 3, short: "require a dependency by version, its latest release unless one is named", declare: declareAdd},
 		{name: buildCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "compile a program, a file or a directory, to a binary", declare: declareCompile(buildCommand, true, build)},
 		{name: checkCommand, args: pathArg, minArgs: 1, maxArgs: 1, short: "check a program, or a package, and print its errors", declare: declareCheck},
-		{name: debugCommand, args: debugArgs, minArgs: 0, maxArgs: anyArgs, short: "build a program for a debugger and run it under one", declare: declareDebug},
+		{name: debugCommand, args: debugArgs, minArgs: 0, maxArgs: anyArgs, short: "build a program for a debugger and run it under one", declare: declareDebug(start)},
 		{name: depsCommand, minArgs: 0, maxArgs: 0, short: "print the dependencies by version, and who requires each", declare: declareDeps},
 		{name: docCommand, args: docArgs, minArgs: 0, maxArgs: 1, short: "print a package's documentation, or a name's", declare: declareDoc},
 		{name: doctorCommand, minArgs: 0, maxArgs: 0, short: "check what a build needs, and say how to fix what is missing", declare: declareDoctor},
@@ -225,8 +241,8 @@ func commands() []*command {
 		{name: newCommand, args: dirArg, minArgs: 1, maxArgs: 1, short: "start a module in a new directory, with a program and its test", declare: declareNew},
 		{name: parseCommand, args: fileArg, minArgs: 1, maxArgs: 1, short: "print the syntax tree of a source file, with its comments", declare: declareParse},
 		{name: removeCommand, args: removeArgs, minArgs: 1, maxArgs: anyArgs, short: "take dependencies out of snello.mod, once nothing imports them", declare: declareRemove},
-		{name: runCommand, args: debugArgs, minArgs: 1, maxArgs: anyArgs, short: "build a program, run it with ARGS, and leave no file", declare: declareRun},
-		{name: testCommand, args: dirArg, minArgs: 1, maxArgs: 1, short: "build and run the tests of a package", declare: declareTest},
+		{name: runCommand, args: debugArgs, minArgs: 1, maxArgs: anyArgs, short: "build a program, run it with ARGS, and leave no file", declare: declareRun(start)},
+		{name: testCommand, args: dirArg, minArgs: 1, maxArgs: 1, short: "build and run the tests of a package", declare: declareTest(start)},
 		{name: updateCommand, args: updateArgs, minArgs: 0, maxArgs: anyArgs, short: "raise dependencies to their latest compatible releases", declare: declareUpdate},
 		{name: versionCommand, minArgs: 0, maxArgs: 0, short: "print the version, commit, channel and platform", declare: declareVersion},
 	}
@@ -235,7 +251,12 @@ func commands() []*command {
 // lookup returns the command named name, or nil. It builds the table
 // of commands.
 func lookup(name string) *command {
-	for _, c := range commands() {
+	return lookupIn(commands(), name)
+}
+
+// lookupIn returns the command of cs named name, or nil.
+func lookupIn(cs []*command, name string) *command {
+	for _, c := range cs {
 		if c.name == name {
 			return c
 		}
@@ -405,7 +426,15 @@ func declareCheck(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string
 // declareDebug declares the flags of debug, the backend and the setup
 // an editor's debugger asks for; the arguments after the program's path
 // are the program's.
-func declareDebug(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+func declareDebug(start testrun.Command) func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+	return func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+		return declaredDebug(fs, stdout, stderr, start)
+	}
+}
+
+// declaredDebug declares debug's flags on fs, the debugger started
+// through start.
+func declaredDebug(fs *flag.FlagSet, stdout, stderr io.Writer, start testrun.Command) func(args []string) int {
 	backend := declareBackend(fs)
 	setup := fs.String(setupFlag, "", "print the commands the debugger `lldb|gdb` runs first, for an editor that starts it, and write what they read")
 	return func(args []string) int {
@@ -422,7 +451,7 @@ func declareDebug(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string
 			return exitUsage
 		}
 
-		return debug(args[0], *backend, args[1:])
+		return debug(args[0], *backend, args[1:], start)
 	}
 }
 
@@ -475,7 +504,15 @@ func declareNew(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) 
 
 // declareRun declares the flags of run, build's; the arguments after
 // the program's path are the program's.
-func declareRun(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+func declareRun(start testrun.Command) func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+	return func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+		return declaredRun(fs, stdout, stderr, start)
+	}
+}
+
+// declaredRun declares run's flags on fs, the program started through
+// start.
+func declaredRun(fs *flag.FlagSet, stdout, stderr io.Writer, start testrun.Command) func(args []string) int {
 	backend := declareBackend(fs)
 	debug := fs.Bool(debugFlag, false, debugUsage)
 	return func(args []string) int {
@@ -483,7 +520,7 @@ func declareRun(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) 
 			return exitUsage
 		}
 
-		code, sig := runProgram(args[0], *backend, *debug, args[1:], os.Stdin, stdout, stderr)
+		code, sig := runProgram(args[0], *backend, *debug, args[1:], os.Stdin, stdout, stderr, start)
 		if sig != nil {
 			raise(sig) // the command ends as the program did, which a shell running a script needs to stop it
 		}
@@ -499,7 +536,15 @@ func declareParse(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string
 
 // declareTest declares the flags of test: the backend, and those it
 // passes on to the program it builds, which runs the tests.
-func declareTest(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+func declareTest(start testrun.Command) func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+	return func(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string) int {
+		return declaredTest(fs, stdout, stderr, start)
+	}
+}
+
+// declaredTest declares test's flags on fs, the program started through
+// start.
+func declaredTest(fs *flag.FlagSet, stdout, stderr io.Writer, start testrun.Command) func(args []string) int {
 	backend := declareBackend(fs)
 	o := declareTestOptions(fs)
 	asJSON := fs.Bool(jsonFlag, false, "print the run as events, one JSON object a line, for an editor or a tool")
@@ -525,7 +570,7 @@ func declareTest(fs *flag.FlagSet, stdout, stderr io.Writer) func(args []string)
 			return buildTests(args[0], *backend, *out, *debug, stderr)
 		}
 
-		return runTests(args[0], *backend, o.programFlags(), *asJSON, stdout, stderr)
+		return runTests(args[0], *backend, o.programFlags(), *asJSON, stdout, stderr, start)
 	}
 }
 

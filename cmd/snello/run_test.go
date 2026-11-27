@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/snello-lang/snello/compiler/importer"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // panicExit is the code a Snello program that panics exits with.
@@ -39,32 +40,32 @@ func TestRunProgram(t *testing.T) {
 	t.Chdir(here)
 	for _, backend := range []string{"llvm", "c"} {
 		var out, errs strings.Builder
-		if code, sig := runProgram(filepath.Join(root, "args"), backend, false, []string{"a", "-b"}, nil, &out, &errs); code != exitSuccess || sig != nil || out.String() != "[a -b]\n" {
+		if code, sig := runProgram(filepath.Join(root, "args"), backend, false, []string{"a", "-b"}, nil, &out, &errs, testproc.Command); code != exitSuccess || sig != nil || out.String() != "[a -b]\n" {
 			t.Errorf("%s: args exited %d, %v, printed %q, said %q", backend, code, sig, out.String(), errs.String())
 		}
 
-		if code, _ := runProgram(filepath.Join(root, "exits"), backend, false, nil, nil, &out, &errs); code != 3 {
+		if code, _ := runProgram(filepath.Join(root, "exits"), backend, false, nil, nil, &out, &errs, testproc.Command); code != 3 {
 			t.Errorf("%s: a program exiting 3 gave %d", backend, code)
 		}
 
 		errs.Reset()
-		if code, _ := runProgram(filepath.Join(root, "panics"), backend, false, nil, nil, &out, &errs); code != panicExit || !strings.Contains(errs.String(), "boom") || !strings.Contains(errs.String(), "main.snello:4") {
+		if code, _ := runProgram(filepath.Join(root, "panics"), backend, false, nil, nil, &out, &errs, testproc.Command); code != panicExit || !strings.Contains(errs.String(), "boom") || !strings.Contains(errs.String(), "main.snello:4") {
 			t.Errorf("%s: a panic gave %d and said %q, want %d and its trace", backend, code, errs.String(), panicExit)
 		}
 
 		out.Reset()
-		if code, _ := runProgram(filepath.Join(root, "lines"), backend, false, nil, strings.NewReader("a\nbb\nccc\n"), &out, &errs); code != exitSuccess || out.String() != "3\n" {
+		if code, _ := runProgram(filepath.Join(root, "lines"), backend, false, nil, strings.NewReader("a\nbb\nccc\n"), &out, &errs, testproc.Command); code != exitSuccess || out.String() != "3\n" {
 			t.Errorf("%s: a program reading its input exited %d and printed %q", backend, code, out.String())
 		}
 
 		errs.Reset()
-		if code, _ := runProgram(filepath.Join(root, "broken"), backend, false, nil, nil, &out, &errs); code != exitFailure || !strings.Contains(errs.String(), "undefined: x") {
+		if code, _ := runProgram(filepath.Join(root, "broken"), backend, false, nil, nil, &out, &errs, testproc.Command); code != exitFailure || !strings.Contains(errs.String(), "undefined: x") {
 			t.Errorf("%s: a program that does not compile gave %d and said %q", backend, code, errs.String())
 		}
 	}
 
 	var out strings.Builder
-	if code, _ := runProgram(filepath.Join(root, "args"), "llvm", true, []string{"d"}, nil, &out, io.Discard); code != exitSuccess || out.String() != "[d]\n" {
+	if code, _ := runProgram(filepath.Join(root, "args"), "llvm", true, []string{"d"}, nil, &out, io.Discard, testproc.Command); code != exitSuccess || out.String() != "[d]\n" {
 		t.Errorf("a debug build exited %d and printed %q", code, out.String())
 	}
 
@@ -103,7 +104,7 @@ func TestRunByVersion(t *testing.T) {
 	t.Chdir(t.TempDir())
 	for _, backend := range []string{"llvm", "c"} {
 		var out, errs strings.Builder
-		if code, _ := runProgram(app, backend, false, nil, nil, &out, &errs); code != exitSuccess || out.String() != "hello from a tag\n" {
+		if code, _ := runProgram(app, backend, false, nil, nil, &out, &errs, testproc.Command); code != exitSuccess || out.String() != "hello from a tag\n" {
 			t.Errorf("%s: exited %d, printed %q, said %q", backend, code, out.String(), errs.String())
 		}
 	}
@@ -142,7 +143,7 @@ func fileURL(dir string) string {
 func TestRunCommand(t *testing.T) {
 	root := writePrograms(t, map[string]string{"args/main.snello": "package main\n\nimport (\"fmt\"; \"os\")\n\nfunc main() { fmt.Println(os.Args[1:]) }\n"})
 	var out, errs strings.Builder
-	if code := run([]string{runCommand, "-backend", "c", filepath.Join(root, "args"), "-debug", "-backend", "x"}, &out, &errs); code != exitSuccess || out.String() != "[-debug -backend x]\n" {
+	if code := runWith([]string{runCommand, "-backend", "c", filepath.Join(root, "args"), "-debug", "-backend", "x"}, &out, &errs, testproc.Command); code != exitSuccess || out.String() != "[-debug -backend x]\n" {
 		t.Errorf("run exited %d, printed %q and said %q", code, out.String(), errs.String())
 	}
 }
@@ -155,17 +156,17 @@ func TestExitCode(t *testing.T) {
 		t.Errorf("no error gave %d", got)
 	}
 
-	if got := exitCode(exec.Command("sh", "-c", "exit 7").Run(), io.Discard); got != 7 {
+	if got := exitCode(testproc.Command("sh", "-c", "exit 7").Run(), io.Discard); got != 7 {
 		t.Errorf("exit 7 gave %d", got)
 	}
 
 	var said strings.Builder
-	if got := exitCode(exec.Command(filepath.Join(t.TempDir(), "none")).Run(), &said); got != exitFailure || said.Len() == 0 {
+	if got := exitCode(testproc.Command(filepath.Join(t.TempDir(), "none")).Run(), &said); got != exitFailure || said.Len() == 0 {
 		t.Errorf("a program that does not exist gave %d and said %q", got, said.String())
 	}
 
 	needSignals(t)
-	err := exec.Command("sh", "-c", "kill -TERM $$").Run()
+	err := testproc.Command("sh", "-c", "kill -TERM $$").Run()
 	if got := exitCode(err, io.Discard); got != signalExitBase+int(syscall.SIGTERM) {
 		t.Errorf("a termination gave %d", got)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/token"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // onlySrc and onlyTest are a package whose tests' names hold each
@@ -110,14 +111,14 @@ func TestOnlyRuns(t *testing.T) {
 
 	for _, pattern := range []string{"^TestArea", "TestArea$", "^TestA|TestB$", "^(TestA|)$", "Test.*"} {
 		var out bytes.Buffer
-		if code, err := Run(dir, "llvm", []string{"-run", pattern}, &out, &out, nil); err != nil || code != 2 || !strings.Contains(out.String(), "invalid pattern") {
+		if code, err := Run(dir, "llvm", []string{"-run", pattern}, &out, &out, nil, testproc.Command); err != nil || code != 2 || !strings.Contains(out.String(), "invalid pattern") {
 			t.Errorf("-run %s: exited %d, %v\n%s", pattern, code, err, out.String())
 		}
 	}
 
 	for _, tt := range tests {
 		var out bytes.Buffer
-		if code, err := Run(dir, "llvm", append([]string{"-v"}, tt.args...), &out, &out, nil); err != nil || code != 0 {
+		if code, err := Run(dir, "llvm", append([]string{"-v"}, tt.args...), &out, &out, nil, testproc.Command); err != nil || code != 0 {
 			t.Fatalf("%v: exited %d, %v\n%s", tt.args, code, err, out.String())
 		}
 

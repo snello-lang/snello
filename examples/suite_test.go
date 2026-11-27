@@ -26,6 +26,7 @@ import (
 	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // programs returns the paths of the example programs of one file: the
@@ -203,7 +204,7 @@ func run(bin, dir string, script []byte) ([]byte, error) {
 		return play(bin, dir, script)
 	}
 
-	cmd := exec.Command(bin)
+	cmd := testproc.Command(bin)
 	cmd.Dir = dir
 	stdout, err := cmd.Output()
 	if exit, ok := err.(*exec.ExitError); ok {

@@ -31,6 +31,7 @@ import (
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/testrun"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/internal/testproc"
 	"github.com/snello-lang/snello/std"
 )
 
@@ -67,7 +68,7 @@ func TestPackages(t *testing.T) {
 				}
 
 				var out bytes.Buffer
-				cmd := exec.Command(bin, "-v")
+				cmd := testproc.Command(bin, "-v")
 				cmd.Dir = p // the package's directory, so that testdata/ is beside it, as snello test std/NAME runs it
 				cmd.Stdout, cmd.Stderr = &out, &out
 				if err := cmd.Run(); err != nil || !strings.Contains(out.String(), "\nok  \t"+p+"\t") {
@@ -411,7 +412,7 @@ func ask(t *testing.T, letter byte, input string) string {
 			buildAnswerer(t, dir)
 		}
 
-		cmd := exec.Command(filepath.Join(asked.dir, "answerer"))
+		cmd := testproc.Command(filepath.Join(asked.dir, "answerer"))
 		in, err := cmd.StdinPipe()
 		if err != nil {
 			t.Fatal(err)
@@ -599,7 +600,8 @@ func goScanned(data, sizes []byte, limit int, words bool) string {
 	}
 
 	if err := sc.Err(); err != nil {
-		b.WriteString(" " + err.Error())
+		b.WriteString(" ")
+		b.WriteString(err.Error())
 	} else {
 		b.WriteString(" end")
 	}

@@ -7,6 +7,7 @@ package testrun
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/snello-lang/snello/internal/testproc"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,7 +69,8 @@ func framed(lines ...string) string {
 			line = rest
 		}
 
-		b.WriteString(line + "\n")
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
 
 	return b.String()
@@ -287,7 +289,7 @@ func TestRunJSON(t *testing.T) {
 
 	for _, backend := range []string{"llvm", "c"} {
 		var out bytes.Buffer
-		if code := RunJSON(filepath.Join(root, "p"), backend, nil, &out, nil); code != 1 {
+		if code := RunJSON(filepath.Join(root, "p"), backend, nil, &out, nil, testproc.Command); code != 1 {
 			t.Errorf("%s: exited %d, want 1\n%s", backend, code, out.String())
 		}
 
@@ -328,7 +330,7 @@ func TestRunJSON(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if code := RunJSON(filepath.Join(root, "bad"), "llvm", nil, &out, nil); code != 1 {
+	if code := RunJSON(filepath.Join(root, "bad"), "llvm", nil, &out, nil, testproc.Command); code != 1 {
 		t.Errorf("a package that does not compile: exited %d", code)
 	}
 

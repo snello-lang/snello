@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -18,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 const (
@@ -280,7 +283,7 @@ func TestStartWindow(t *testing.T) {
 func TestIgnoredSignal(t *testing.T) {
 	needSignals(t)
 	hold := helper(t, "hold")
-	cmd := exec.Command("sh", "-c", `trap "" HUP; exec "$0" "$@"`, hold.Path)
+	cmd := testproc.Command("sh", "-c", `trap "" HUP; exec "$0" "$@"`, hold.Path)
 	cmd.Args = append(cmd.Args, hold.Args[1:]...)
 	cmd.Env = hold.Env
 	out, err := cmd.StdoutPipe()
@@ -339,22 +342,22 @@ func TestHelperProcess(t *testing.T) {
 			os.Exit(exitFailure)
 		}
 
-		program := exec.Command("sleep", "60")
+		program := testproc.Command("sleep", "60")
 		w.start()
 		if err := program.Start(); err != nil {
 			os.Exit(exitFailure)
 		}
 
 		w.hand(program.Process)
-		os.Stdout.WriteString(w.path + "\n")
+		fmt.Println(w.path)
 		err = program.Wait()
 		w.remove()
 		os.Exit(exitCode(err, io.Discard))
 	case "run":
-		code, _ := runProgram(os.Getenv(helperDirEnv), "llvm", false, nil, nil, os.Stdout, os.Stderr)
+		code, _ := runProgram(os.Getenv(helperDirEnv), "llvm", false, nil, nil, os.Stdout, os.Stderr, testproc.Command)
 		os.Exit(code)
 	case "test", "testjson":
-		os.Exit(runTests(os.Getenv(helperDirEnv), "llvm", []string{"-v"}, os.Getenv(helperEnv) == "testjson", os.Stdout, os.Stderr))
+		os.Exit(runTests(os.Getenv(helperDirEnv), "llvm", []string{"-v"}, os.Getenv(helperEnv) == "testjson", os.Stdout, os.Stderr, testproc.Command))
 	case "window":
 		for range startWindowRounds {
 			w, err := newWorkDir(buildDirPattern)
@@ -364,7 +367,7 @@ func TestHelperProcess(t *testing.T) {
 
 			w.start()
 			signalSelf(syscall.SIGTERM) // before the program exists: held, then passed on
-			program := exec.Command("sleep", "60")
+			program := testproc.Command("sleep", "60")
 			if err := program.Start(); err != nil {
 				os.Exit(exitFailure)
 			}
@@ -384,7 +387,7 @@ func TestHelperProcess(t *testing.T) {
 			os.Exit(exitFailure)
 		}
 
-		os.Stdout.WriteString(w.path + "\n")
+		fmt.Println(w.path)
 		w.start()
 		signalSelf(syscall.SIGTERM)
 		time.Sleep(100 * time.Millisecond) // the signal reaches the guard, which holds it
@@ -399,7 +402,7 @@ func TestHelperProcess(t *testing.T) {
 			os.Exit(exitFailure)
 		}
 
-		os.Stdout.WriteString(w.path + "\n")
+		fmt.Println(w.path)
 		time.Sleep(time.Minute)
 		os.Exit(exitFailure)
 	}
@@ -443,7 +446,7 @@ func needSignals(t *testing.T) {
 // process doing what.
 func helper(t *testing.T, what string) *exec.Cmd {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
+	cmd := testproc.Command(os.Args[0], "-test.run=^TestHelperProcess$")
 	cmd.Env = append(os.Environ(), helperEnv+"="+what, "TMPDIR="+t.TempDir())
 	return cmd
 }

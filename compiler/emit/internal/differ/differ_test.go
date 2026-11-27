@@ -16,6 +16,7 @@ package differ
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/snello-lang/snello/compiler/parser"
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // A kind is a temporary: the declarations it needs, an expression
@@ -145,12 +147,17 @@ func program(k kind) string {
 			return strings.ReplaceAll(s, "%", n)
 		}
 
-		b.WriteString("func ret" + n + "() int { g := sync.NewMutex(0); _ = ref g; return " + expand("@R") + " }\n")
-		b.WriteString("func form" + n + "() {\n\tg := sync.NewMutex(0)\n\t_ = ref g\n\tdone := make(chan ())\n\t_ = ref done\n\t" + expand(f) + "\n\tfmt.Println(\"end\", " + n + ")\n}\n")
+		fmt.Fprintf(&b, "func ret%s() int { g := sync.NewMutex(0); _ = ref g; return %s }\n", n, expand("@R"))
+		fmt.Fprintf(&b, "func form%s() {\n\tg := sync.NewMutex(0)\n\t_ = ref g\n\tdone := make(chan ())\n\t_ = ref done\n\t%s\n\tfmt.Println(\"end\", %s)\n}\n", n, expand(f), n)
 		calls = append(calls, "\tform"+n+"()\n")
 	}
 
-	b.WriteString("func main() {\n" + strings.Join(calls, "") + "}\n")
+	b.WriteString("func main() {\n")
+	for _, call := range calls {
+		b.WriteString(call)
+	}
+
+	b.WriteString("}\n")
 	return b.String()
 }
 
@@ -229,7 +236,7 @@ func run(t *testing.T, name, src, backend string, debug bool) (string, int) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin)
+	cmd := testproc.CommandContext(ctx, bin)
 	cmd.Dir = filepath.Dir(bin)
 	got, err := cmd.CombinedOutput()
 	if exit, ok := err.(*exec.ExitError); ok {

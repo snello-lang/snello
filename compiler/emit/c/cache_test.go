@@ -7,7 +7,6 @@ package c
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"slices"
@@ -20,6 +19,7 @@ import (
 	"github.com/snello-lang/snello/compiler/emit/internal/backendtest"
 	"github.com/snello-lang/snello/compiler/platform"
 	"github.com/snello-lang/snello/compiler/toolchain"
+	"github.com/snello-lang/snello/internal/testproc"
 )
 
 // TestCacheReuse builds a program twice and checks that the second
@@ -40,7 +40,7 @@ func TestCacheReuse(t *testing.T) {
 			t.Fatalf("build %d: %v\n%s", i, err, out)
 		}
 
-		printed, err := exec.Command(bin).Output()
+		printed, err := testproc.Command(bin).Output()
 		if err != nil || string(printed) != "cached\n" {
 			t.Fatalf("build %d printed %q, %v", i, printed, err)
 		}

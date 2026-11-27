@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -24,6 +23,7 @@ import (
 	"github.com/snello-lang/snello/compiler/token"
 	"github.com/snello-lang/snello/compiler/toolchain"
 	"github.com/snello-lang/snello/compiler/types"
+	"github.com/snello-lang/snello/internal/testproc"
 	"github.com/snello-lang/snello/lsp/jsonrpc"
 	"github.com/snello-lang/snello/lsp/protocol"
 )
@@ -703,7 +703,7 @@ func buildAndRun(t *testing.T, dir string) []byte {
 		t.Fatalf("%v\n%s", err, log)
 	}
 
-	out, err := exec.Command(bin).Output()
+	out, err := testproc.Command(bin).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
