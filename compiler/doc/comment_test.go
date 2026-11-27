@@ -39,6 +39,21 @@ func TestParse(t *testing.T) {
 	}
 }
 
+// TestParseLines keeps the lines each block was read from, blank lines
+// counted: what lets a link be placed at its line.
+func TestParseLines(t *testing.T) {
+	lines := []string{"", "One.", "", "\tcode", "", "# Heading", "", "Two,", "three."}
+	var got [][2]int
+	for _, p := range parseLines(lines) {
+		got = append(got, [2]int{p.start, p.end})
+	}
+
+	want := [][2]int{{1, 2}, {3, 4}, {5, 6}, {7, 9}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parseLines ranges = %v, want %v", got, want)
+	}
+}
+
 func TestSpans(t *testing.T) {
 	tests := []struct {
 		line string

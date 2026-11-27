@@ -4,7 +4,13 @@
 
 package doc
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+
+	"github.com/snello-lang/snello/compiler/ast"
+	"github.com/snello-lang/snello/compiler/token"
+)
 
 // TestResolve resolves the forms a link takes, and refuses what names
 // nothing.
@@ -22,21 +28,24 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-// TestHoldsLink finds a name in a link's brackets, and not where it is
-// text.
-func TestHoldsLink(t *testing.T) {
-	for _, c := range []struct {
-		text, name string
-		want       bool
-	}{
-		{"// see [Builder].", "Builder", true},
-		{"// a Builder and [Builder.Len]", "Builder.Len", true},
-		{"// a Builder", "Builder", false},
-		{"// [Builders]", "Builder", false},
-	} {
-		if got := holdsLink(c.text, c.name); got != c.want {
-			t.Errorf("holdsLink(%q, %q) = %v, want %v", c.text, c.name, got, c.want)
-		}
+// TestLinksOf finds each link of a comment group at the line it is
+// written on: a name linked twice at both lines, a link on a block
+// comment's later line there, and nothing in code.
+func TestLinksOf(t *testing.T) {
+	g := &ast.CommentGroup{List: []*ast.Comment{
+		{Slash: 10, Text: "// See [Builder]."},
+		{Slash: 30, Text: "//"},
+		{Slash: 40, Text: "//\tidx := m[Builder]"},
+		{Slash: 70, Text: "//"},
+		{Slash: 80, Text: "// And [Builder] once more."},
+	}}
+	if got, want := linksOf(g), []link{{"Builder", 10}, {"Builder", 80}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("line comments: linksOf = %v, want %v", got, want)
+	}
+
+	block := &ast.CommentGroup{List: []*ast.Comment{{Slash: 110, Text: "/* Then\n [Builder.Len]. */"}}}
+	if got, want := linksOf(block), []link{{"Builder.Len", 110 + token.Pos(len("/* Then\n"))}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("a block comment: linksOf = %v, want %v", got, want)
 	}
 }
 

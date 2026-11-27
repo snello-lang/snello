@@ -4,7 +4,11 @@
 
 package ast
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/snello-lang/snello/compiler/token"
+)
 
 func TestCommentGroupText(t *testing.T) {
 	tests := []struct {
@@ -29,6 +33,29 @@ func TestCommentGroupText(t *testing.T) {
 
 		if got := g.Text(); got != tt.want {
 			t.Errorf("%s: Text() = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestCommentGroupLines gives each line as Text reads it, blank lines
+// kept, and where it begins: a line comment at its /, a block
+// comment's first line at its / and each later line at its own start.
+func TestCommentGroupLines(t *testing.T) {
+	g := &CommentGroup{List: []*Comment{
+		{Slash: 10, Text: "// One."},
+		{Slash: 20, Text: "//"},
+		{Slash: 30, Text: "/* Two.\n   Three. */"},
+	}}
+	lines, at := g.Lines()
+	wantLines := []string{"One.", "", " Two.", "   Three."}
+	wantAt := []token.Pos{10, 20, 30, 30 + token.Pos(len("/* Two.\n"))}
+	if len(lines) != len(wantLines) || len(at) != len(wantAt) {
+		t.Fatalf("Lines() = %q at %v, want %q at %v", lines, at, wantLines, wantAt)
+	}
+
+	for i := range wantLines {
+		if lines[i] != wantLines[i] || at[i] != wantAt[i] {
+			t.Errorf("line %d: %q at %d, want %q at %d", i, lines[i], at[i], wantLines[i], wantAt[i])
 		}
 	}
 }

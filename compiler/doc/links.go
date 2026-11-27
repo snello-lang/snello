@@ -127,7 +127,8 @@ func hasMember(t types.Type, name string) bool {
 }
 
 // checkLinks resolves every link of every comment of the package, and
-// records those that name nothing, in the order of the source.
+// records those that name nothing, in the order of the source, each at
+// the line that holds it.
 func (p *Package) checkLinks() {
 	seen := map[*ast.CommentGroup]bool{}
 	for _, groups := range []map[ast.Node]*ast.CommentGroup{p.lead, p.line} {
@@ -137,9 +138,9 @@ func (p *Package) checkLinks() {
 			}
 
 			seen[g] = true
-			for _, name := range links(g.Text()) {
-				if !p.Resolve(name) {
-					p.Broken = append(p.Broken, Broken{p.position(g, name), name})
+			for _, l := range linksOf(g) {
+				if !p.Resolve(l.name) {
+					p.Broken = append(p.Broken, Broken{p.position(l.at), l.name})
 				}
 			}
 		}
@@ -150,66 +151,38 @@ func (p *Package) checkLinks() {
 	})
 }
 
-// links returns the names the links of a comment's text hold, outside
-// its code.
-func links(text string) []string {
-	var names []string
-	add := func(line string) {
-		for _, s := range Spans(line) {
-			if s.Name != "" {
-				names = append(names, s.Name)
-			}
-		}
-	}
+// A link is a name a comment links to and where its line begins.
+type link struct {
+	name string
+	at   token.Pos
+}
 
-	for _, b := range Parse(text) {
-		switch b := b.(type) {
-		case *Paragraph:
-			for _, line := range b.Lines {
-				add(line)
-			}
-		case *Heading:
-			add(b.Text)
-		case *List:
-			for _, item := range b.Items {
-				for _, line := range item.Lines {
-					add(line)
+// linksOf returns the links of a comment group, outside its code, each
+// with the line it is written on: the group's own lines are parsed as
+// its text is, so a line of code is skipped by the rule that makes it
+// code, and a link on a block comment's later line is placed there.
+func linksOf(g *ast.CommentGroup) []link {
+	lines, at := g.Lines()
+	var out []link
+	for _, b := range parseLines(lines) {
+		if _, code := b.Block.(*Code); code {
+			continue
+		}
+
+		for i := b.start; i < b.end; i++ {
+			for _, s := range Spans(lines[i]) {
+				if s.Name != "" {
+					out = append(out, link{s.Name, at[i]})
 				}
 			}
 		}
 	}
 
-	return names
+	return out
 }
 
-// holdsLink reports whether text holds name in a link's brackets.
-func holdsLink(text, name string) bool {
-	for from := 0; ; {
-		i := strings.Index(text[from:], name)
-		if i < 0 {
-			return false
-		}
-
-		at, end := from+i, from+i+len(name)
-		if at > 0 && text[at-1] == linkOpen && end < len(text) && text[end] == linkClose {
-			return true
-		}
-
-		from = at + 1
-	}
-}
-
-// position returns where in its group the link to name is written: the
-// first comment that holds it.
-func (p *Package) position(g *ast.CommentGroup, name string) (pos token.Position) {
-	at := g.Pos()
-	for _, c := range g.List {
-		if holdsLink(c.Text, name) {
-			at = c.Slash
-			break
-		}
-	}
-
+// position returns the file and line of at.
+func (p *Package) position(at token.Pos) (pos token.Position) {
 	for _, f := range p.src.Files {
 		if f.Tok.Holds(at) {
 			return f.Tok.Position(at)

@@ -152,6 +152,35 @@ func TestDocBrokenLink(t *testing.T) {
 	}
 }
 
+// TestDocBrokenLinkTwice warns of a name linked on two lines of one
+// comment at each of the two lines, not twice at the first, and of none
+// in a line of code between them.
+func TestDocBrokenLinkTwice(t *testing.T) {
+	mod := writeDocModule(t, map[string]string{
+		"snello.mod":     "// the module\nsnello 0.1.0\n",
+		"geo/geo.snello": "// Package geo measures, see [Nowhere].\n//\n//\tidx := m[Nowhere]\n//\n// And [Nowhere] once more.\npackage geo\n",
+	})
+	code, _, errs := runDoc(t, mod, "geo")
+	want := []string{"geo.snello:1:1: [Nowhere] names nothing", "geo.snello:5:1: [Nowhere] names nothing"}
+	got := strings.Split(strings.TrimSpace(errs), "\n")
+	if code != exitSuccess || len(got) != len(want) || !strings.HasSuffix(got[0], want[0]) || !strings.HasSuffix(got[1], want[1]) {
+		t.Errorf("exit %d, stderr %q, want lines ending %q", code, errs, want)
+	}
+}
+
+// TestDocBrokenLinkBlock warns of a link on a block comment's later
+// line at that line.
+func TestDocBrokenLinkBlock(t *testing.T) {
+	mod := writeDocModule(t, map[string]string{
+		"snello.mod":     "// the module\nsnello 0.1.0\n",
+		"geo/geo.snello": "/* Package geo measures.\n\n See [Nowhere]. */\npackage geo\n",
+	})
+	code, _, errs := runDoc(t, mod, "geo")
+	if want := "geo.snello:3:1: [Nowhere] names nothing"; code != exitSuccess || !strings.Contains(errs, want) || strings.Count(errs, "names nothing") != 1 {
+		t.Errorf("exit %d, stderr %q, want one warning ending %q", code, errs, want)
+	}
+}
+
 // TestDocExamples shows a name's example, from the package's test file,
 // on its page.
 func TestDocExamples(t *testing.T) {
