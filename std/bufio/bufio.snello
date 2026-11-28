@@ -804,7 +804,11 @@ func (s mut Scanner<R>) Scan() bool {
 				return true
 			}
 
-			if s.done { // the end: no token, and Bytes is empty
+			if s.done { // the end: no token, and Bytes is empty; a bad Split given at the end is reported as any other
+				if s.badSplit {
+					return s.refill()
+				}
+
 				s.tokenStart = s.start
 				s.tokenEnd = s.start
 				return false
@@ -990,8 +994,9 @@ func newScanner<R: io.Reader>(r mut R, mode int, split func(data ref []byte, atE
 // kept and scanning moves past Advance. None, or a Split of three
 // zeros, asks for more input, which at the end of the input ends the
 // scan in Scan; a Split outside the bounds the type states, the token
-// past Advance among them, ends it with the bad split error, since a
-// split function cannot be let to scan forever or past the data.
+// past Advance among them, is flagged for refill to end the scan with
+// the bad split error, since a split function cannot be let to scan
+// forever or past the data.
 func (s mut Scanner<R>) cut() bool {
 	piece := s.split(s.buf[s.start:s.end], s.done) ?? return false
 	held := uint(s.end - s.start)
@@ -1026,10 +1031,12 @@ func withoutCarriageReturn(data ref []byte, end int) int {
 // refill makes room and reads more: what is held moves to the start of
 // the buffer, a buffer full of one line, word or token doubles, up to
 // the limit, and the reader under the Scanner fills the room after. It
-// reports false when the limit is reached, which ends the scan with the
-// token too long error; a read that gives nothing or fails marks the
-// input done, for Scan to give what is left. It is apart from Scan so
-// that the loop a token takes stays small.
+// reports false when the scan ends in failure, the limit reached or a
+// bad Split flagged by cut, before or at the end of the input, with the
+// error set; a read that gives nothing or fails marks the input done,
+// for Scan to give what is left. It is apart from Scan so that the loop
+// a token takes stays small, and both failures are built here, off that
+// loop.
 func (s mut Scanner<R>) refill() bool {
 	if s.badSplit { // the split function gave a Split outside its data: the scan ends with the error, nothing more read
 		s.err = Some(io.NewError(scannerOp, "", badSplit, io.Other))
