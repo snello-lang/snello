@@ -57,9 +57,12 @@ func (e *Emitter) stmtInner(s ast.Stmt) {
 	case *ast.DeclStmt:
 		e.declStmt(s.Decl)
 	case *ast.ExprStmt:
+		e.statement = s.X // a call that is the statement keeps no value
 		if x := e.expr(s.X); x != "" {
 			e.discard(x, e.typeOf(s.X), s.Pos())
 		}
+
+		e.statement = nil
 	case *ast.IncDecStmt:
 		e.line(e.lvalue(s.X) + s.Tok.String() + ";") // the place, as x += 1 writes it: m[k]++ finds the map's slot
 	case *ast.AssignStmt:

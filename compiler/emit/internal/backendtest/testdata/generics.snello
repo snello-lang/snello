@@ -7,7 +7,8 @@
 // inferred and written type arguments, a generic enum matched on, a
 // generic struct literal, a list of lists, a list of a Drop type whose
 // elements are freed with it, and a generic function returning a
-// borrow, and a generic type with a Drop method of its own.
+// borrow, a generic type with a Drop method of its own, and a generic
+// function returning its T given the unit, whose call is a value.
 
 package main
 
@@ -140,4 +141,25 @@ func main() {
 	boxed := Box<int>{v: 1, tag: "int"}
 	named := Box<string>{v: "s", tag: "string"}
 	fmt.Println(boxed.v, named.v)
+
+	// A function returning its T given (): the call is a value, kept in
+	// a variable, an option and a print, or dropped as a statement.
+	var units []()
+	units.Push(())
+	old := exchange(mut units, 0, ())
+	fmt.Println(old, len(units), Some(exchange(mut units, 0, ())), nothing())
+	exchange(mut units, 0, ())
+	nothing()
+}
+
+// exchange puts v in place of the element i of xs and returns the one
+// that was there.
+func exchange<T>(xs mut []T, i int, v T) T {
+	xs.Insert(i, v)
+	return xs.Remove(i + 1)
+}
+
+// nothing returns the unit.
+func nothing() () {
+	return ()
 }
