@@ -25,11 +25,25 @@ import (
 // types differ: wrapped in the variant the checker chose, or boxed as
 // a trait value.
 
-// messenger returns the function behind a derived Error(): the
-// stringer of the type's structure, taking the value as a ref method
-// does.
+// messenger returns the function behind a derived Error(): the value
+// as %v prints it, the stringer of the type's structure, or what its
+// Format writes for a type listing fmt.Formatter, taking the value as a
+// ref method does.
 func (e *Emitter) messenger(t *types.Named, pos token.Pos) string {
-	return e.stringer(t, pos)
+	if !types.IsFormatter(t) {
+		return e.stringer(t, pos)
+	}
+
+	name := "sn_msg_" + lower.Mangle(t)
+	if e.state[name] != undeclared {
+		return name
+	}
+
+	e.state[name] = defined
+	ct := e.cType(t, pos)
+	put(&e.protos, "static sn_string ", name, "(", ct, " v);\n")
+	put(&e.helpers, "static sn_string ", name, "(", ct, " v) {\n\treturn ", e.formatted("v", t, lower.PlainVerb, pos), ";\n}\n\n")
+	return name
 }
 
 // sourcer writes the function behind a derived Source(): None,

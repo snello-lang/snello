@@ -50,6 +50,11 @@
 //
 //	fmt.Printf("%-8s %6.2f\n", name, price) // "apple      1.50"
 //
+// A type prints as its own text by listing Stringer, whose String
+// gives the text, or Formatter, whose Format is given the verb, its
+// width, precision and flags, and writes the text itself; Format is
+// called ahead of String or Error.
+//
 // Every argument is lent for the call: printing a value leaves it with
 // its owner, and nothing of it is kept. A function that returns text
 // allocates the string it returns, which the caller owns; one that
@@ -57,7 +62,10 @@
 // lines of two tasks printing at once never mix.
 package fmt
 
-import "io"
+import (
+	"io"
+	"unicode/utf8"
+)
 
 // A Stringer is a type that prints as its own text: Println, Sprint and
 // the verbs %v, %s and %q print a value of a type that lists Stringer
@@ -72,6 +80,138 @@ import "io"
 //	func (p ref Point) String() string { return fmt.Sprintf("(%d, %d)", p.x, p.y) }
 trait Stringer {
 	func (s ref Self) String() string
+}
+
+// A Formatter is a type that formats itself: every verb, and Println,
+// Sprint and the functions writing as they do, print a value of a type
+// that lists Formatter after impl as what its Format writes into the
+// State it is given, which holds the verb's width, precision and
+// flags; Println and Sprint print as %v with none. Format is called
+// ahead of String or Error, whichever else the type lists, so the
+// verb is the type's to read, and so is the width: fmt pads nothing a
+// Format writes, and a Format honours the width with Pad or PadNumber
+// or leaves it unread. The compiler checks that the format reads one
+// argument per verb, as for any type; which verbs the type honours
+// is the type's own. The type's Format is given the value lent.
+//
+//	struct Money impl fmt.Formatter {
+//		cents int
+//	}
+//
+//	func (m ref Money) Format(f mut fmt.State, verb rune) {
+//		if verb == 'd' {
+//			f.PadNumber(ref strconv.Itoa(m.cents))
+//			return
+//		}
+//
+//		f.Pad(ref fmt.Sprintf("$%d.%02d", m.cents/100, m.cents%100))
+//	}
+//
+// fmt.Sprintf("[%8v] [%-8v] [%d]", m, m, m) is then "[   $1.50] [$1.50   ] [150]".
+trait Formatter {
+	func (s ref Self) Format(f mut State, verb rune)
+}
+
+// A State is what a Format writes into: the width, the precision and
+// the flags of the verb that reached it, and the text written, which
+// is what the verb prints. It is an io.Writer, so a Format may write
+// into it with Fprintf, and Pad and PadNumber write a text with the
+// width applied.
+struct State impl io.Writer {
+	out       []byte
+	width     int?
+	precision int?
+	minus     bool
+	zero      bool
+}
+
+// Width returns the width the verb gave, 8 for %8v, or None.
+func (f ref State) Width() int? {
+	return f.width
+}
+
+// Precision returns the precision the verb gave, 2 for %.2v, or None.
+func (f ref State) Precision() int? {
+	return f.precision
+}
+
+// Minus reports the minus flag, %-8v: a width pads on the right.
+func (f ref State) Minus() bool {
+	return f.minus
+}
+
+// Zero reports the zero flag, %08v: a width pads a number with zeros
+// after its sign, which PadNumber does. A minus flag overrides it, and
+// so does a precision with %d, %x, %X, %o or %b, whose digits the
+// precision makes up, as for a number; Zero is then false.
+func (f ref State) Zero() bool {
+	return f.zero
+}
+
+// Write adds p to the text, whole; it never fails.
+func (f mut State) Write(p ref []byte) Result<int, io.Error> {
+	f.out.Extend(p)
+	return Ok(len(p))
+}
+
+// WriteString adds s to the text.
+func (f mut State) WriteString(s ref string) {
+	f.out.Extend(s.Bytes())
+}
+
+// WriteByte adds one byte to the text.
+func (f mut State) WriteByte(c byte) {
+	f.out.Push(c)
+}
+
+// WriteRune adds the UTF-8 of r to the text.
+func (f mut State) WriteRune(r rune) {
+	utf8.AppendRune(mut f.out, r)
+}
+
+// Pad adds s as %s prints a string under the verb's width, precision
+// and minus flag: its first characters, as many as the precision,
+// padded with spaces to the width, counted in characters, on the left,
+// or on the right after a minus; a text already as wide is added
+// whole.
+func (f mut State) Pad(s ref string) {
+	text := s
+	count := utf8.RuneCountInString(s)
+	if limit := f.precision {
+		if limit < count {
+			text = s[:runeOffset(s, limit)]
+			count = limit
+		}
+	}
+
+	f.padded(text, count)
+}
+
+// PadNumber adds s, the text of a number, under the verb's width and
+// flags: padded with spaces to the width, counted in characters, on
+// the left, or on the right after a minus, or with zeros after its
+// sign, a leading minus or plus, when the zero flag is set; the
+// precision is not read, since a number's precision is its digits,
+// which the Format writes. A text already as wide is added whole.
+func (f mut State) PadNumber(s ref string) {
+	count := utf8.RuneCountInString(s)
+	if f.zero {
+		if width := f.width {
+			if count < width {
+				digits := s
+				if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
+					f.out.Push(s[0])
+					digits = s[1:]
+				}
+
+				f.fill('0', width-count)
+				f.out.Extend(digits.Bytes())
+				return
+			}
+		}
+	}
+
+	f.padded(s, count)
 }
 
 // Println prints its arguments to the standard output, separated by
@@ -128,3 +268,40 @@ func Fprintln<W: io.Writer>(w mut W, args ...ref any)
 //
 //	fmt.Fprintf(mut os.Stderr(), "%s: %v\n", path, e)
 func Fprintf<W: io.Writer>(w mut W, format ref string, args ...ref any)
+
+// padded adds s, of count characters, padded with spaces to the width
+// on the side the minus flag says.
+func (f mut State) padded(s ref string, count int) {
+	if w := f.width {
+		if f.minus {
+			f.out.Extend(s.Bytes())
+			f.fill(' ', w-count)
+			return
+		}
+
+		f.fill(' ', w-count)
+	}
+
+	f.out.Extend(s.Bytes())
+}
+
+// fill adds n copies of c, none when n is not above zero.
+func (f mut State) fill(c byte, n int) {
+	for i := 0; i < n; i++ {
+		f.out.Push(c)
+	}
+}
+
+// runeOffset returns the byte offset in s where its n-th character
+// starts, n below the count of them.
+func runeOffset(s ref string, n int) int {
+	for i, _ := range s {
+		if n == 0 {
+			return i
+		}
+
+		n--
+	}
+
+	return len(s)
+}

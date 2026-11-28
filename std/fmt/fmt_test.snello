@@ -4,7 +4,7 @@
 
 package fmt_test
 
-import ("expect"; "fmt"; "io"; "os"; "testing")
+import ("expect"; "fmt"; "io"; "os"; "strconv"; "testing")
 
 // A Point prints as its own text, through Stringer.
 struct Point impl fmt.Stringer {
@@ -20,6 +20,38 @@ type Tag string impl fmt.Stringer
 
 // A Level is a Stringer declared over an integer.
 type Level int impl fmt.Stringer
+
+// A Money formats itself: %d prints the cents as a number, every other
+// verb the amount in dollars, under the verb's width and flags.
+struct Money impl fmt.Formatter {
+	cents int
+}
+
+// A Probe is a Formatter that writes what its Format was given, and a
+// Stringer that is never asked.
+type Probe string impl fmt.Formatter, fmt.Stringer
+
+// A Fail is an error that lists Formatter and writes no Error(): its
+// message is what its Format writes.
+struct Fail impl Error, fmt.Formatter {
+	code int
+}
+
+// A Word is a Formatter over text with characters of two bytes, which
+// Pad counts as one each.
+type Word string impl fmt.Formatter
+
+// A Signed is a number whose text carries its sign, a plus included.
+type Signed int impl fmt.Formatter
+
+// A Silent is a Formatter whose Format writes nothing.
+struct Silent impl fmt.Formatter {}
+
+// A Price holds a Formatter in a field.
+struct Price {
+	item string
+	cost Money
+}
 
 // A sink is an io.Writer that keeps what it was given and counts the
 // calls of its Write.
@@ -39,6 +71,66 @@ func (t ref Tag) String() string { return "TAG" }
 
 // String gives the text every verb a string takes prints.
 func (l ref Level) String() string { return "low" }
+
+// Format writes the cents with PadNumber for %d and the dollars with Pad
+// for every other verb.
+func (m ref Money) Format(f mut fmt.State, verb rune) {
+	if verb == 'd' {
+		f.PadNumber(ref strconv.Itoa(m.cents))
+		return
+	}
+
+	f.Pad(ref fmt.Sprintf("$%d.%02d", m.cents/100, m.cents%100))
+}
+
+// Format writes the verb, the text and what the State holds.
+func (p ref Probe) Format(f mut fmt.State, verb rune) {
+	fmt.Fprintf(mut f, "<%c:%s>", verb, string(p))
+	if w := f.Width() {
+		fmt.Fprintf(mut f, "w%d", w)
+	}
+
+	if prec := f.Precision() {
+		fmt.Fprintf(mut f, "p%d", prec)
+	}
+
+	if f.Minus() {
+		f.WriteString("-")
+	}
+
+	if f.Zero() {
+		f.WriteRune('0')
+	}
+}
+
+// String is never asked: Format comes first.
+func (p ref Probe) String() string { return "never" }
+
+// Format writes the failure's code.
+func (e ref Fail) Format(f mut fmt.State, verb rune) {
+	f.WriteString("fail ")
+	f.WriteString(ref strconv.Itoa(e.code))
+}
+
+// Format pads the word as %s would.
+func (w ref Word) Format(f mut fmt.State, verb rune) { f.Pad(string(w)) }
+
+// Format pads the number with its sign, through PadNumber, byte by byte
+// through WriteByte for the sign.
+func (n ref Signed) Format(f mut fmt.State, verb rune) {
+	if int(n) >= 0 {
+		f.PadNumber(ref fmt.Sprintf("+%d", int(n)))
+		return
+	}
+
+	f.PadNumber(ref strconv.Itoa(int(n)))
+}
+
+// Format writes nothing.
+func (s ref Silent) Format(f mut fmt.State, verb rune) {}
+
+// show prints a Formatter under a width through a type parameter.
+func show<T: fmt.Formatter>(v ref T) string { return fmt.Sprintf("[%5v]", v) }
 
 // Write keeps the bytes and counts the call.
 func (s mut sink) Write(p ref []byte) Result<int, io.Error> {
@@ -112,6 +204,56 @@ func TestVerbsPrintTheValue() {
 	expect.Equal(ref fmt.Sprintf("%d %o %b %05d %c", Level(7), Level(8), Level(5), Level(7), Level(65)), "7 10 101 00007 A")
 }
 
+// A Formatter prints what its Format writes, for every verb, with Pad
+// honouring the width, the precision and the minus flag as %s does and
+// PadNumber the width and the flags as %d does; fmt pads nothing more.
+func TestFormatter() {
+	m := Money{cents: 150}
+	expect.Equal(ref fmt.Sprintf("[%8v] [%-8v] [%d] [%08d] [%.3v] [%v] [%s]", m, m, m, m, m, m, m), "[   $1.50] [$1.50   ] [150] [00000150] [$1.] [$1.50] [$1.50]")
+	expect.Equal(ref fmt.Sprintf("[%-6d] [%06d] [%6d] [%d]", Money{cents: -5}, Money{cents: -5}, Money{cents: -5}, Money{cents: -5}), "[-5    ] [-00005] [    -5] [-5]")
+	expect.Equal(ref fmt.Sprintf("[%2v] [%-2v]", m, m), "[$1.50] [$1.50]") // a text already as wide is written whole
+	expect.Equal(ref fmt.Sprintf("[%4v] [%.2v] [%-4.1v]", Word("héé"), Word("héé"), Word("héé")), "[ héé] [hé] [h   ]") // counted in characters, not bytes
+	expect.Equal(ref fmt.Sprintf("[%6d] [%06d] [%-6d]", Signed(42), Signed(42), Signed(42)), "[   +42] [+00042] [+42   ]") // a plus sign is a sign too
+	expect.Equal(ref fmt.Sprintf("[%v] [%3v]", Silent{}, Silent{}), "[] []") // a Format that writes nothing prints nothing, under a width too
+}
+
+// The State holds the verb's width, precision and flags, and Format is
+// called ahead of String; Println and Sprint give %v with none.
+func TestFormatterState() {
+	p := Probe("x")
+	expect.Equal(ref fmt.Sprintf("%v|%s|%6.2x|%-3q|%08d|%.0f|%t", p, p, p, p, p, p, p), "<v:x>|<s:x>|<x:x>w6p2|<q:x>w3-|<d:x>w80|<f:x>p0|<t:x>")
+	expect.Equal(ref fmt.Sprintf("%-08d|%08.3d|%08.3v", p, p, p), "<d:x>w8-|<d:x>w8p3|<v:x>w8p30") // the minus flag overrides the zero flag, and a precision does with an integer's verb; Zero then does not report it
+	expect.Equal(ref fmt.Sprint(p), "<v:x>")
+	expect.Equal(ref fmt.Sprint(p, p), "<v:x><v:x>") // no space beside an operand declared over string, as beside a string
+}
+
+// A Formatter inside a composite prints as %v with no width, quoted in
+// a constructor as a string is; a trait value of Formatter prints
+// through its table; a derived Error() is what Format writes, and so is
+// the message %+v starts with; %q reaches Format as a verb and quotes
+// nothing itself.
+func TestFormatterInside() {
+	m := Money{cents: 150}
+	expect.Equal(ref fmt.Sprint(Some(m), []Money{m, Money{cents: 5}}), "Some(\"$1.50\") [$1.50 $0.05]")
+	expect.Equal(ref fmt.Sprint(Price{item: "tea", cost: m}), "{tea $1.50}") // a field prints through its Format, unquoted in a struct
+	expect.Equal(ref show(ref m), "[$1.50]") // a type parameter bounded by Formatter
+	var tv fmt.Formatter = Money{cents: 7}
+	expect.Equal(ref fmt.Sprintf("[%6v] %d", tv, tv), "[ $0.07] 7")
+	expect.Equal(ref fmt.Sprint(tv, Some(tv)), "$0.07 Some(\"$0.07\")")
+	e := Fail{code: 3}
+	expect.Equal(ref fmt.Sprintf("%v|%+v|%s|%q", e, e, e, e), "fail 3|fail 3|fail 3|fail 3")
+	expect.Equal(ref e.Error(), "fail 3")
+}
+
+// A State is an io.Writer, so Fprintf writes into it; and a Formatter
+// is written to a writer as any value is, with one call of its Write.
+func TestFormatterWriter() {
+	s := sink{text: []byte{}, writes: 0}
+	fmt.Fprintf(mut s, "%5v;%d", Money{cents: 150}, Money{cents: 2})
+	expect.Equal(ref string(s.text), "$1.50;2")
+	expect.Equal(ref s.writes, ref 1)
+}
+
 // Fprint writes its text with one call of the writer's Write, even with
 // no arguments.
 func TestFprint() {
@@ -136,4 +278,22 @@ func TestPrint() {
 // Sprintf of a short format with two verbs.
 func BenchmarkSprintf() {
 	for testing.Loop() { _ = fmt.Sprintf("%d:%s", 42, "x") }
+}
+
+// Sprintf of a Formatter under a width, its Format padding with Pad.
+func BenchmarkFormatter() {
+	m := Money{cents: 150}
+	for testing.Loop() { _ = fmt.Sprintf("[%8v]", m) }
+}
+
+// Sprintf of a Formatter as %d, its Format padding with PadNumber.
+func BenchmarkFormatterNumber() {
+	m := Money{cents: 150}
+	for testing.Loop() { _ = fmt.Sprintf("%d", m) }
+}
+
+// Sprint of a Formatter, its Format given %v with no width.
+func BenchmarkFormatterSprint() {
+	m := Money{cents: 150}
+	for testing.Loop() { _ = fmt.Sprint(m) }
 }

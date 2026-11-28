@@ -292,11 +292,11 @@ func TestTraits(t *testing.T) {
 		{"struct X impl Nope {}", []string{"undefined: Nope"}},
 		{"func f<T: Blob>() {}", []string{"Blob is not a trait"}},
 		{"trait Twice: Blob {}", []string{"Blob is not a trait"}},
-		{"struct X impl fmt.Formatter {}", []string{"undefined: fmt.Formatter"}},
+		{"struct X impl fmt.Printer {}", []string{"undefined: fmt.Printer"}},
 		{"struct X impl fmt.Stringer {}", []string{"X does not implement Stringer: missing method String() string"}}, // fmt's one trait
 		{"struct Error impl Error { msg string }\nfunc (e ref Error) Error() string { return e.msg.Clone() }", nil},  // the trait behind the type of the same name
 		{"struct Error { msg string }\nstruct X impl Error {}\nfunc f(x ref X) string { return x.Error() }", nil},    // the trait, not the struct beside it: Error() is derived
-		{"func f<T: fmt.Formatter>() {}", []string{"undefined: fmt.Formatter"}},
+		{"func f<T: fmt.Printer>() {}", []string{"undefined: fmt.Printer"}},
 		{"struct X impl Shape<int> {}", []string{"Shape takes no type arguments"}},
 		{"struct X impl Named, Named {}\nfunc (x ref X) Label() string { return \"\" }", []string{"Named listed twice"}},
 		{"trait Both: Shape, Shape {}", []string{"Shape listed twice"}},

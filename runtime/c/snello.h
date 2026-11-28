@@ -676,6 +676,8 @@ static inline SN_NODEBUG sn_string sn_bytes_to_string(sn_slice_u8 b) {
     return sn_string_clone((sn_string){ b.ptr, b.len, 0 });
 }
 
+sn_string sn_bytes_into_string(sn_slice_u8 b); // the owned bytes as the string they are, the buffer moved, not copied; a block of no bytes freed
+
 static inline SN_NODEBUG sn_slice_u8 sn_string_to_bytes(sn_string s) {
     sn_string c = sn_string_clone(s);
     if (c.cap == 0) {

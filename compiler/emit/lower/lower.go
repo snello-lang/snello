@@ -39,6 +39,21 @@ const (
 	HandleBoth = HandleSend | HandleRecv
 )
 
+// The fields of fmt.State as std/fmt declares them, which a backend
+// fills before it calls a Format and reads after: the text written,
+// the verb's width and precision, each an int?, and its flags.
+const (
+	StateOut       = "out"
+	StateWidth     = "width"
+	StatePrecision = "precision"
+	StateMinus     = "minus"
+	StateZero      = "zero"
+)
+
+// PlainVerb is %v with no width, precision or flag: how Println, Sprint
+// and a value inside a composite print.
+var PlainVerb = types.FormatPiece{Verb: 'v', Width: -1, Prec: -1}
+
 // A Library is a package written in Snello that the program imports, as
 // the importer loaded it: its import path, its source file and its
 // syntax, checked into the program's Info, and the .c and .h files of
@@ -736,6 +751,31 @@ func FloatBits(key string) (width int, toBits bool, ok bool) {
 	}
 
 	return 0, false, false
+}
+
+// FormatState returns the fmt.State type the Format of t writes into,
+// read from the method's own signature: t is a declared type listing
+// fmt.Formatter or a trait refining it.
+func FormatState(t types.Type) types.Type {
+	var fn *types.Func
+	switch u := t.(type) {
+	case *types.Trait:
+		fn = u.Method("Format")
+	case *types.Named:
+		fn = u.Method("Format")
+	}
+
+	return fn.Type().(*types.Signature).Params()[0].Type().(*types.Ref).Elem()
+}
+
+// SelfFormatted reports whether the verb p prints a value of type t
+// through the type's own Format: t lists fmt.Formatter, or is a trait
+// value of it, and the verb is not %+v, an error's chain, which fmt
+// prints itself through Error and Source. The Format is given the
+// verb, its width, precision and flags, and the backend pads nothing
+// it writes.
+func SelfFormatted(p types.FormatPiece, t types.Type) bool {
+	return types.IsFormatter(t) && !(p.Verb == 'v' && p.Plus)
 }
 
 // HasSymbol reports whether fn is a function the program may name

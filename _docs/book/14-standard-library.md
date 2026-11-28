@@ -28,7 +28,7 @@ A few library functions are not written in Snello: the runtime provides them in 
 
 | Package | What it has |
 |---|---|
-| `fmt` | `Println`, `Printf`, `Sprintf`, `Sprint`, and `Fprint`, `Fprintln` and `Fprintf` writing to a `mut io.Writer`, and the `Stringer` trait. A format knows `%v`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%s`, `%q`, `%f`, `%e`, `%g`, `%t` and `%%`, a precision, `%.2f`, `%.3d`, `%.2s`, a width before the verb, `%6d`, or `%-6s` to pad on the right, and a zero before the width to pad a number with zeros, `%05d` and `%02x`; it is checked against its arguments when the program is compiled |
+| `fmt` | `Println`, `Printf`, `Sprintf`, `Sprint`, and `Fprint`, `Fprintln` and `Fprintf` writing to a `mut io.Writer`, and the `Stringer` and `Formatter` traits with `State`. A format knows `%v`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%s`, `%q`, `%f`, `%e`, `%g`, `%t` and `%%`, a precision, `%.2f`, `%.3d`, `%.2s`, a width before the verb, `%6d`, or `%-6s` to pad on the right, and a zero before the width to pad a number with zeros, `%05d` and `%02x`; it is checked against its arguments when the program is compiled |
 | `io` | `Error` with `Error()`, `Kind()` and `Written()`, the bytes a write took before it failed, `NewError` for the errors a program's own reader or writer reports and `WithWritten` for one that fails partway, the `Kind` enum, the `Reader`, `Writer`, `Seeker`, `ReaderAt` and `WriterAt` traits and `SeekFrom`, `Copy`, `CopyN`, `ReadAll`, `ReadFull`, `WriteString`, `LimitReader`, `ChainReader`, `Discard` |
 | `os` | `Args`, `Stdin()`, `Stdout()`, `Stderr()`, `File` with `Name`, `Read`, `Write`, `WriteString`, `ReadAt`, `WriteAt`, `Seek`, `Sync` and `Close`, `Open`, `Create`, `ReadToString`, `WriteString`, `MkdirTemp`, `Remove`, `RemoveAll`, `Exit`, `Cores`, the processors the runtime runs tasks on, for sizing a pool of workers; `OpenFile` with the flags `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_APPEND`, `O_CREATE`, `O_EXCL`, `O_SYNC` and `O_TRUNC`, `OpenOptions` with `Open`, `ReadFile` and `WriteFile` for bytes; `Stat` and `Lstat` returning a `FileInfo` with `Name`, `Size`, `Mode`, `ModTime` and `IsDir`, `FileMode` with `IsDir`, `IsRegular`, `Perm` and `Type`, `ReadDir` returning `DirEntry` values with `Name`, `IsDir` and `Type`, `Mkdir`, `MkdirAll`, `Rename`, `Getwd`, `Chdir`; the environment, `Getenv`, `LookupEnv`, `Setenv`, `Unsetenv` and `Environ`; `TempDir`, `Getpid` and `Hostname` |
 | `encoding/json` | `Marshal` and `Unmarshal` of any type, with no code written for it, over reflection at compile time (chapter 24); `Error` with `Offset` |
@@ -346,6 +346,25 @@ func (c ref Celsius) String() string { return fmt.Sprintf("%.1f°C", c.deg) }
 ```
 
 `fmt.Println(c, Reading{place: "attic", temp: Celsius{deg: -3}})` then prints `21.5°C {attic -3.0°C}`. The trait is named, as every Snello trait is: a type with a `String` method that does not list `fmt.Stringer` prints as its fields, or, declared over a number, as its number; `time.Duration` lists it, `type Duration i64 impl fmt.Stringer`, and prints as `1h30m0s`. The samples are from `compiler/emit/internal/backendtest/testdata/formats.snello`.
+
+A `String` gives one text, whatever the verb. A type that wants to honour the verb, the width, the precision and the flags lists `fmt.Formatter` instead and writes `Format`, which is given the verb and a `fmt.State`: the State holds the verb's width and precision as `Width()` and `Precision()`, each `int?`, its flags as `Minus()` and `Zero()`, and takes the text, as an `io.Writer` that `Fprintf` writes into, or through `Pad`, which adds a text as `%s` would under the width, the precision and the minus flag, and `PadNumber`, which adds a number's text as `%d` would, zeros after its sign with the zero flag. `fmt` pads nothing a `Format` writes, so a `Format` that only writes ignores the width:
+
+```go
+struct Money impl fmt.Formatter {
+	cents int
+}
+
+func (m ref Money) Format(f mut fmt.State, verb rune) {
+	if verb == 'd' {
+		f.PadNumber(ref strconv.Itoa(m.cents))
+		return
+	}
+
+	f.Pad(ref fmt.Sprintf("$%d.%02d", m.cents/100, m.cents%100))
+}
+```
+
+`fmt.Printf("[%8v] [%-8v] [%d] [%08d]", m, m, m, m)` prints `[   $1.50] [$1.50   ] [150] [00000150]`. `Format` is called ahead of `String` or `Error`, for every verb, and the compiler, which checks a format against its arguments, lets a `Formatter` take any verb, since the type decides what each prints; the count of arguments is checked as for any type, and `%+v` stays an error's chain. `Println`, `Sprint` and a value inside a struct, a slice or an option call `Format` with `v` and no width. A trait value of `fmt.Formatter` prints through its table, as one of `fmt.Stringer` does. There is one `Format` for every verb, as Go's `Formatter` has, where Rust has a trait per verb, `Display`, `LowerHex` and the rest.
 
 ## sort and time
 

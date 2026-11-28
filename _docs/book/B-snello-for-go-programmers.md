@@ -262,6 +262,7 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `errors.New("message")` for a one-off error | An enum variant, or a struct listing `Error`: the message is derived from the value |
 | Wrapping by hand at every `return err`, `return fmt.Errorf("read: %w", err)` or an error type of the program's | `?` wraps the error in the one variant of the function's error enum that holds its type |
 | A type with a `String() string` method prints as it, a `fmt.Stringer` | A type prints as its `String` when it lists `impl fmt.Stringer`; traits are named, not matched by method |
+| `fmt.Formatter`, `Format(f fmt.State, verb rune)`, with `f.Width()` and `f.Flag('-')`, and the type padding by hand | `fmt.Formatter`, `Format(f mut fmt.State, verb rune)`, with `Width()` and `Precision()` as `int?`, `Minus()` and `Zero()`, and `Pad` and `PadNumber` applying them; `%+v` is an error's chain, so no `+` reaches a `Format` |
 | `go vet` warns of a verb that does not fit its argument, `%!d(string=x)` at run time | The format is checked when the program is compiled, and a misfit is an error; `fmt` has `%v`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%s`, `%q`, `%f`, `%e`, `%g` and `%t`, and no `%T`, `%p`, `%U`, `%E` or `%G`; of the flags it takes the minus, the zero on a number, and the plus on `%v` of an error |
 | `%x` on a float, a hexadecimal float; `%b` on a float | Refused: `%x`, `%X`, `%o` and `%b` take an integer, and `%x` and `%X` the bytes of a string or a `[]u8` |
 | `%05s` pads a string with zeros | Refused: the `0` flag goes with a number |
