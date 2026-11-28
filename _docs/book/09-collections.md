@@ -163,6 +163,22 @@ for _, w := range ref words {
 
 Both are walked with `range` over the collection lent, which lends each element for the loop: `for v := range ref d` from front to back, and `for v := range ref s` in the order the values were inserted. A walk over a collection is a value with a `Next` method, chapter 3, which the collection's `Iter` gives and `range ref` calls for it, as `range mut` calls `IterMut` where the type has one; `d.Iter()` is written out when adapters follow it, `d.Iter().Filter(f)`. The loop holds the collection lent until it ends, so the body reads it and cannot change it.
 
+## Ordered maps and sets
+
+A `map[K]V` finds a key in constant time and keeps its entries in the order they were inserted. When the keys themselves must stay in order, least first, `btree.Map<K, V>` and `btree.Set<T>` do, for a `K` or `T` that is `Ord`: a range over either walks the keys in the order of their `Cmp`, `First` and `Last` read the ends, `PopFirst` and `PopLast` take them, and `Range(from, to)` and `From(key)` walk from a given key. The price is `O(log n)` comparisons per lookup instead of one hash, which for a million keys is about twenty.
+
+```go
+var ranks btree.Map<string, int>
+ranks.Insert("pear".Clone(), 3)
+ranks.Insert("apple".Clone(), 1)
+if old := ranks.Insert("pear".Clone(), 30) { ... } // Some(3): the key was there
+for name, rank := range ref ranks { ... }           // apple 1, then pear 30
+for name, rank := range ranks.Range("b", "q") { ... } // from b up to but not q
+first := ranks.First() ?? return                   // (ref "apple", ref 1)
+```
+
+`Insert` returns the value a key had, or `None` when the key is new; `Get`, `GetMut`, `Contains` and `Remove` are the hash map's, each `O(log n)`. The zero value is an empty map, and a map prints as `map[apple:1 pear:30]`, in key order. A `btree.Set<T>` is the same over values alone: `Insert` reports whether the value was new, `Remove` whether it was there, and it prints as `set[1 3 5]`. Both are B-trees: nodes of up to fifteen keys, every leaf at the same depth, a scan of each node's keys on the way down, and no node moved on a change but the one that splits or merges. Chapter 14 names what each operation costs.
+
 ## Arrays
 
 An array, `[4]int`, is a value of a fixed length: zero-valued by `var`, written as a literal with its elements in order, `[3]int{1, 2}` leaving the rest zero, indexed to read and write with the same bounds check as a slice, and copied whole on assignment, so a struct of arrays is `Copy` when its elements are. `len` and `cap` are its length. An array prints as a slice does, `[0 5 10 0]`, is cloned element by element inside a type that lists `Clone`, and drops each element that needs it. It is not a slice: it is not sliced, pushed to or ranged over yet, and an array is not `Eq` or `Hash` by structure, so a struct holding one writes its own `Eq`. `compiler/emit/internal/backendtest/testdata/arrays.snello` and `examples/matrix/matrix.snello`, whose `Mat4` holds a `[16]f64`, run them.

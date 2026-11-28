@@ -1,0 +1,897 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package btree is an ordered map and an ordered set: a Map keeps its
+// keys in the order of their Cmp, and a Set its values, so a range over
+// either walks them least first, First and Last read the ends, PopFirst
+// and PopLast take them, and Range and From walk from a given key. A
+// hash map finds a key in constant time but holds its keys in the
+// order they were inserted; this one finds a key in O(log n)
+// comparisons and keeps them sorted.
+//
+// Both are B-trees: the keys lie in nodes of up to maxKeys each, sorted,
+// an inner node holding one child between each two keys and at each
+// end, every leaf at the same depth, and every node but the root at
+// least half full. A key is found by a scan of each node's keys from
+// the root down, so a tree of a million keys is six nodes deep and a
+// search reads about fifty keys. An insertion splits a full node on the way down, moving its
+// middle key into the parent, and a removal gives a node too empty a
+// key from a sibling or merges it with one on the way down, so neither
+// walks back up and neither recurses. The nodes are owned by the tree
+// in numbered slots, a node naming its children by their numbers, so no
+// pointer is needed and a slot emptied is used again.
+package btree
+
+import ("fmt"; "iter")
+
+// The keys a node holds: at most maxKeys, and at least minKeys unless it
+// is the root; maxKeys is odd so that a full node splits into two of
+// minKeys with the middle key moving up. Fifteen measured fastest on a
+// million ints, against eleven, nineteen, twenty-three and thirty-one:
+// a node's keys fill two cache lines, the scan over them is short, and
+// the tree is six nodes deep.
+const maxKeys = 15
+const minKeys = maxKeys / 2
+
+// A Map holds one value per key, the keys in the order of their Cmp,
+// for a K that is Ord. It owns its keys and values and lends them for
+// reading or changing. It is moved, or lent with ref and mut; when it
+// goes out of scope, the keys and values are dropped. The zero value is
+// an empty map ready for Insert:
+//
+//	var m btree.Map<string, int>
+//	m.Insert("b".Clone(), 2)
+//	m.Insert("a".Clone(), 1)
+//	for k, v := range ref m { ... } // a 1, then b 2
+//
+// A Map prints as map[a:1 b:2], its entries in key order.
+struct Map<K: Ord, V> impl fmt.Stringer {
+	nodes []node<K, V> // the tree's nodes, by number; the ones in free hold nothing
+	free  []int        // the numbers of the nodes emptied, to use again
+	root  int          // the number of the root, when nodes is not empty
+	len   int          // the entries
+}
+
+// A Set holds each value once, the values in the order of their Cmp, for
+// a T that is Ord. It owns its values and lends them for reading. It is
+// moved, or lent with ref and mut; when it goes out of scope, the
+// values are dropped. The zero value is an empty set ready for Insert:
+//
+//	var s btree.Set<int>
+//	s.Insert(3)
+//	s.Insert(1)
+//	for v := range ref s { ... } // 1, then 3
+//
+// A Set is a Map of its values to nothing, and prints as set[1 3].
+struct Set<T: Ord> impl fmt.Stringer {
+	m Map<T, ()>
+}
+
+// An Iter walks a map's entries in key order, lending each key and
+// value as a pair; it lends the map for as long as it lives, so the map
+// cannot change during the walk. Map.Iter, Map.Range and Map.From make
+// one, and the adapters of iter.Iterator wrap it.
+struct Iter<K: Ord, V> impl iter.Iterator<(ref K, ref V)> {
+	m   ref Map<K, V>
+	cur cursor
+}
+
+// A SetIter walks a set's values in order, lending each; it lends the
+// set for as long as it lives. Set.Iter, Set.Range and Set.From make
+// one, and the adapters of iter.Iterator wrap it.
+struct SetIter<T: Ord> impl iter.Iterator<ref T> {
+	m   ref Map<T, ()>
+	cur cursor
+}
+
+// A node holds up to maxKeys keys, sorted, a value for each, and, when
+// it is not a leaf, one child for each key and one more: the keys of
+// children[i] are less than keys[i], and those of children[i+1]
+// greater. A leaf holds no children.
+struct node<K: Ord, V> {
+	keys     []K
+	vals     []V
+	children []int
+}
+
+// A cursor is where a walk over a map stands: the path from the root to
+// the next entry to give, each step a node and the place in it, and
+// the entry the walk stops at, or none for the end of the map. It holds
+// no borrow, so the Iter and SetIter that hold one call it on a map
+// they lend.
+struct cursor {
+	path    []step
+	endNode int // the node of the entry the walk stops at, or noNode
+	endAt   int
+}
+
+// A step of a cursor's path: a node, and the place in it of the next
+// key to give, len(keys) once the node's keys are given.
+struct step impl Copy {
+	node int
+	at   int
+}
+
+// noNode is the number of no node: an empty walk's end, and a search
+// that found nothing.
+const noNode = -1
+
+// New returns an empty map of K to V, the same map as the zero value.
+func New<K: Ord, V>() Map<K, V> {
+	return Map<K, V>{}
+}
+
+// NewSet returns an empty set of T, the same set as the zero value.
+func NewSet<T: Ord>() Set<T> {
+	return Set<T>{}
+}
+
+// Len returns how many entries the map holds.
+func (m ref Map<K, V>) Len() int {
+	return m.len
+}
+
+// IsEmpty reports whether the map holds no entry.
+func (m ref Map<K, V>) IsEmpty() bool {
+	return m.len == 0
+}
+
+// Insert puts v under k, which the map takes and owns from then on, and
+// returns the value that was under k, or None when k is new. A key
+// already present keeps its place and its own key; the k given is
+// dropped. It costs O(log n) comparisons, and the split of a full node
+// on the way down, which allocates one node.
+//
+//	if old := m.Insert(k, v) { ... } // k was there, with old
+func (m mut Map<K, V>) Insert(k K, v V) V? {
+	if len(m.nodes) == 0 {
+		m.root = m.newNode(true)
+	}
+
+	if len(m.nodes[m.root].keys) == maxKeys {
+		top := m.newNode(false)
+		m.nodes[top].children.Push(m.root)
+		m.root = top
+		m.split(top, 0)
+	}
+
+	n := m.root
+	for {
+		i, found := m.search(n, ref k)
+		if found {
+			return Some(exchange(mut m.nodes[n].vals, i, v))
+		}
+
+		if len(m.nodes[n].children) == 0 {
+			m.nodes[n].keys.Insert(i, k)
+			m.nodes[n].vals.Insert(i, v)
+			m.len++
+			return None
+		}
+
+		child := m.nodes[n].children[i]
+		if len(m.nodes[child].keys) == maxKeys {
+			m.split(n, i)
+			match k.Cmp(ref m.nodes[n].keys[i]) {
+				Equal => { return Some(exchange(mut m.nodes[n].vals, i, v)) },
+				Greater => { i++ },
+				Less => {},
+			}
+
+			child = m.nodes[n].children[i]
+		}
+
+		n = child
+	}
+}
+
+// Get lends the value under k, or returns None when k is absent. The
+// borrow lasts as long as the map's. It costs O(log n) comparisons.
+//
+//	if v := m.Get("port") { ... }
+func (m ref Map<K, V>) Get(k ref K) ref V? {
+	n, i := m.find(k) ?? return None
+	return Some(ref m.nodes[n].vals[i])
+}
+
+// GetMut lends the value under k for changing, or returns None when k
+// is absent. The borrow keeps the map lent mut for as long as it lives.
+//
+//	if n := counts.GetMut(ref word) { *n += 1 }
+func (m mut Map<K, V>) GetMut(k ref K) mut V? {
+	n, i := m.find(k) ?? return None
+	return Some(mut m.nodes[n].vals[i])
+}
+
+// Contains reports whether k has an entry, in O(log n) comparisons.
+func (m ref Map<K, V>) Contains(k ref K) bool {
+	return m.find(k).IsSome()
+}
+
+// Remove takes the entry under k out and returns its value, owned, or
+// None when k is absent; the key is dropped. It costs O(log n)
+// comparisons and, on the way down, a key moved from a sibling or two
+// nodes merged where a node would fall below half full.
+func (m mut Map<K, V>) Remove(k ref K) V? {
+	if m.len == 0 {
+		return None
+	}
+
+	n := m.root
+	for {
+		i, found := m.search(n, k)
+		if len(m.nodes[n].children) == 0 {
+			if !found {
+				return None
+			}
+
+			_ = m.nodes[n].keys.Remove(i)
+			v := m.nodes[n].vals.Remove(i)
+			m.shrink()
+			return Some(v)
+		}
+
+		if found {
+			return Some(m.removeInner(n, i))
+		}
+
+		n = m.descend(n, i)
+	}
+}
+
+// First lends the least entry, its key and its value, or returns None
+// when the map is empty. The borrows last as long as the map's. It
+// costs O(log n) steps and no comparison.
+func (m ref Map<K, V>) First() (ref K, ref V)? {
+	if m.len == 0 {
+		return None
+	}
+
+	n := m.leftmost(m.root)
+	return Some((ref m.nodes[n].keys[0], ref m.nodes[n].vals[0]))
+}
+
+// Last lends the greatest entry, its key and its value, or returns None
+// when the map is empty. The borrows last as long as the map's.
+func (m ref Map<K, V>) Last() (ref K, ref V)? {
+	if m.len == 0 {
+		return None
+	}
+
+	n := m.rightmost(m.root)
+	last := len(m.nodes[n].keys) - 1
+	return Some((ref m.nodes[n].keys[last], ref m.nodes[n].vals[last]))
+}
+
+// PopFirst takes the least entry out and returns its key and value,
+// owned, or None when the map is empty. It costs O(log n) steps, with a
+// node refilled from a sibling or merged where one would fall below
+// half full.
+//
+//	(k, v) := m.PopFirst() ?? return
+func (m mut Map<K, V>) PopFirst() (K, V)? {
+	if m.len == 0 {
+		return None
+	}
+
+	k, v := m.popEnd(m.root, true)
+	m.shrink()
+	return Some((k, v))
+}
+
+// PopLast takes the greatest entry out and returns its key and value,
+// owned, or None when the map is empty. It costs what PopFirst costs.
+func (m mut Map<K, V>) PopLast() (K, V)? {
+	if m.len == 0 {
+		return None
+	}
+
+	k, v := m.popEnd(m.root, false)
+	m.shrink()
+	return Some((k, v))
+}
+
+// Clear drops every entry and the nodes they were held in.
+func (m mut Map<K, V>) Clear() {
+	m.nodes = []node<K, V>{}
+	m.free = []int{}
+	m.root = 0
+	m.len = 0
+}
+
+// Iter returns a walk over every entry in key order, lending each key
+// and value for as long as the map is lent; nothing is copied. A range
+// over the map lent walks through it: for k, v := range ref m.
+//
+//	for k, v := range ref m { ... }
+//	n := m.Iter().Count()
+func (m ref Map<K, V>) Iter() Iter<K, V> {
+	var c cursor
+	c.start(m)
+	c.endNode = noNode
+	return Iter<K, V>{m: m, cur: c}
+}
+
+// Range returns a walk over the entries whose keys are at least from
+// and less than to, in key order, lending each for as long as the map
+// is lent; it is empty when from is not less than to. Finding the two
+// ends costs O(log n) comparisons each, and the walk then costs what
+// Iter costs over the entries between.
+//
+//	for k, v := range m.Range("b", "f") { ... } // b up to but not f
+func (m ref Map<K, V>) Range(from ref K, to ref K) Iter<K, V> {
+	var c cursor
+	if from.Cmp(to) == Less {
+		c.seek(m, from)
+		endNode, endAt := m.position(to)
+		c.endNode = endNode
+		c.endAt = endAt
+	} else {
+		c.endNode = noNode
+	}
+
+	return Iter<K, V>{m: m, cur: c}
+}
+
+// From returns a walk over the entries whose keys are at least from, in
+// key order, to the end of the map, lending each for as long as the map
+// is lent. Finding the start costs O(log n) comparisons.
+//
+//	for k, v := range m.From("m") { ... } // from m on
+func (m ref Map<K, V>) From(from ref K) Iter<K, V> {
+	var c cursor
+	c.seek(m, from)
+	c.endNode = noNode
+	return Iter<K, V>{m: m, cur: c}
+}
+
+// String returns the entries in key order as a new string, written as a
+// map is printed, each key and value by fmt.Sprint: map[a:1 b:2]. It is
+// how fmt prints a Map.
+func (m ref Map<K, V>) String() string {
+	out := "map["
+	sep := ""
+	for k, v := range m {
+		out = out + sep + fmt.Sprint(k) + ":" + fmt.Sprint(v)
+		sep = " "
+	}
+
+	return out + "]"
+}
+
+// Len returns how many values the set holds.
+func (s ref Set<T>) Len() int {
+	return s.m.len
+}
+
+// IsEmpty reports whether the set holds no value.
+func (s ref Set<T>) IsEmpty() bool {
+	return s.m.len == 0
+}
+
+// Insert adds v, which the set takes and owns from then on, and reports
+// whether it was new; a value already in the set is left as it was, and
+// v is dropped. It costs O(log n) comparisons.
+//
+//	if !s.Insert(name) { ... } // name was there already
+func (s mut Set<T>) Insert(v T) bool {
+	return s.m.Insert(v, ()).IsNone()
+}
+
+// Contains reports whether v is in the set, in O(log n) comparisons.
+func (s ref Set<T>) Contains(v ref T) bool {
+	return s.m.Contains(v)
+}
+
+// Remove takes v out of the set, dropping the set's value, and reports
+// whether it was there. It costs what Map.Remove costs.
+func (s mut Set<T>) Remove(v ref T) bool {
+	return s.m.Remove(v).IsSome()
+}
+
+// First lends the least value, or returns None when the set is empty.
+func (s ref Set<T>) First() ref T? {
+	k, _ := s.m.First() ?? return None
+	return Some(k)
+}
+
+// Last lends the greatest value, or returns None when the set is empty.
+func (s ref Set<T>) Last() ref T? {
+	k, _ := s.m.Last() ?? return None
+	return Some(k)
+}
+
+// PopFirst takes the least value out and returns it, owned, or None
+// when the set is empty.
+func (s mut Set<T>) PopFirst() T? {
+	k, _ := s.m.PopFirst() ?? return None
+	return Some(k)
+}
+
+// PopLast takes the greatest value out and returns it, owned, or None
+// when the set is empty.
+func (s mut Set<T>) PopLast() T? {
+	k, _ := s.m.PopLast() ?? return None
+	return Some(k)
+}
+
+// Clear drops every value and the nodes they were held in.
+func (s mut Set<T>) Clear() {
+	s.m.Clear()
+}
+
+// Iter returns a walk over every value in order, lending each for as
+// long as the set is lent. A range over the set lent walks through it:
+// for v := range ref s.
+func (s ref Set<T>) Iter() SetIter<T> {
+	var c cursor
+	c.start(ref s.m)
+	c.endNode = noNode
+	return SetIter<T>{m: ref s.m, cur: c}
+}
+
+// Range returns a walk over the values at least from and less than to,
+// in order; it is empty when from is not less than to.
+func (s ref Set<T>) Range(from ref T, to ref T) SetIter<T> {
+	var c cursor
+	if from.Cmp(to) == Less {
+		c.seek(ref s.m, from)
+		endNode, endAt := s.m.position(to)
+		c.endNode = endNode
+		c.endAt = endAt
+	} else {
+		c.endNode = noNode
+	}
+
+	return SetIter<T>{m: ref s.m, cur: c}
+}
+
+// From returns a walk over the values at least from, in order, to the
+// end of the set.
+func (s ref Set<T>) From(from ref T) SetIter<T> {
+	var c cursor
+	c.seek(ref s.m, from)
+	c.endNode = noNode
+	return SetIter<T>{m: ref s.m, cur: c}
+}
+
+// String returns the values in order as a new string, written as a
+// slice of them is printed, each by fmt.Sprint: set[1 2 3]. It is how
+// fmt prints a Set.
+func (s ref Set<T>) String() string {
+	out := "set["
+	sep := ""
+	for v := range s {
+		out = out + sep + fmt.Sprint(v)
+		sep = " "
+	}
+
+	return out + "]"
+}
+
+// Next lends the next entry of the walk, its key and its value, or None
+// once every entry up to the walk's end has been given. The borrows are
+// of the map, not of the Iter, so they stay good while the walk goes
+// on and for as long as the map is lent.
+func (it mut Iter<K, V>) Next() (ref K, ref V)? {
+	n, i := it.cur.next(it.m) ?? return None
+	return Some((ref it.m.nodes[n].keys[i], ref it.m.nodes[n].vals[i]))
+}
+
+// Next lends the next value of the walk, or None once every value up to
+// the walk's end has been given. The borrow is of the set, not of the
+// SetIter.
+func (it mut SetIter<T>) Next() ref T? {
+	n, i := it.cur.next(it.m) ?? return None
+	return Some(ref it.m.nodes[n].keys[i])
+}
+
+// search returns the place in node n of the first key not less than k,
+// len(keys) when every key is less, and whether the key there is k. The
+// keys are read in order up to that one: over a node's few keys a scan
+// is faster than a binary search, whose branches go either way and
+// cannot be predicted, where the scan's go one way until the end.
+func (m ref Map<K, V>) search(n int, k ref K) (int, bool) {
+	keys := ref m.nodes[n].keys
+	for i, key := range keys {
+		match key.Cmp(k) {
+			Less => {},
+			Equal => { return (i, true) },
+			Greater => { return (i, false) },
+		}
+	}
+
+	return (len(keys), false)
+}
+
+// find returns the node and the place of the entry under k, or None
+// when k is absent: the search from the root down.
+func (m ref Map<K, V>) find(k ref K) (int, int)? {
+	if m.len == 0 {
+		return None
+	}
+
+	n := m.root
+	for {
+		i, found := m.search(n, k)
+		if found {
+			return Some((n, i))
+		}
+
+		if len(m.nodes[n].children) == 0 {
+			return None
+		}
+
+		n = m.nodes[n].children[i]
+	}
+}
+
+// position returns the node and the place of the first entry whose key
+// is not less than k, or noNode when every key is less: where a walk
+// from k starts, and where one up to k stops.
+func (m ref Map<K, V>) position(k ref K) (int, int) {
+	var c cursor
+	c.seek(m, k)
+	if len(c.path) == 0 {
+		return (noNode, 0)
+	}
+
+	top := c.path[len(c.path)-1]
+	return (top.node, top.at)
+}
+
+// leftmost returns the leaf holding the least key under n: the first
+// child, down to a leaf.
+func (m ref Map<K, V>) leftmost(n int) int {
+	for len(m.nodes[n].children) > 0 {
+		n = m.nodes[n].children[0]
+	}
+
+	return n
+}
+
+// rightmost returns the leaf holding the greatest key under n: the last
+// child, down to a leaf.
+func (m ref Map<K, V>) rightmost(n int) int {
+	for len(m.nodes[n].children) > 0 {
+		n = m.nodes[n].children[len(m.nodes[n].children)-1]
+	}
+
+	return n
+}
+
+// newNode places a new leaf, or inner node, with room for maxKeys keys
+// and values, and for their children when it is not a leaf, and returns
+// its number.
+func (m mut Map<K, V>) newNode(leaf bool) int {
+	children := []int{}
+	if !leaf {
+		children = make([]int, 0, maxKeys+1)
+	}
+
+	return m.place(node<K, V>{keys: make([]K, 0, maxKeys), vals: make([]V, 0, maxKeys), children: children})
+}
+
+// place puts the node nd in a slot taken out of free, or in a new one,
+// and returns its number.
+func (m mut Map<K, V>) place(nd node<K, V>) int {
+	if n := m.free.Pop() {
+		m.nodes[n] = nd
+		return n
+	}
+
+	m.nodes.Push(nd)
+	return len(m.nodes) - 1
+}
+
+// release gives the node n, emptied, back to free.
+func (m mut Map<K, V>) release(n int) {
+	m.free.Push(n)
+}
+
+// split splits the full child i of the node n into two of minKeys keys,
+// moving the middle key and its value up into n at i and the new right
+// half in as child i+1.
+func (m mut Map<K, V>) split(n int, i int) {
+	left := m.nodes[n].children[i]
+
+	// The upper half of the entries, and of the children, go to a new node.
+	children := []int{}
+	if len(m.nodes[left].children) > 0 {
+		children = splitOff(mut m.nodes[left].children, minKeys+1)
+	}
+
+	keys := splitOff(mut m.nodes[left].keys, minKeys+1)
+	vals := splitOff(mut m.nodes[left].vals, minKeys+1)
+	right := m.place(node<K, V>{keys: keys, vals: vals, children: children})
+
+	// The middle entry goes up into the parent, the new node beside it.
+	k := m.nodes[left].keys.Pop() ?? return // a full node has a middle entry
+	v := m.nodes[left].vals.Pop() ?? return
+	m.nodes[n].keys.Insert(i, k)
+	m.nodes[n].vals.Insert(i, v)
+	m.nodes[n].children.Insert(i+1, right)
+}
+
+// descend returns the child i of the node n to go on down into for a
+// removal, refilled first when it holds only minKeys keys, so that a
+// key can leave it: a key comes down from n and one up from a sibling
+// that can spare one, else the child is merged with a sibling, and the
+// merged node is returned.
+func (m mut Map<K, V>) descend(n int, i int) int {
+	child := m.nodes[n].children[i]
+	if len(m.nodes[child].keys) > minKeys {
+		return child
+	}
+
+	siblings := len(m.nodes[n].children)
+	if i > 0 && len(m.nodes[m.nodes[n].children[i-1]].keys) > minKeys {
+		m.rotateRight(n, i-1)
+		return child
+	}
+
+	if i+1 < siblings && len(m.nodes[m.nodes[n].children[i+1]].keys) > minKeys {
+		m.rotateLeft(n, i)
+		return child
+	}
+
+	if i+1 < siblings {
+		return m.merge(n, i)
+	}
+
+	return m.merge(n, i-1)
+}
+
+// removeInner takes out the entry at i of the inner node n and returns
+// its value: the entry is replaced by the greatest of its left subtree
+// or the least of its right, whichever child can spare one; when
+// neither can, the two children are merged with the entry between them
+// and the removal goes on in the merged node, where the entry now sits
+// in the middle.
+func (m mut Map<K, V>) removeInner(n int, i int) V {
+	for len(m.nodes[n].children) > 0 {
+		left := m.nodes[n].children[i]
+		right := m.nodes[n].children[i+1]
+		if len(m.nodes[left].keys) > minKeys {
+			k, v := m.popEnd(left, false)
+			_ = exchange(mut m.nodes[n].keys, i, k)
+			old := exchange(mut m.nodes[n].vals, i, v)
+			m.shrink()
+			return old
+		}
+
+		if len(m.nodes[right].keys) > minKeys {
+			k, v := m.popEnd(right, true)
+			_ = exchange(mut m.nodes[n].keys, i, k)
+			old := exchange(mut m.nodes[n].vals, i, v)
+			m.shrink()
+			return old
+		}
+
+		n = m.merge(n, i)
+		i = minKeys
+	}
+
+	_ = m.nodes[n].keys.Remove(i)
+	old := m.nodes[n].vals.Remove(i)
+	m.shrink()
+	return old
+}
+
+// popEnd takes the least entry under the node n out, or the greatest
+// when first is false, refilling nodes on the way down as a removal
+// does, and returns it; the map's count is the caller's to settle.
+func (m mut Map<K, V>) popEnd(n int, first bool) (K, V) {
+	for len(m.nodes[n].children) > 0 {
+		i := 0
+		if !first {
+			i = len(m.nodes[n].children) - 1
+		}
+
+		n = m.descend(n, i)
+	}
+
+	if first {
+		k := m.nodes[n].keys.Remove(0)
+		v := m.nodes[n].vals.Remove(0)
+		return (k, v)
+	}
+
+	last := len(m.nodes[n].keys) - 1
+	k := m.nodes[n].keys.Remove(last)
+	v := m.nodes[n].vals.Remove(last)
+	return (k, v)
+}
+
+// rotateRight moves one entry from the child i of n to its right
+// neighbour, child i+1: the entry at i of n goes down to the front of
+// the right child, the last entry of the left child comes up to i, and
+// the left child's last child goes with it.
+func (m mut Map<K, V>) rotateRight(n int, i int) {
+	left := m.nodes[n].children[i]
+	right := m.nodes[n].children[i+1]
+
+	k := m.nodes[left].keys.Pop() ?? return // a child refilled from has entries to spare
+	v := m.nodes[left].vals.Pop() ?? return
+	downK := exchange(mut m.nodes[n].keys, i, k)
+	downV := exchange(mut m.nodes[n].vals, i, v)
+
+	m.nodes[right].keys.Insert(0, downK)
+	m.nodes[right].vals.Insert(0, downV)
+	if c := m.nodes[left].children.Pop() {
+		m.nodes[right].children.Insert(0, c)
+	}
+}
+
+// rotateLeft moves one entry from the child i+1 of n to its left
+// neighbour, child i: the entry at i of n goes down to the back of the
+// left child, the first entry of the right child comes up to i, and
+// the right child's first child goes with it.
+func (m mut Map<K, V>) rotateLeft(n int, i int) {
+	left := m.nodes[n].children[i]
+	right := m.nodes[n].children[i+1]
+
+	k := m.nodes[right].keys.Remove(0)
+	v := m.nodes[right].vals.Remove(0)
+	downK := exchange(mut m.nodes[n].keys, i, k)
+	downV := exchange(mut m.nodes[n].vals, i, v)
+
+	m.nodes[left].keys.Push(downK)
+	m.nodes[left].vals.Push(downV)
+	if len(m.nodes[right].children) > 0 {
+		c := m.nodes[right].children.Remove(0)
+		m.nodes[left].children.Push(c)
+	}
+}
+
+// merge joins the children i and i+1 of n into child i, with the entry
+// at i of n between them, releases the right node, and returns the
+// merged node. A root left with no key is replaced by the merged node.
+func (m mut Map<K, V>) merge(n int, i int) int {
+	left := m.nodes[n].children[i]
+	right := m.nodes[n].children.Remove(i + 1)
+
+	// The entry between the two children comes down to the end of the left one.
+	k := m.nodes[n].keys.Remove(i)
+	v := m.nodes[n].vals.Remove(i)
+	m.nodes[left].keys.Push(k)
+	m.nodes[left].vals.Push(v)
+
+	// The right child's entries and children follow it, and the right child is let go.
+	keys := take(mut m.nodes[right].keys)
+	vals := take(mut m.nodes[right].vals)
+	children := take(mut m.nodes[right].children)
+	moveAll(mut m.nodes[left].keys, keys)
+	moveAll(mut m.nodes[left].vals, vals)
+	moveAll(mut m.nodes[left].children, children)
+	m.release(right)
+
+	if n == m.root && len(m.nodes[n].keys) == 0 {
+		m.release(n)
+		m.root = left
+	}
+
+	return left
+}
+
+// shrink settles the map after an entry left it: the count goes down,
+// and a map left empty lets its nodes go.
+func (m mut Map<K, V>) shrink() {
+	m.len--
+	if m.len == 0 {
+		m.Clear()
+	}
+}
+
+// start sets the cursor at the least entry of m, the path from the root
+// down its first children.
+func (c mut cursor) start<K: Ord, V>(m ref Map<K, V>) {
+	if m.len == 0 {
+		return
+	}
+
+	c.descend(m, m.root)
+}
+
+// seek sets the cursor at the first entry of m whose key is not less
+// than k: the search from the root down, each node's place kept as the
+// path, which ends at the end of the map when every key is less.
+func (c mut cursor) seek<K: Ord, V>(m ref Map<K, V>, k ref K) {
+	if m.len == 0 {
+		return
+	}
+
+	n := m.root
+	for {
+		i, found := m.search(n, k)
+		c.path.Push(step{node: n, at: i})
+		if found || len(m.nodes[n].children) == 0 {
+			break
+		}
+
+		n = m.nodes[n].children[i]
+	}
+
+	c.climb(m)
+}
+
+// next returns the node and the place of the entry the walk gives next,
+// and moves the cursor past it, or returns None at the walk's end.
+func (c mut cursor) next<K: Ord, V>(m ref Map<K, V>) (int, int)? {
+	if len(c.path) == 0 {
+		return None
+	}
+
+	top := c.path[len(c.path)-1]
+	if top.node == c.endNode && top.at == c.endAt {
+		c.path.Clear()
+		return None
+	}
+
+	c.path[len(c.path)-1].at++
+	if len(m.nodes[top.node].children) > 0 {
+		c.descend(m, m.nodes[top.node].children[top.at+1])
+		c.climb(m)
+	} else if top.at+1 >= len(m.nodes[top.node].keys) { // the leaf's last key given: up to the next
+		c.climb(m)
+	}
+
+	return Some((top.node, top.at))
+}
+
+// descend lengthens the path from the node n down its first children to
+// a leaf, each at its first key.
+func (c mut cursor) descend<K: Ord, V>(m ref Map<K, V>, n int) {
+	for {
+		c.path.Push(step{node: n, at: 0})
+		if len(m.nodes[n].children) == 0 {
+			return
+		}
+
+		n = m.nodes[n].children[0]
+	}
+}
+
+// climb shortens the path past the nodes whose keys are all given, so
+// that its last step is the next entry to give, or the path is empty at
+// the end of the map.
+func (c mut cursor) climb<K: Ord, V>(m ref Map<K, V>) {
+	for len(c.path) > 0 {
+		top := c.path[len(c.path)-1]
+		if top.at < len(m.nodes[top.node].keys) {
+			return
+		}
+
+		_ = c.path.Pop()
+	}
+}
+
+// exchange puts v in place of the element i of xs and returns the
+// element that was there, owned: v goes in before it, and it comes out
+// from behind v, each a shift of the elements after i, at most maxKeys.
+func exchange<T>(xs mut []T, i int, v T) T {
+	xs.Insert(i, v)
+	return xs.Remove(i + 1)
+}
+
+// splitOff takes the elements of xs from at on out of it, in order,
+// into a new slice with room for maxKeys, which it returns.
+func splitOff<T>(xs mut []T, at int) []T {
+	out := make([]T, 0, maxKeys+1)
+	for len(xs) > at {
+		out.Push(xs.Pop() ?? break)
+	}
+
+	out.Reverse()
+	return out
+}
+
+// moveAll moves every element of ys onto the end of xs, in order, and
+// uses ys up.
+func moveAll<T>(xs mut []T, ys []T) {
+	ys.Reverse()
+	for {
+		xs.Push(ys.Pop() ?? break)
+	}
+}
