@@ -884,6 +884,11 @@ func (c *Checker) unary(e *ast.UnaryExpr, expected Type) operand {
 			return operand{variable, t.elem, nil, nil}
 		}
 
+		if inner, ok := unparen(e.X).(*ast.UnaryExpr); ok && inner.Op == token.MUL && isBorrow(c.info.Types[inner.X]) { // **x where x is a borrow of a value: the program was written for a borrow of a borrow, which is the borrow itself
+			c.errorf(e.OpPos, "cannot dereference "+exprText(e.X)+": it is the "+x.typ.String()+" that "+exprText(inner.X)+" borrows, since a borrow of a borrow is a borrow of its target; write "+exprText(e.X))
+			return invalidOperand
+		}
+
 		c.errorf(e.OpPos, "cannot dereference a value of type "+x.typ.String())
 		return invalidOperand
 	case token.ARROW:

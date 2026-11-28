@@ -24,7 +24,13 @@ func (c *Checker) typ(e ast.Type) Type {
 	case *ast.OptionType:
 		return NewOption(c.typ(e.Elem))
 	case *ast.RefType:
-		return NewRef(c.typ(e.Elem), e.Mut)
+		elem := c.typ(e.Elem)
+		if e.Mut && isBorrow(elem) { // a ref of a borrow is a borrow of its target (NewRef); a mut of one would widen a ref, or give two mut borrows of one value
+			c.errorf(e.Pos(), "cannot write mut of a borrow type: a borrow is not borrowed mut; write mut of what it borrows, or ref of it, which is the borrow itself")
+			return Typ[Invalid]
+		}
+
+		return NewRef(elem, e.Mut)
 	case *ast.SliceType:
 		if elem := c.typ(e.Elem); c.pkg.std || c.storable(elem, "a slice", e.Pos()) {
 			return NewSlice(elem) // a library may write the slice of borrows a string's Fields yields, which the iterator trait will replace

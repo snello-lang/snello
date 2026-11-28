@@ -17,8 +17,8 @@
 // what the local holds being the parameter's, kept in a variable first
 // or read through two borrows; a borrow written ref of a borrow variable
 // or a field holding one, which passes the borrow on; the result of a
-// ref ref parameter, which holds what the slot holds; a borrow of a
-// borrow variable's slot used while the variable keeps its value; a
+// borrow variable passed where a ref is wanted, its borrow copied; a
+// ref of a borrow variable, which is its borrow copied; a
 // struct of borrows rebuilt from its own fields field by field; and a mut
 // view of a slice given to a call within its statement, passed on
 // through a call and a generic call, an element of it returned, and the
@@ -162,8 +162,8 @@ func viaLocal(xs ref []int) ref []int {
 	return ref ys
 }
 
-func inner(x ref ref string) ref string {
-	return *x
+func inner(x ref string) ref string {
+	return x
 }
 
 func outer(p ref string) ref string {
@@ -173,8 +173,8 @@ func outer(p ref string) ref string {
 
 func slot(p ref string) string {
 	var x ref string = p
-	var rr ref ref string = ref x
-	return (*rr).Clone()
+	var rr ref string = ref x // a ref of a borrow variable is its borrow, copied
+	return rr.Clone()
 }
 
 func rebuilt(p ref string) string {

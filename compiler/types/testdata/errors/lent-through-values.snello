@@ -189,12 +189,6 @@ func matchedThrough() string {
 	return keep.Clone()
 }
 
-func fieldSlot(p ref string) ref ref string {
-	sp := Span{text: p, at: 1}
-	r := ref sp.text
-	return r // ERROR "cannot return a borrow of local r"
-}
-
 func fromClosure(p ref string) int {
 	f := func(x ref string) ref Span {
 		sp := Span{text: x, at: 1}
@@ -247,14 +241,6 @@ func returnedThrough() ref string {
 	return k // ERROR "cannot return a borrow of local s"
 }
 
-func slotOf(p ref string) ref ref string {
-	return p // ERROR "cannot return a borrow of local p"
-}
-
-func slotOfMade(p ref string) ref ref string {
-	return id(p) // ERROR "cannot return a borrow of a temporary: id(...) is dropped when the statement ends"
-}
-
 func pushed() {
 	s := "a,b".Clone()
 	parts := s.Split(",")
@@ -274,18 +260,6 @@ func fieldLent() {
 	}
 
 	one(ref bx)
-}
-
-func slotKept() {
-	s := "outer".Clone()
-	var x ref string = s
-	var rr ref ref string = x
-	{
-		t := "inner".Clone()
-		x = t // ERROR "cannot assign to x: x is borrowed by rr"
-	}
-
-	fmt.Println(*rr)
 }
 
 func throughField(p ref string) ref int {

@@ -25,7 +25,7 @@ func upTo(end int) Count { return Count{next: 0, end: end} }
 
 func isEven(x ref int) bool { return *x % 2 == 0 }
 
-func lentEven(x ref ref int) bool { return **x % 2 == 0 }
+func lentEven(x ref int) bool { return *x % 2 == 0 }
 
 func square(x int) int { return x * x }
 
@@ -105,7 +105,7 @@ func TestConsumers() {
 	expect.Equal(ref it.Count(), ref 5) // Find left the iterator after what it found
 	d := numbers()
 	expect.Equal(ref d.Iter().Fold(0, addLent), ref 45)
-	if x := d.Iter().Find(func(x ref ref int) bool { return **x == 6 }) {
+	if x := d.Iter().Find(func(x ref int) bool { return *x == 6 }) {
 		expect.Equal(x, ref 6)
 	} else {
 		expect.Fail("no 6")

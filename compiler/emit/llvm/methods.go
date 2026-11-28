@@ -622,11 +622,14 @@ func (e *Emitter) key(x ast.Expr, t types.Type) string {
 
 // lookedAt writes x, of type t, where the operation only looks at its
 // value, as a ref parameter would, and returns its address: a value
-// built here is held for the statement and dropped with it.
+// built here is held for the statement and dropped with it. A ref of t
+// is the value's words themselves, not an address, when t is a view, a
+// string or a slice, or a borrow, a ref of a borrow being a borrow of
+// its target; then a slot holds the words and the slot is the address.
 func (e *Emitter) lookedAt(x ast.Expr, t types.Type) string {
 	v := e.operands([]ast.Expr{x}, []types.Type{types.NewRef(t, false)})[0]
-	if viewed(t) {
-		return e.spill(v) // lent as a view: a slot holds it
+	if byWords(t) {
+		return e.spill(v)
 	}
 
 	return v.s
@@ -635,11 +638,18 @@ func (e *Emitter) lookedAt(x ast.Expr, t types.Type) string {
 // looked is lookedAt with the value read.
 func (e *Emitter) looked(x ast.Expr, t types.Type) value {
 	v := e.operands([]ast.Expr{x}, []types.Type{types.NewRef(t, false)})[0]
-	if viewed(t) {
+	if byWords(t) {
 		return v
 	}
 
 	return e.load(e.irType(t, x.Pos()), v.s)
+}
+
+// byWords reports whether a ref of t carries the value's own words
+// rather than its address: a view of a string or a slice, and a borrow,
+// whose ref is the borrow itself.
+func byWords(t types.Type) bool {
+	return depth(types.NewRef(t, false)) == depth(t)
 }
 
 // mapSlotter returns the name of the function giving the address of

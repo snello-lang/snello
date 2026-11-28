@@ -206,8 +206,8 @@ b1:
   ->
 b2:
   store x <- t3.?Some.?0
-  read x.*
-  store t2 <- x.*
+  read x
+  store t2 <- x
   drop x
   -> b1
 b3:

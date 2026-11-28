@@ -60,7 +60,9 @@ func TestTypeExprErrors(t *testing.T) {
 	}{
 		{"func f(xs ...mut int) {}", "a variadic parameter is ...T or ...ref T, not ...mut T"},
 		{"func f(xs ...ref any) {}", "...ref any is the library's printing functions' alone"},
-		{"func f(xs ...ref ref int) {}", "a variadic parameter cannot hold a borrow"},
+		{"func f(xs ...ref ref int) {}", "a variadic parameter cannot hold a borrow"}, // the outer ref is the variadic's own; the element ref int is the borrow a slice cannot hold
+		{"func f(x mut ref int) {}", "cannot write mut of a borrow type: a borrow is not borrowed mut; write mut of what it borrows, or ref of it, which is the borrow itself"},
+		{"func f(x mut mut int) {}", "cannot write mut of a borrow type"},
 		{"enum E { Many(xs ...int) }", "a variant's field is not variadic"},
 		{"func f(n int) { var a [n]int; print(a) }", "array length must be a non-negative integer constant: n is not constant"},
 	} {

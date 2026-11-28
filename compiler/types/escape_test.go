@@ -64,9 +64,9 @@ func TestEscapes(t *testing.T) {
 		{"struct Sp { text ref string; at int }\nfunc f(t ref string) ref int { x := Sp{text: t, at: 1}; r := ref x; return ref r.at }", []string{"cannot return a borrow of local x"}},
 		{"struct Sp { text ref string; at int }\nfunc f(t ref string) Sp { x := Sp{text: t, at: 1}; r := ref x; return *r }", nil},
 		{"struct Sp { text ref string; at int }\nfunc f(t ref string) ref string { x := Sp{text: t, at: 1}; r := ref x; return r.text }", nil},
-		{"struct Sp { text ref string; at int }\nfunc f(t ref string) ref ref string { x := Sp{text: t, at: 1}; r := ref x.text; return r }", []string{"cannot return a borrow of local r"}}, // r holds the borrow in x's field, and a borrow of r is returned
-		{"struct Sp { text ref string; at int }\nfunc f(t ref string) ref string { x := Sp{text: t, at: 1}; r := ref x; y := r.text; return y }", nil},                                       // a borrow read out through r
-		{"func f(t ref string) ref string { parts := t.Split(\",\"); y := parts[0]; return y }", nil},                                                                                        // an element read is the borrow stored there
+		{"struct Sp { text ref string; at int }\nfunc f(t ref string) ref string { x := Sp{text: t, at: 1}; r := ref x.text; return r }", nil},         // ref of a field holding a borrow is that borrow, t's, a ref of a borrow being a borrow of its target
+		{"struct Sp { text ref string; at int }\nfunc f(t ref string) ref string { x := Sp{text: t, at: 1}; r := ref x; y := r.text; return y }", nil}, // a borrow read out through r
+		{"func f(t ref string) ref string { parts := t.Split(\",\"); y := parts[0]; return y }", nil},                                                  // an element read is the borrow stored there
 		{"func f() ref int { xs := []int{1}; return xs[0] }", []string{"cannot return a borrow of local xs"}},
 		{"func f() ref string { s := \"ab\".Clone(); return s.Trim() }", []string{"cannot return a borrow of local s"}},
 		{"func f(s ref string) Lexer { l := Lexer{src: s, pos: 0}; return l }", nil},

@@ -30,7 +30,7 @@ func TestBorrows(t *testing.T) {
 		// The pieces Split, SplitN, Fields and Lines lend hold the string, and so do what is cloned from them and what is stored among them.
 		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); for p := range parts { s = \"c\".Clone(); print(p) } }", []string{"cannot assign to s: s is borrowed by the range loop"}},
 		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); x := \"\".Trim(); for p := range parts { x = p }; s = \"c\".Clone(); print(x) }", []string{"cannot assign to s: s is borrowed by x"}},
-		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); g := parts.First() ?? return; x := *g; s = \"c\".Clone(); print(x) }", []string{"cannot assign to s: s is borrowed by x"}}, // a value read through a borrow holds what the borrow held
+		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); g := parts.First() ?? return; x := g; s = \"c\".Clone(); print(x) }", []string{"cannot assign to s: s is borrowed by x"}}, // a borrow copied holds what the borrow held
 		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); x := \"\".Trim(); for p := range ref parts { x = *p }; s = \"c\".Clone(); print(x) }", []string{"cannot assign to s: s is borrowed by x"}},
 		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); r := mut parts; { t := \"c\".Clone(); r.Push(t.Trim()) }; print(len(parts)) }", []string{"cannot keep a borrow in r: Push stores it where the checker cannot follow it"}},
 		{"func f() { s := \"a,b\".Clone(); parts := s.Split(\",\"); for p := range parts { print(p) }; s = \"c\".Clone(); print(s) }", nil}, // the loop is done with the pieces

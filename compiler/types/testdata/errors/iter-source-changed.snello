@@ -11,7 +11,7 @@ package p
 
 import ("deque"; "fmt")
 
-func even(x ref ref int) bool { return **x % 2 == 0 }
+func even(x ref int) bool { return *x % 2 == 0 }
 
 func main() {
     d := deque.New<int>()
