@@ -146,6 +146,9 @@ for {
 ```
 
 A `set.Set<T>` holds each value once, for a `T` that is `Eq` and `Hash` as a map's key is. `Insert` adds a value and reports whether it was new, `Contains` asks, `Remove` takes one out and reports whether it was there, and `set.From(xs)` makes one from a slice. It is a map of the values to nothing, as Go writes `map[T]struct{}`, so it costs what the map costs.
+`set.FromIter(mut it)` and `s.Extend(mut it)` take the items of an iterator of owned values, and `s.Retain(keep)` drops the values `keep` refuses.
+
+The algebra changes a set in place by another set, which it takes and uses up, moving the values and copying nothing: `a.Union(b)` adds `b`'s values, `a.Intersection(b)` keeps only the values `b` holds too, `a.Difference(b)` removes the values `b` holds, and `a.SymmetricDifference(b)` leaves the values held by exactly one of the two. After the call `b` is gone; to keep it, give a copy, `a.Union(set.Clone(ref b))`, so the one copy a program pays is written where it is paid. `a.IsSubset(ref b)`, `a.IsSuperset(ref b)` and `a.IsDisjoint(ref b)` compare two sets and change neither. A walk over what two sets share is a loop: `for v := range b.Iter() { if a.Contains(v) { ... } }`.
 
 ```go
 seen := set.New<string>()
