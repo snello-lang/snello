@@ -55,6 +55,9 @@ An adapter takes the iterator it wraps by value and gives nothing until it is pu
 | `Enumerate()` | each item with its index from 0, `(int, T)` |
 | `Zip(other)` | the items of both in pairs, `(T, V)`, ending when either ends |
 | `Chain(other)` | the items of one, then those of the other, which gives the same type of item |
+| `TakeWhile(keep func(ref T) bool)` | the items from the start while `keep` is true of them; the first it is false of is pulled and dropped, and nothing after it is pulled |
+| `SkipWhile(skip func(ref T) bool)` | the items from the first `skip` is false of, that one included; the rest are not tested |
+| `FlatMap(f func(T) J)` | every item of the iterator `f` makes of each item, one iterator after another |
 
 A consumer lends the iterator `mut` and pulls from it, so `it.Count()` leaves `it` to its owner, and a consumer called on a chain's temporary is fine too.
 
@@ -66,8 +69,31 @@ A consumer lends the iterator `mut` and pulls from it, so `it.Count()` leaves `i
 | `All(test func(ref T) bool)` | whether `test` is true of every item, stopping at the first it is not; true for none |
 | `Find(test func(ref T) bool)` | the first item `test` is true of, or `None`, leaving the iterator after it |
 | `Collect()` | every item, in a slice, in order |
+| `Reduce(f func(T, T) T)` | the items combined in turn by `f`, the first the start; `None` for none |
+| `Last()` | the last item, or `None` |
+| `MinBy(cmp func(ref T, ref T) Ordering)` | the least item by `cmp`, the first of several; `None` for none |
+| `MaxBy(cmp func(ref T, ref T) Ordering)` | the greatest item by `cmp`, the last of several; `None` for none |
 
-The list is short on purpose: each adapter is one more name to learn, and each here earns its place. Turning borrowed items into owned ones is a `Map`, `d.Iter().Map(func(s ref string) string { return s.Clone() })`.
+Two consumers are functions of the package, since they ask the items to be `Ord`, which a method of the trait cannot ask of its `T`: `iter.Min(mut it)` and `iter.Max(mut it)` give the least and the greatest item. A borrow is no type that implements a trait, so over borrowed items `MinBy` and `MaxBy` do the comparing, with the same function as over owned ones, `func(a ref int, b ref int) Ordering { return a.Cmp(b) }`, since a borrow of a borrow is a borrow of its target (chapter 6).
+
+The list is short on purpose: each adapter is one more name to learn, and each here earns its place. A name joins when at least three of Rust's `Iterator`, Swift's `Sequence`, Java's `Stream` and C#'s LINQ have it and it is more than one line over a method already here: `Sum` is `Fold(0, add)`, so it is not here, and `ForEach` is `range`. Turning borrowed items into owned ones is a `Map`, `d.Iter().Map(func(s ref string) string { return s.Clone() })`.
+
+## Slices, and the back
+
+A loop ranges over a slice directly, so a slice makes no iterator of its own; `iter.Over(ref xs)` gives one for the adapters, an `iter.Slice<T>` lending each element:
+
+```go
+evens := iter.Over(ref xs).Filter(isEven).Count()
+```
+
+A slice's iterator and a deque's give their items from the back as well: both list `iter.DoubleEnded<T>`, a trait over `Iterator<T>` with one more method, `NextBack() T?`, the last item not yet given, so `Next` and `NextBack` meet in the middle and neither gives an item the other has. `Rev` turns such an iterator round:
+
+```go
+for x := range iter.Over(ref xs).Rev() { ... }        // the last element first
+last3 := d.Iter().Rev().Take(3).Collect()             // the deque's last three, last first
+```
+
+A `Rev` is double-ended too, so `Rev().Rev()` is the original. An adapter over a double-ended iterator is an `Iterator` and no more, since a type lists its traits once and cannot be double-ended only when what it wraps is; so the items are turned round first and adapted after, `iter.Over(ref xs).Rev().Map(f)`.
 
 ## Over borrowed items
 
@@ -78,6 +104,17 @@ evens := d.Iter().Filter(isEven)
 d.PushBack(2)              // ERROR: cannot borrow d as mut: d is borrowed as ref by evens at 3:5, used at 5:17
 fmt.Println(evens.Count())
 ```
+
+An item borrows what the iterator borrows, not the iterator, so one item is held while the next is pulled, and the iterator may be replaced or dropped under its items:
+
+```go
+it := d.Iter()
+a := it.Next()
+b := it.Next()         // fine: a borrows d, not it
+fmt.Println(a, b)
+```
+
+That holds for every iterator that lists the trait, since listing it promises that `Next` gives only what the iterator borrows (below), and for what the call's arguments hold too. It holds where the iterator is a variable, a field or a temporary of the function; through a `mut` borrow of an iterator, `func pair(it mut iter.Slice<int>)`, the checker is conservative, and the two lines are refused as before. A type with `Next` that lists no trait ties its items to itself, as any method's result borrows its receiver, so the same two lines over it are refused: `cannot borrow w as mut: w is borrowed as ref by a`. Over borrowed items, a `Reduce` whose combiner returns one of two borrows cannot be written, a function with two borrowed parameters returning a borrow having no one source, so `Reduce` follows a `Map` to owned items; `MinBy` and `MaxBy` choose between items inside the library.
 
 An item outlives nothing it borrows. `Collect` over borrowed items gives a slice of the borrows, which holds the deque as the iterator did, and lets it go after its own last use:
 
@@ -93,26 +130,33 @@ The rules that keep this safe are chapter 6's, with nothing new to write:
 - **A function returns a chain only over what it was given.** `func evens(d ref deque.Deque<int>) iter.Filter<deque.Iter<int>, ref int>` returns `d.Iter().Filter(isEven)`, tied to `d`; the same chain over a deque the function made is refused, `cannot return a borrow of local d`.
 - **A closure given to an adapter borrows nothing.** An adapter keeps its function, and a closure that borrows cannot be passed to a function that keeps it (chapter 6), so a test that reads a local string, or a closure that adds into a local, is refused: `closure captures n by borrow and cannot be passed to Map, which keeps f`. A closure that captures copies, a number it reads, goes anywhere; a test that needs a string it would borrow is written in the loop's body instead, `for x := range d.Iter() { if *x == target { ... } }`.
 
-`Filter`, `Any`, `All` and `Find` lend each item to their test, so over borrowed items the test takes a borrow of a borrow, `func(x ref ref int) bool { return **x % 2 == 0 }`.
+`Filter`, `Any`, `All` and `Find` lend each item to their test, and a borrow of a borrow is a borrow of its target, so over borrowed items the test is the one written over owned ones, `func(x ref int) bool { return *x % 2 == 0 }`.
 
 ## Writing an iterator
 
 An iterator over a collection holds a `ref` borrow of it and gives what it borrows:
 
 ```go
-struct Iter<T> impl iter.Iterator<ref T> {
-    d ref Deque<T>
-    i int
+struct Iter<T> impl iter.Iterator<ref T>, iter.DoubleEnded<ref T> {
+    d   ref Deque<T>
+    i   int   // the element Next gives
+    end int   // one past the element NextBack gives
 }
 
 func (it mut Iter<T>) Next() ref T? {
-    if it.i >= it.d.len { return None }
+    if it.i >= it.end { return None }
     it.i++
     return it.d.Get(it.i - 1)
 }
+
+func (it mut Iter<T>) NextBack() ref T? {
+    if it.end <= it.i { return None }
+    it.end--
+    return it.d.Get(it.end)
+}
 ```
 
-An item borrows what the iterator borrows, never the iterator itself: a loop holds an item while it asks for the next one, and a consumer holds them all. So an iterator that gives a borrow of a field it owns is refused, and so is one that gives what it reaches through a `mut` borrow, which the next call could change or free:
+An item borrows what the iterator borrows, never the iterator itself: a loop holds an item while it asks for the next one, and a consumer holds them all. The checker holds an implementation to that, and in return reads a call's result out of what the receiver holds rather than lending the receiver, which is what lets two items be held at once (above). So an iterator that gives a borrow of a field it owns is refused, and so is one that gives what it reaches through a `mut` borrow, which the next call could change or free:
 
 ```go
 struct Own impl iter.Iterator<ref int> { n int }
@@ -151,19 +195,22 @@ A type argument may hold a borrow, `ref int` here and `deque.Iter<int>` for `I`,
 
 ## What it costs
 
-An adapter is a struct of the iterator it wraps and its function, and each instance is compiled for its own types, so a chain is a loop with the calls written into it. On an arm64 Mac, the sum of the squares of the even numbers among a million, twenty times over (`bench/iterators.snello`), costs per item, in nanoseconds, the median of ten runs:
+An adapter is a struct of the iterator it wraps and its function, and each instance is compiled for its own types, so a chain is a loop with the calls written into it. On an arm64 Mac, the sum of the squares of the even numbers among a million, twenty times over (`bench/iterators.snello`, and `bench/iterators.go` for Go, its adapters over Go's range-over-function iterators), costs per item, in nanoseconds, the median of ten runs:
 
-| | LLVM backend | C backend |
-|---|---|---|
-| `d.Iter().Filter(isEven).Map(square).Fold(0, add)` over a deque | 0.6 | 0.6 |
-| the loop written by hand over the same deque | 0.4 | 0.4 |
-| a chain over an iterator that counts | 0.9 | 0.8 |
+| | LLVM backend | C backend | Go |
+|---|---|---|---|
+| `iter.Over(ref xs).Filter(isEven).Map(square).Fold(0, add)` over a slice | 0.6 | 0.5 | 0.6 |
+| the loop written by hand over the same slice | 0.3 | 0.3 | 1.2 |
+| the same chain from the back, `iter.Over(ref xs).Rev()` | 0.5 | 0.4 | 0.6 |
+| `d.Iter().Filter(isEven).Map(square).Fold(0, add)` over a deque | 0.5 | 0.6 | |
+| the loop written by hand over the same deque | 0.4 | 0.4 | |
+| a chain over an iterator that counts | 0.9 | 0.8 | 0.6 |
 
-The loop by hand is vectorized and the chain, a loop that leaves from inside, is not, so the chain costs half again as much through either backend; `../design/01-language-design.md` has the numbers beside other programs'.
+The loop by hand is vectorized and the chain, a loop that leaves from inside, is not, so the chain costs half again as much through either backend; a chain over a slice costs what Go's does, and from the back less, where Go's loop by hand over the slice costs four times Snello's. The chain over an iterator that counts is the one row Go wins. `../design/01-language-design.md` has the numbers beside other programs', and the program's peak memory, 21 MB against Go's 12: the Snello program holds one collection at a time, as Go's does, and the difference is the deque's ring, doubled to a power of two as it fills, which Go's program has no counterpart for.
 
 ## For maintainers
 
-What a generic call passes along is in `compiler/types/passing.go`, an implementation's word in `word.go`, and what a generic body hides in `hide.go`. `passBorrows` runs at each call whose function was made by substitution and whose type arguments hold a borrow: it binds each type parameter of the declaration to what it stands for in the call (`bindings`), refuses an instance that keeps a borrow in a map, channel or pointer (`ownedParts` in `escape.go`), records the arguments whose borrows the result holds, which `sources` and `source` read beside `callSource`, and gives each argument lent `mut` what the others of its type parameter hold, through the same `holdValue` a `Push` on a slice of borrows uses. A result whose declared type holds no borrow holds only what was passed, so no temporary an argument lends is kept by it.
+What a generic call passes along is in `compiler/types/passing.go`, an implementation's word in `word.go`, and what a generic body hides in `hide.go`. A method whose implementation keeps its word is marked on its `Func` (`noteWord`, `wordKept`), which an importing package's checker sees, and a call of it reads its result out of what the receiver and the arguments hold: `called` in `formlends.go` follows their loans (`followHeld`) and `sourcesLent` in `borrow.go` reads them, where any other method's result lends its receiver; `iter-item-ties-receiver` and `word-argument-held` under `testdata/errors/` are the refusals that stay. `passBorrows` runs at each call whose function was made by substitution and whose type arguments hold a borrow: it binds each type parameter of the declaration to what it stands for in the call (`bindings`), refuses an instance that keeps a borrow in a map, channel or pointer (`ownedParts` in `escape.go`), records the arguments whose borrows the result holds, which `sources` and `source` read beside `callSource`, and gives each argument lent `mut` what the others of its type parameter hold, through the same `holdValue` a `Push` on a slice of borrows uses. A result whose declared type holds no borrow holds only what was passed, so no temporary an argument lends is kept by it.
 
 An implementation that keeps its trait's word, one whose trait declares a result with a type parameter's value in it outside any declared borrow (`paramByValue`) while its own result holds a borrow, is recorded by `noteWord` when the impl list is checked, and its body checks every borrow it returns (`wordSource`, `wordLoan`): a borrow of a place of a parameter is decided by its path, which must cross a `ref` borrow stored in it, carried from the return through the locals that borrow the parameter (`returnedPart`), and a loan records whether it read a borrow stored in a place or lent the place (`borrow.read`). A lend of a place behind a parameter also copies what the parameter holds; those copies go wherever the loan of the place goes, so the loan decides and the copies are passed over; what a parameter taken by value holds is its own to give (`flowHeld`).
 

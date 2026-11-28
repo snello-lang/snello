@@ -54,6 +54,8 @@ Rules are numbered as in `../../../../_docs/design/04-borrows-ref-and-mut.md`; t
 | 3. A returned borrow has one source | return-two-borrows, return-local-borrow, closure-returned |
 | An iterator over a collection, and every adapter over it, holds the collection's borrow: the collection outlives it and does not change while it lives, and owned data cannot hold it | iter-outlives-source, iter-source-changed, iter-adapter-stored |
 | An iterator's items borrow what the iterator borrows, through `ref` borrows, never the iterator itself | iter-next-borrows-itself |
+| A method's result borrows its receiver, unless the method keeps its trait's word: an iterator that lists `iter.Iterator` gives items that may be held while the next is pulled, one that lists no trait does not | iter-item-ties-receiver |
+| A word-keeping method's result holds what its arguments hold, a parameter taken by value included | word-argument-held |
 | A type argument that holds a borrow makes an instance that holds it: not in a map, a channel or a pointer, not hidden in a trait value or a closure by a generic body, and given to an argument lent `mut` by a generic call | generic-owned-borrow, generic-hides-borrow, generic-mut-takes-borrow |
 | 1. and 6. A borrow lives inside one function; the owner outlives it | return-local-borrow, closure-returned |
 | 6. A local dies at the end of its block, on every path: a borrow of it is not used after, through a variable, a field or a loop's next pass | borrow-outlives-block, borrow-field-outlives-block, borrow-next-pass |

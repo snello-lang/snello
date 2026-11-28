@@ -1,0 +1,69 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: the result of a method that keeps its trait's word holds what
+// its receiver and its arguments hold, a parameter taken by value, as a
+// ref or as a mut included, whose borrows the method may give back; so
+// what such an argument borrows is held by the result for as long as
+// it is used. Fix: use the result before changing what the argument
+// borrows.
+
+package p
+
+import "fmt"
+
+trait Merger<T> {
+    func (s mut Self) Pick(other Self) T?
+    func (s mut Self) PickRef(other ref Self) T?
+    func (s mut Self) PickMut(other mut Self) T?
+}
+
+struct W impl Merger<ref int> {
+    xs ref []int
+}
+
+func (w mut W) Pick(other W) ref int? {
+    o := other
+    return o.xs.First()
+}
+
+func (w mut W) PickRef(other ref W) ref int? {
+    o := *other
+    return o.xs.First()
+}
+
+func (w mut W) PickMut(other mut W) ref int? {
+    o := *other
+    return o.xs.First()
+}
+
+func main() {
+    xs := []int{1}
+    ys := []int{42}
+    w := W{xs: ref xs}
+    o := W{xs: ref ys}
+    a := w.Pick(o)
+    ys.Push(7)                              // ERROR "cannot borrow ys as mut: ys is borrowed as ref by a"
+    fmt.Println(a)
+}
+
+func lent() {
+    xs := []int{1}
+    ys := []int{42}
+    w := W{xs: ref xs}
+    o := W{xs: ref ys}
+    a := w.PickRef(ref o)
+    ys.Push(7)                              // ERROR "cannot borrow ys as mut: ys is borrowed as ref by a"
+    fmt.Println(a)
+}
+
+func changed() {
+    xs := []int{1}
+    ys := []int{42}
+    w := W{xs: ref xs}
+    o := W{xs: ref ys}
+    a := w.PickMut(mut o)
+    ys.Push(7)                              // ERROR "cannot borrow ys as mut: ys is borrowed as ref by a"
+    fmt.Println(a)
+}

@@ -330,7 +330,14 @@ func (c *Checker) sourcesLent(e ast.Expr, lent, deref bool, f func(ast.Expr, boo
 
 		passed := c.passed[e]
 		if src := c.callSource(e); src != nil && !passed.only {
-			c.sourcesLent(src, true, deref, f) // a call's result borrows its source: lent, whatever the source is
+			fn, ok := c.calledBy(e).obj.(*Func)
+			kept := ok && fn.wordKept()
+			c.sourcesLent(src, !kept, deref, f) // a call's result borrows its source: lent, whatever the source is; a method keeping its trait's word holds what the receiver holds instead
+			if kept {
+				for _, x := range e.Args {
+					c.sourcesLent(x, false, deref, f) // and what each argument holds, as a generic call's result does
+				}
+			}
 		}
 
 		for _, x := range passed.args {

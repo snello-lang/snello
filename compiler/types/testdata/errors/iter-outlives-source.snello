@@ -8,7 +8,7 @@
 
 package p
 
-import ("deque"; "fmt")
+import ("deque"; "fmt"; "iter")
 
 func double(x ref int) int { return *x * 2 }
 
@@ -20,5 +20,16 @@ func main() {
         d.PushBack(1)
         it = d.Iter().Map(double)           // ERROR "cannot keep a borrow of d in it: d is dropped at the end of its block"
     }
+    fmt.Println(it.Count())
+}
+
+func sliced() {
+    none := []int{}
+    it := iter.Over(ref none)
+    {
+        xs := []int{1, 2, 3}
+        it = iter.Over(ref xs)                // ERROR "cannot keep a borrow of xs in it: xs is dropped at the end of its block"
+    }
+
     fmt.Println(it.Count())
 }

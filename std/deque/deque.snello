@@ -50,13 +50,15 @@ struct Deque<T> impl Drop, fmt.Stringer {
 	len      int   // the elements, in the slots from the head round the end
 }
 
-// An Iter walks a deque from front to back, lending each element; it
+// An Iter walks a deque from front to back, or from the back through
+// NextBack, lending each element; it
 // lends the deque for as long as it lives, so the deque cannot change
 // during the walk. Deque.Iter makes one, and the adapters of
 // iter.Iterator wrap it: d.Iter().Filter(keep).Map(f).
-struct Iter<T> impl iter.Iterator<ref T> {
-	d ref Deque<T>
-	i int
+struct Iter<T> impl iter.Iterator<ref T>, iter.DoubleEnded<ref T> {
+	d   ref Deque<T>
+	i   int // the element from the front Next gives
+	end int // one past the element from the front NextBack gives
 }
 
 // New returns an empty deque of elements of type T. It allocates
@@ -214,7 +216,7 @@ func (d mut Deque<T>) Drop() {
 //
 //	for v := range d.Iter() { ... }
 func (d ref Deque<T>) Iter() Iter<T> {
-	return Iter<T>{d: d, i: 0}
+	return Iter<T>{d: d, i: 0, end: d.len}
 }
 
 // String returns the elements from front to back as a new string,
@@ -232,17 +234,29 @@ func (d ref Deque<T>) String() string {
 }
 
 // Next lends the next element of the walk, from front to back, or None
-// once every element has been given. The element is lent from the
-// deque, not from the Iter, so it stays good while the walk goes on and
-// for as long as the deque is lent; nothing is copied, and each call is
-// one index into the ring.
+// once every element has been given from either end. The element is
+// lent from the deque, not from the Iter, so it stays good while the
+// walk goes on and for as long as the deque is lent; nothing is copied,
+// and each call is one index into the ring.
 func (it mut Iter<T>) Next() ref T? {
-	if it.i >= it.d.len {
+	if it.i >= it.end {
 		return None
 	}
 
 	it.i++
 	return it.d.Get(it.i - 1)
+}
+
+// NextBack lends the next element of the walk from the back, or None
+// once the back has met the front: iter.Rev over it walks the deque
+// from back to front.
+func (it mut Iter<T>) NextBack() ref T? {
+	if it.end <= it.i {
+		return None
+	}
+
+	it.end--
+	return it.d.Get(it.end)
 }
 
 // slotIndex returns the slot of the buffer that holds the element i

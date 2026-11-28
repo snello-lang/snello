@@ -100,6 +100,7 @@ type Func struct {
 	origin  *Func
 	derived bool          // written by the compiler from the type's fields, for a standard trait the type listed without the method
 	static  bool          // a function of a type, func Point.Parse(...): it takes no value of the type
+	word    bool          // the implementation keeps its trait's word (word.go): its result holds only what its receiver and parameters hold, never its receiver; in the padding beside the flags
 	trait   *Trait        // for a default method a type inherited: the trait, or instance of one, it came from
 	decl    *ast.FuncDecl // a generic function's declaration, whose body the questions a type answers walk (reach.go); it fits in the bytes the fields above leave free
 	symbol  string        // the name a backend writes for the function, kept once the lowering made it

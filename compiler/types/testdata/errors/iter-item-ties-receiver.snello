@@ -1,0 +1,36 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Rule: a method's result borrows its receiver, so an item a Next of a
+// type that lists no trait gives holds the iterator, and the next item
+// cannot be pulled while it is held. An iterator that lists
+// iter.Iterator keeps the trait's word: its items borrow only what it
+// borrows, so one may be held while the next is pulled. Fix: list the
+// trait.
+
+package p
+
+import "fmt"
+
+struct Walk {
+    xs ref []int
+    i  int
+}
+
+func (w mut Walk) Next() ref int? {
+    if w.i >= len(w.xs) {
+        return None
+    }
+
+    w.i++
+    return Some(ref w.xs[w.i-1])
+}
+
+func main() {
+    xs := []int{5, 6}
+    w := Walk{xs: ref xs, i: 0}
+    p := w.Next()
+    q := w.Next()                           // ERROR "cannot borrow w as mut: w is borrowed as ref by p"
+    fmt.Println(p, q)
+}

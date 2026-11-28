@@ -314,6 +314,13 @@ func (m *formBorrows) called(in *Instr) int {
 	if !generic || !passed.only {
 		if recv && k.obj == nil { // a method the language declares: its result borrows its receiver
 			tmp = m.follow(in.Args[0])
+		} else if f, ok := k.obj.(*Func); recv && ok && f.wordKept() {
+			tmp = m.followHeld(in.Args[0])  // a method keeping its trait's word: its result holds what the receiver holds, never the receiver
+			for _, a := range in.Args[1:] { // and what each argument holds, a lent value's by what it holds, as a generic call's result does
+				if found := m.followHeld(a); tmp == NoTemp {
+					tmp = found
+				}
+			}
 		} else if src := callSourceIndex(k.sig, recv); src >= 0 && src < len(in.Args) {
 			tmp = m.followSource(in.Args[src], m.form.Temps[in.To.Temp].Type)
 		}

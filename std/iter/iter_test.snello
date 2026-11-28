@@ -6,52 +6,14 @@ package iter_test
 
 import ("deque"; "expect"; "fmt"; "iter"; "testing")
 
-// A Count gives 0, 1, ... up to end, owning what it gives.
-struct Count impl iter.Iterator<int> {
-	next int
-	end  int
-}
-
-func (c mut Count) Next() int? {
-	if c.next >= c.end {
-		return None
-	}
-
-	c.next++
-	return Some(c.next - 1)
-}
-
-func upTo(end int) Count { return Count{next: 0, end: end} }
-
-func isEven(x ref int) bool { return *x % 2 == 0 }
-
-func lentEven(x ref int) bool { return *x % 2 == 0 }
-
-func square(x int) int { return x * x }
-
-func lentSquare(x ref int) int { return *x * *x }
-
-func add(total int, x int) int { return total + x }
-
-func addLent(total int, x ref int) int { return total + *x }
-
-func numbers() deque.Deque<int> {
-	d := deque.New<int>()
-	for i := 0; i < 10; i++ {
-		d.PushBack(i)
-	}
-
-	return d
-}
-
 // Map and Filter over an iterator that owns what it gives and over one
 // that lends a deque's elements give the same values.
 func TestMapFilter() {
 	expect.Equal(ref fmt.Sprint(upTo(10).Filter(isEven).Map(square).Collect()), "[0 4 16 36 64]")
 	d := numbers()
-	expect.Equal(ref fmt.Sprint(d.Iter().Filter(lentEven).Map(lentSquare).Collect()), "[0 4 16 36 64]")
+	expect.Equal(ref fmt.Sprint(d.Iter().Filter(isEven).Map(lentSquare).Collect()), "[0 4 16 36 64]")
 	got := []int{}
-	for x := range d.Iter().Filter(lentEven).Map(lentSquare) {
+	for x := range d.Iter().Filter(isEven).Map(lentSquare) {
 		got.Push(x)
 	}
 
@@ -127,7 +89,7 @@ func TestGenericOverBorrowed() {
 	d := numbers()
 	it := d.Iter()
 	expect.Equal(ref sum(mut it), ref 45)
-	evens := d.Iter().Filter(lentEven)
+	evens := d.Iter().Filter(isEven)
 	expect.Equal(ref sum(mut evens), ref 20)
 }
 
@@ -140,4 +102,173 @@ func TestCollectBorrowed() {
 	expect.Equal(xs[0], ref 7)
 	d.PushBack(10)
 	expect.Equal(ref d.Len(), ref 11)
+}
+
+// TakeWhile ends at the first item its test is false of, which it
+// drops, and SkipWhile begins at the first its test is false of; each
+// tests no item after that, so a later item the test would stop at is
+// given.
+func TestTakeWhileSkipWhile() {
+	expect.Equal(ref fmt.Sprint(upTo(10).TakeWhile(below(3)).Collect()), "[0 1 2]")
+	expect.Equal(ref fmt.Sprint(upTo(10).SkipWhile(below(7)).Collect()), "[7 8 9]")
+	expect.Equal(ref upTo(5).TakeWhile(below(0)).Count(), ref 0)
+	expect.Equal(ref upTo(5).SkipWhile(below(0)).Count(), ref 5)
+	expect.Equal(ref upTo(5).SkipWhile(below(9)).Count(), ref 0)
+	it := upTo(10).TakeWhile(below(3))
+	expect.Equal(ref it.Count(), ref 3)
+	expect.IsNone(it.Next()) // spent, it pulls nothing more
+	d := numbers()
+	expect.Equal(ref fmt.Sprint(d.Iter().TakeWhile(below(2)).Collect()), "[0 1]")
+	expect.Equal(ref fmt.Sprint(d.Iter().SkipWhile(below(8)).Collect()), "[8 9]")
+	saw := upTo(6).Filter(func(x ref int) bool { return *x != 3 }).SkipWhile(below(2)).TakeWhile(below(5)).Collect()
+	expect.Equal(ref fmt.Sprint(saw), "[2 4]")
+}
+
+// FlatMap gives every item of each iterator its function makes, one
+// after another, and an empty one in the middle gives nothing.
+func TestFlatMap() {
+	expect.Equal(ref fmt.Sprint(upTo(4).FlatMap(func(n int) Count { return upTo(n) }).Collect()), "[0 0 1 0 1 2]")
+	expect.Equal(ref upTo(0).FlatMap(func(n int) Count { return upTo(n) }).Count(), ref 0)
+	expect.Equal(ref upTo(3).FlatMap(func(n int) Count { return upTo(0) }).Count(), ref 0)
+	d := numbers()
+	pairs := d.Iter().Take(3).FlatMap(func(x ref int) Count { return upTo(*x) }).Collect()
+	expect.Equal(ref fmt.Sprint(pairs), "[0 0 1]")
+}
+
+// Reduce starts from the first item, Last gives the last, and MinBy
+// and MaxBy give the first least and the last greatest; each gives None
+// for no items.
+func TestReduceLastMinMax() {
+	expect.Equal(ref expect.IsSome(upTo(5).Reduce(add)), ref 10)
+	expect.Equal(ref expect.IsSome(upTo(1).Reduce(add)), ref 0)
+	expect.IsNone(upTo(0).Reduce(add))
+	expect.Equal(ref expect.IsSome(upTo(5).Last()), ref 4)
+	expect.IsNone(upTo(0).Last())
+	expect.Equal(ref expect.IsSome(upTo(5).Skip(2).MinBy(less)), ref 2)
+	expect.Equal(ref expect.IsSome(upTo(5).MaxBy(less)), ref 4)
+	expect.IsNone(upTo(0).MinBy(less))
+	expect.Equal(ref expect.IsSome(iter.Min(mut upTo(5).Skip(1))), ref 1)
+	expect.Equal(ref expect.IsSome(iter.Max(mut upTo(5))), ref 4)
+	expect.IsNone(iter.Max(mut upTo(0)))
+	d := numbers()
+	expect.Equal(ref expect.IsSome(d.Iter().Map(lentSquare).Reduce(add)), ref 285) // over borrowed items a combiner that returns one of two borrows cannot be written, so Reduce follows a Map to owned ones
+	expect.Equal(expect.IsSome(d.Iter().Last()), ref 9)
+	expect.Equal(expect.IsSome(d.Iter().MinBy(less)), ref 0)
+	expect.Equal(expect.IsSome(d.Iter().MaxBy(less)), ref 9)
+	expect.Equal(ref expect.IsSome(iter.Min(mut d.Iter().Map(lentSquare))), ref 0)
+}
+
+// An item of an iterator that lists the trait borrows what the iterator
+// borrows, not the iterator, so the next item is pulled while one is
+// held, from a deque's iterator, a slice's and a program's own.
+func TestHeldItems() {
+	d := numbers()
+	it := d.Iter()
+	a := it.Next()
+	b := it.Next()
+	expect.Equal(expect.IsSome(a), ref 0)
+	expect.Equal(expect.IsSome(b), ref 1)
+	xs := []int{7, 8, 9}
+	over := iter.Over(ref xs)
+	first := over.Next()
+	last := over.NextBack()
+	expect.Equal(expect.IsSome(first), ref 7)
+	expect.Equal(expect.IsSome(last), ref 9)
+	w := Walk{xs: ref xs, i: 0}
+	p := w.Next()
+	q := w.Next()
+	expect.Equal(ref (*expect.IsSome(p) + *expect.IsSome(q)), ref 15)
+}
+
+// Over walks a slice's elements, lending each, from the front or from
+// the back, and the two ends meet in the middle; Rev turns a
+// double-ended iterator round, twice is the original, and the adapters
+// follow it.
+func TestOverRev() {
+	xs := []int{1, 2, 3, 4}
+	expect.Equal(ref fmt.Sprint(iter.Over(ref xs).Collect()), "[1 2 3 4]")
+	expect.Equal(ref fmt.Sprint(iter.Over(ref xs).Rev().Collect()), "[4 3 2 1]")
+	expect.Equal(ref fmt.Sprint(iter.Over(ref xs).Rev().Rev().Collect()), "[1 2 3 4]")
+	expect.Equal(ref fmt.Sprint(iter.Over(ref xs).Rev().Map(lentSquare).Filter(isEven).Collect()), "[16 4]")
+	expect.Equal(ref iter.Over(ref xs).Rev().Skip(1).Count(), ref 3)
+	it := iter.Over(ref xs)
+	expect.Equal(expect.IsSome(it.Next()), ref 1)
+	expect.Equal(expect.IsSome(it.NextBack()), ref 4)
+	expect.Equal(expect.IsSome(it.NextBack()), ref 3)
+	expect.Equal(expect.IsSome(it.Next()), ref 2)
+	expect.IsNone(it.Next())
+	expect.IsNone(it.NextBack())
+	empty := []int{}
+	expect.IsNone(iter.Over(ref empty).Rev().Next())
+	d := numbers()
+	expect.Equal(ref fmt.Sprint(d.Iter().Rev().Take(3).Collect()), "[9 8 7]")
+	back := d.Iter()
+	expect.Equal(expect.IsSome(back.NextBack()), ref 9)
+	expect.Equal(ref back.Count(), ref 9) // the front walks up to the back
+	got := []int{}
+	for x := range iter.Over(ref xs).Rev() {
+		got.Push(*x)
+	}
+
+	expect.Equal(ref fmt.Sprint(got), "[4 3 2 1]")
+	xs.Push(5) // the slice is free once its iterators are done
+	expect.Equal(ref len(xs), ref 5)
+}
+
+func less(a ref int, b ref int) Ordering { return a.Cmp(b) }
+
+func below(limit int) func(ref int) bool {
+	return func(x ref int) bool { return *x < limit }
+}
+
+// A Walk lends a slice's elements, as a program writes an iterator over
+// what it borrows.
+struct Walk impl iter.Iterator<ref int> {
+	xs ref []int
+	i  int
+}
+
+func (w mut Walk) Next() ref int? {
+	if w.i >= len(w.xs) {
+		return None
+	}
+
+	w.i++
+	return Some(ref w.xs[w.i-1])
+}
+
+// A Count gives 0, 1, ... up to end, owning what it gives.
+struct Count impl iter.Iterator<int> {
+	next int
+	end  int
+}
+
+func (c mut Count) Next() int? {
+	if c.next >= c.end {
+		return None
+	}
+
+	c.next++
+	return Some(c.next - 1)
+}
+
+func upTo(end int) Count { return Count{next: 0, end: end} }
+
+func isEven(x ref int) bool { return *x % 2 == 0 }
+
+func square(x int) int { return x * x }
+
+func lentSquare(x ref int) int { return *x * *x }
+
+func add(total int, x int) int { return total + x }
+
+func addLent(total int, x ref int) int { return total + *x }
+
+func numbers() deque.Deque<int> {
+	d := deque.New<int>()
+	for i := 0; i < 10; i++ {
+		d.PushBack(i)
+	}
+
+	return d
 }

@@ -51,6 +51,18 @@ func fold[T, A any](seq iter.Seq[T], init A, f func(A, T) A) A {
 	return acc
 }
 
+// backward gives the elements of xs from the last to the first, as
+// slices.Backward does without the index.
+func backward(xs []int) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for _, x := range slices.Backward(xs) {
+			if !yield(x) {
+				return
+			}
+		}
+	}
+}
+
 // count gives the numbers from 0 up to end.
 func count(end int) iter.Seq[int] {
 	return func(yield func(int) bool) {
@@ -74,6 +86,9 @@ func main() {
 		xs = append(xs, i)
 	}
 
+	// A round discarded, so that the first section timed does not pay for
+	// the cold cache and the clock's ramp.
+	warm := fold(mapped(filter(slices.Values(xs), even), square), 0, add)
 	chain := 0
 	start := time.Now()
 	for r := 0; r < rounds; r++ {
@@ -92,6 +107,13 @@ func main() {
 	}
 
 	loopTime := time.Since(start)
+	rev := 0
+	start = time.Now()
+	for r := 0; r < rounds; r++ {
+		rev += fold(mapped(filter(backward(xs), even), square), 0, add)
+	}
+
+	revTime := time.Since(start)
 	counted := 0
 	start = time.Now()
 	for r := 0; r < rounds; r++ {
@@ -112,6 +134,6 @@ func main() {
 
 	plainTime := time.Since(start)
 	n := int64(items * rounds)
-	fmt.Println(chain, loop, counted, plain)
-	fmt.Println("slice chain", chainTime.Nanoseconds()*tenthsPerNanosecond/n, "slice loop", loopTime.Nanoseconds()*tenthsPerNanosecond/n, "count chain", countedTime.Nanoseconds()*tenthsPerNanosecond/n, "count loop", plainTime.Nanoseconds()*tenthsPerNanosecond/n)
+	fmt.Println(warm, chain, loop, rev, counted, plain)
+	fmt.Println("slice chain", chainTime.Nanoseconds()*tenthsPerNanosecond/n, "slice loop", loopTime.Nanoseconds()*tenthsPerNanosecond/n, "rev chain", revTime.Nanoseconds()*tenthsPerNanosecond/n, "count chain", countedTime.Nanoseconds()*tenthsPerNanosecond/n, "count loop", plainTime.Nanoseconds()*tenthsPerNanosecond/n)
 }

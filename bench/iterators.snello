@@ -4,9 +4,10 @@
 
 // Iterator adapters: the sum of the squares of the even numbers among
 // a million, twenty times over, through iter's Filter, Map and Fold
-// over a deque's iterator and over an iterator that counts, and through
-// the loops written by hand that do the same; it prints the sums, then
-// the cost of an item of each, in tenths of a nanosecond.
+// over a slice's iterator, the same slice walked from the back by Rev,
+// a deque's iterator and an iterator that counts, and through the loops
+// written by hand that do the same; it prints the sums, then the cost
+// of an item of each, in tenths of a nanosecond.
 
 package main
 
@@ -38,8 +39,6 @@ func (c mut Count) Next() int? {
 	return Some(c.next - 1)
 }
 
-func lentEven(x ref int) bool { return *x % 2 == 0 }
-
 func lentSquare(x ref int) int { return *x * *x }
 
 func even(x ref int) bool { return *x % 2 == 0 }
@@ -48,7 +47,52 @@ func square(x int) int { return x * x }
 
 func add(total int, x int) int { return total + x }
 
+// overSlice times the chains and the loop over a slice of the items,
+// and returns their totals and times; the slice is dropped as it
+// returns.
+func overSlice() (int, int, int, int, time.Duration, time.Duration, time.Duration) {
+	xs := make([]int, 0, items) // the room reserved, as the Go program reserves it
+	for i := 0; i < items; i++ {
+		xs.Push(i)
+	}
+
+	// A round discarded, so that the first section timed does not pay for
+	// the cold cache and the clock's ramp, as the suite discards each
+	// program's first run.
+	warm := iter.Over(ref xs).Filter(even).Map(lentSquare).Fold(0, add)
+	sliceChain := 0
+	start := time.Now()
+	for r := 0; r < rounds; r++ {
+		sliceChain += iter.Over(ref xs).Filter(even).Map(lentSquare).Fold(0, add)
+	}
+
+	sliceChainTime := time.Since(start)
+	sliceLoop := 0
+	start = time.Now()
+	for r := 0; r < rounds; r++ {
+		for _, x := range ref xs {
+			if *x % 2 == 0 {
+				sliceLoop += *x * *x
+			}
+		}
+	}
+
+	sliceLoopTime := time.Since(start)
+	rev := 0
+	start = time.Now()
+	for r := 0; r < rounds; r++ {
+		rev += iter.Over(ref xs).Rev().Filter(even).Map(lentSquare).Fold(0, add)
+	}
+
+	revTime := time.Since(start)
+	return (warm, sliceChain, sliceLoop, rev, sliceChainTime, sliceLoopTime, revTime)
+}
+
 func main() {
+	// The slice's rows first, and the slice dropped before the deque is
+	// built, so that the program holds one collection at a time, as the
+	// Go program holds its slice alone, and the peaks compare.
+	warm, sliceChain, sliceLoop, rev, sliceChainTime, sliceLoopTime, revTime := overSlice()
 	d := deque.New<int>()
 	for i := 0; i < items; i++ {
 		d.PushBack(i)
@@ -57,7 +101,7 @@ func main() {
 	chain := 0
 	start := time.Now()
 	for r := 0; r < rounds; r++ {
-		chain += d.Iter().Filter(lentEven).Map(lentSquare).Fold(0, add)
+		chain += d.Iter().Filter(even).Map(lentSquare).Fold(0, add)
 	}
 
 	chainTime := time.Since(start)
@@ -92,6 +136,10 @@ func main() {
 
 	plainTime := time.Since(start)
 	n := i64(items * rounds)
-	fmt.Println(chain, loop, counted, plain)
-	fmt.Println("deque chain", chainTime.Nanoseconds() * tenthsPerNanosecond / n, "deque loop", loopTime.Nanoseconds() * tenthsPerNanosecond / n, "count chain", countedTime.Nanoseconds() * tenthsPerNanosecond / n, "count loop", plainTime.Nanoseconds() * tenthsPerNanosecond / n)
+	if chain != sliceChain || loop != sliceLoop {
+		fmt.Println("the deque's totals differ from the slice's", chain, loop)
+	}
+
+	fmt.Println(warm, sliceChain, sliceLoop, rev, counted, plain) // the totals the Go program prints, held equal by the suite
+	fmt.Println("slice chain", sliceChainTime.Nanoseconds() * tenthsPerNanosecond / n, "slice loop", sliceLoopTime.Nanoseconds() * tenthsPerNanosecond / n, "rev chain", revTime.Nanoseconds() * tenthsPerNanosecond / n, "deque chain", chainTime.Nanoseconds() * tenthsPerNanosecond / n, "deque loop", loopTime.Nanoseconds() * tenthsPerNanosecond / n, "count chain", countedTime.Nanoseconds() * tenthsPerNanosecond / n, "count loop", plainTime.Nanoseconds() * tenthsPerNanosecond / n)
 }
