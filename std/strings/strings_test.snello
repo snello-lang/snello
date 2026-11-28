@@ -4,7 +4,7 @@
 
 package strings_test
 
-import ("bufio"; "expect"; "io"; "strings"; "testing"; "unicode/utf8")
+import ("bufio"; "expect"; "fmt"; "io"; "strings"; "testing"; "unicode/utf8")
 
 // Repeat writes a string n times, and refuses a negative count and one
 // whose result no int can measure.
@@ -327,4 +327,30 @@ func TestReaderReadAt() {
 	expect.Equal(ref expect.IsOk(r.ReadAt(mut buf, 18446744073709551615)), ref 0)
 	expect.Equal(ref r.Len(), ref 12) // nothing read from the position
 	expect.Equal(ref expect.IsSome(r.ReadByte()), ref byte('h'))
+}
+
+// A Builder is an io.Writer: fmt.Fprintf writes into it, io.WriteString
+// and io.Copy fill it, each byte appended once.
+func TestBuilderWriter() {
+	var b strings.Builder
+	fmt.Fprintf(mut b, "%d-%s", 7, "x")
+	expect.Equal(ref expect.IsOk(io.WriteString(mut b, "|y")), ref 2)
+	src := strings.NewReader("|z".Clone())
+	expect.Equal(ref expect.IsOk(io.Copy(mut b, mut src)), ref i64(2))
+	expect.Equal(ref expect.IsOk(b.Write(ref []byte{})), ref 0)
+	expect.Equal(ref b.String(), "7-x|y|z")
+	expect.Equal(ref b.Len(), ref 7)
+}
+
+// BenchmarkFprintf measures a short format written into a Builder as an
+// io.Writer.
+func BenchmarkFprintf() {
+	var b strings.Builder
+	for testing.Loop() {
+		if b.Len() > 1<<20 {
+			b.Reset()
+		}
+
+		fmt.Fprintf(mut b, "%d:%s;", 7, "v")
+	}
 }

@@ -448,7 +448,6 @@ int64_t sn_bufio_copyString(sn_slice_u8 *dst, sn_string s);
 int64_t sn_bufio_indexByte(sn_slice_u8 p, uint8_t c);
 void sn_bufio_appendBytes(sn_slice_u8 *b, sn_slice_u8 p);
 void sn_bufio_slide(sn_slice_u8 *b, int64_t lo, int64_t hi);
-sn_slice_u8 sn_bufio_bytesOf(sn_string s);
 int64_t sn_bytes_copyBytes(sn_slice_u8 *dst, sn_slice_u8 src);
 int64_t sn_bytes_indexByte(sn_slice_u8 p, uint8_t c);
 void sn_bytes_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi);

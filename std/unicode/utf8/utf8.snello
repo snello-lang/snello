@@ -154,6 +154,46 @@ func RuneLen(r rune) int {
 	return 4
 }
 
+// EncodeRune writes the UTF-8 bytes of r, one to four of them, and
+// those of RuneError for a value that is not a code point, at the start
+// of p, lent mut, and returns how many it wrote: zero, writing nothing,
+// when p is shorter than the rune needs, so a buffer with less room
+// than UTFMax is asked before it is written.
+//
+//	n := utf8.EncodeRune(mut buf[at:], r)
+func EncodeRune(p mut []byte, r rune) int {
+	c := r
+	if RuneLen(r) < 0 {
+		c = RuneError
+	}
+
+	n := RuneLen(c)
+	if len(p) < n {
+		return 0
+	}
+
+	// The lead byte holds the length in its tag, 110, 1110 or 11110,
+	// and the rune's high bits; each continuation byte, tagged 10,
+	// holds six more bits.
+	if n == 1 {
+		p[0] = byte(c)
+	} else if n == 2 {
+		p[0] = byte(0xC0 | c >> 6)
+		p[1] = byte(0x80 | c & 0x3F)
+	} else if n == 3 {
+		p[0] = byte(0xE0 | c >> 12)
+		p[1] = byte(0x80 | c >> 6 & 0x3F)
+		p[2] = byte(0x80 | c & 0x3F)
+	} else {
+		p[0] = byte(0xF0 | c >> 18)
+		p[1] = byte(0x80 | c >> 12 & 0x3F)
+		p[2] = byte(0x80 | c >> 6 & 0x3F)
+		p[3] = byte(0x80 | c & 0x3F)
+	}
+
+	return n
+}
+
 // AppendRune appends the UTF-8 bytes of r to p, one to four of them,
 // and those of RuneError for a value that is not a code point. p is
 // lent mut and grows as Push grows it.

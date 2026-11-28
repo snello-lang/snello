@@ -56,8 +56,9 @@ const byteValues int = 256
 //
 // A Builder owns the bytes it holds and is passed mut to be written
 // to. Its buffer grows as a slice's does, doubling, so n bytes written
-// one piece at a time cost O(n) in all.
-struct Builder {
+// one piece at a time cost O(n) in all. It is an io.Writer, so
+// fmt.Fprintf writes into it and io.Copy fills it.
+struct Builder impl io.Writer {
 	buf []byte
 }
 
@@ -122,6 +123,14 @@ struct node {
 struct edge impl Copy {
 	c  byte
 	to int
+}
+
+// Write appends the bytes of p, which it only reads, to the builder,
+// and returns their count; it never fails, so the result is always Ok.
+// It is io.Writer's method.
+func (b mut Builder) Write(p ref []byte) Result<int, io.Error> {
+	b.buf.Extend(p)
+	return Ok(len(p))
 }
 
 // WriteString appends the bytes of s, which it only reads, to the
