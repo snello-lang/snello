@@ -305,8 +305,8 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 	return unit
 }
 
-// byteSliceMethod writes the searches, splits, trims and case a []byte
-// has from the string's, run on the bytes as a string view: a view
+// byteSliceMethod writes the searches, splits, trims, cuts and case a
+// []byte has from the string's, run on the bytes as a string view: a view
 // given back is a view of the bytes, a string made is taken as an
 // owned slice, and a slice of views has each piece marked a view.
 // false for any other method, and for a slice of any other element.
@@ -362,6 +362,32 @@ func (e *Emitter) byteSliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *typ
 		return pieces("sn_split", arg(0)), true
 	case "SplitN":
 		return pieces("sn_split_n", arg(0), e.valueTo(x.Args[1], types.Typ[types.Int])), true
+	case "SplitAfter":
+		return pieces("sn_split_after", arg(0)), true
+	case "SplitAfterN":
+		return pieces("sn_split_after_n", arg(0), e.valueTo(x.Args[1], types.Typ[types.Int])), true
+	case "ContainsAny":
+		return e.op("icmp sge i64 "+e.rt("sn_string_index_any", "i64", s, arg(0)).s+", 0", "i1"), true
+	case "IndexAny":
+		return e.someIndex(e.rt("sn_string_index_any", "i64", s, arg(0)), x), true
+	case "LastIndexAny":
+		return e.someIndex(e.rt("sn_string_last_index_any", "i64", s, arg(0)), x), true
+	case "TrimLeft":
+		return view(e.rt("sn_trim_left", "%sn_string", s, arg(0))), true
+	case "TrimRight":
+		return view(e.rt("sn_trim_right", "%sn_string", s, arg(0))), true
+	case "TrimAny":
+		return view(e.rt("sn_trim_any", "%sn_string", s, arg(0))), true
+	case "CutPrefix", "CutSuffix":
+		fn := "sn_cut_prefix"
+		if name == "CutSuffix" {
+			fn = "sn_cut_suffix"
+		}
+
+		rest := e.slot("%sn_string")
+		e.store(value{"%sn_string", "zeroinitializer"}, rest) // None carries a zero view, as the C backend's does
+		has := e.rt(fn, "i1", s, arg(0), value{"ptr", rest})
+		return e.optionOf(e.typeOf(x), has, view(e.load("%sn_string", rest)), x.Pos()), true
 	case "SplitOnce":
 		before, after := e.slot("%sn_string"), e.slot("%sn_string")
 		has := e.rt("sn_split_once", "i1", s, arg(0), value{"ptr", before}, value{"ptr", after})
@@ -1074,6 +1100,41 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 		tuple := e.insert(value{pair, "zeroinitializer"}, e.load("%sn_string", before), 0)
 		tuple = e.insert(tuple, e.load("%sn_string", after), 1)
 		return e.optionOf(e.typeOf(x), has, tuple, x.Pos())
+	case "SplitAfter", "SplitAfterN":
+		out := e.slot("%sn_slice")
+		name := "sn_split_after"
+		if sel.Sel.Name == "SplitAfterN" {
+			name = "sn_split_after_n"
+		}
+
+		e.rt(name, "void", append(append([]value{s}, args...), value{"ptr", out})...)
+		return e.load("%sn_slice", out)
+	case "ContainsAny":
+		return e.op("icmp sge i64 "+e.rt("sn_string_index_any", "i64", s, args[0]).s+", 0", "i1")
+	case "IndexAny":
+		return e.someIndex(e.rt("sn_string_index_any", "i64", s, args[0]), x)
+	case "LastIndexAny":
+		return e.someIndex(e.rt("sn_string_last_index_any", "i64", s, args[0]), x)
+	case "IndexByte":
+		return e.someIndex(e.rt("sn_string_index_byte", "i64", s, args[0]), x)
+	case "LastIndexByte":
+		return e.someIndex(e.rt("sn_string_last_index_byte", "i64", s, args[0]), x)
+	case "TrimLeft":
+		return e.rt("sn_trim_left", "%sn_string", s, args[0])
+	case "TrimRight":
+		return e.rt("sn_trim_right", "%sn_string", s, args[0])
+	case "TrimAny":
+		return e.rt("sn_trim_any", "%sn_string", s, args[0])
+	case "CutPrefix", "CutSuffix":
+		name := "sn_cut_prefix"
+		if sel.Sel.Name == "CutSuffix" {
+			name = "sn_cut_suffix"
+		}
+
+		rest := e.slot("%sn_string")
+		e.store(value{"%sn_string", "zeroinitializer"}, rest) // None carries a zero view, as the C backend's does
+		has := e.rt(name, "i1", s, args[0], value{"ptr", rest})
+		return e.optionOf(e.typeOf(x), has, e.load("%sn_string", rest), x.Pos())
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on strings")

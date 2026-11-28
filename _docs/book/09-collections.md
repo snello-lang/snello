@@ -91,9 +91,14 @@ Operations on text are methods. Most return views into the string, which cost no
 | `s.Split(sep)` | The pieces between each `sep`, likewise; an empty `sep` gives each UTF-8 sequence, and none of an empty string |
 | `s.SplitOnce(sep)` | The parts before and after the first `sep`, as `(ref string, ref string)?` |
 | `s.SplitN(sep, n)` | At most `n` pieces, the last holding the rest; zero or less gives none, since `Split` is the name for all |
+| `s.SplitAfter(sep)`, `s.SplitAfterN(sep, n)` | The same cuts made after each `sep`, so each piece but the last keeps it and the pieces join back to `s` |
 | `s.TrimSpace()` | The same as `Trim`, under Go's name |
 | `s.TrimPrefix(p)`, `s.TrimSuffix(p)` | `s` without `p` at its start or end, as a borrow; `s` itself when `p` is not there |
+| `s.CutPrefix(p)`, `s.CutSuffix(p)` | The rest after `p` at the start, or before `p` at the end, as `ref string?`: `None` when `p` is not there, so `if rest := line.CutPrefix("--") { ... }` says whether it cut |
+| `s.TrimLeft(cutset)`, `s.TrimRight(cutset)`, `s.TrimAny(cutset)` | `s` without the runes of `cutset` at its start, its end, or both, as a borrow: `line.TrimAny(" -")` strips spaces and dashes from both ends |
 | `s.Index(t)`, `s.LastIndex(t)` | The offset of the first or last `t`, as `int?`: `None` when it is not there |
+| `s.IndexAny(chars)`, `s.LastIndexAny(chars)`, `s.ContainsAny(chars)` | The offset of the first or last rune that is one of the runes of `chars`, as `int?`, and whether there is one: `line.IndexAny(":=")` finds the first of either |
+| `s.IndexByte(c)`, `s.LastIndexByte(c)` | The offset of the first or last byte `c`, as `int?` |
 | `s.Count(t)` | How many times `t` occurs without overlapping; an empty `t` counts the runes plus one |
 | `s.Replace(old, new, n)`, `s.ReplaceAll(old, new)` | A new, owned string with the first `n`, or every, `old` replaced; `n` of zero or less replaces none |
 | `s.HasPrefix(t)`, `s.HasSuffix(t)`, `s.Contains(t)` | Whether `t` begins, ends or appears in `s` |

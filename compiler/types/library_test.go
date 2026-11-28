@@ -46,6 +46,16 @@ func TestByteSliceMethods(t *testing.T) {
 		{"Split", "func(ref []u8) []ref []u8"},
 		{"SplitN", "func(ref []u8, int) []ref []u8"},
 		{"SplitOnce", "func(ref []u8) (ref []u8, ref []u8)?"},
+		{"SplitAfter", "func(ref []u8) []ref []u8"},
+		{"SplitAfterN", "func(ref []u8, int) []ref []u8"},
+		{"ContainsAny", "func(ref []u8) bool"},
+		{"IndexAny", "func(ref []u8) int?"},
+		{"LastIndexAny", "func(ref []u8) int?"},
+		{"TrimLeft", "func(ref []u8) ref []u8"},
+		{"TrimRight", "func(ref []u8) ref []u8"},
+		{"TrimAny", "func(ref []u8) ref []u8"},
+		{"CutPrefix", "func(ref []u8) (ref []u8)?"},
+		{"CutSuffix", "func(ref []u8) (ref []u8)?"},
 	}
 	for _, tt := range tests {
 		sig := builtinMethod(bytes, tt.name)
@@ -69,5 +79,45 @@ func TestByteSliceMethods(t *testing.T) {
 
 	if sig := builtinMethod(NewSlice(Typ[Int]), "Trim"); sig != nil {
 		t.Errorf("[]int has Trim: %s", sig)
+	}
+
+	if sig := builtinMethod(bytes, "IndexByte"); sig != nil {
+		t.Errorf("[]byte has IndexByte, which Index is: %s", sig)
+	}
+}
+
+// TestStringTextMethods holds the signatures of the string's searches
+// for any of a set of runes and for a byte, its splits keeping the
+// separator, its trims with a cutset and its cuts, which give the rest
+// as an option of a borrow.
+func TestStringTextMethods(t *testing.T) {
+	tests := []struct{ name, want string }{
+		{"ContainsAny", "func(ref string) bool"},
+		{"IndexAny", "func(ref string) int?"},
+		{"LastIndexAny", "func(ref string) int?"},
+		{"IndexByte", "func(byte) int?"},
+		{"LastIndexByte", "func(byte) int?"},
+		{"SplitAfter", "func(ref string) []ref string"},
+		{"SplitAfterN", "func(ref string, int) []ref string"},
+		{"TrimLeft", "func(ref string) ref string"},
+		{"TrimRight", "func(ref string) ref string"},
+		{"TrimAny", "func(ref string) ref string"},
+		{"CutPrefix", "func(ref string) ref string?"},
+		{"CutSuffix", "func(ref string) ref string?"},
+	}
+	for _, tt := range tests {
+		sig := builtinMethod(Typ[String], tt.name)
+		if sig == nil {
+			t.Errorf("string has no method %s", tt.name)
+			continue
+		}
+
+		if got := sig.String(); got != tt.want {
+			t.Errorf("%s is %s, want %s", tt.name, got, tt.want)
+		}
+
+		if r, ok := sig.Recv().Type().(*Ref); !ok || r.Mut() {
+			t.Errorf("%s takes %s, want a ref of the string", tt.name, sig.Recv().Type())
+		}
 	}
 }

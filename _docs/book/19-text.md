@@ -147,6 +147,18 @@ fmt.Println(strings.EqualIgnoreCase("Straße", "STRASSE"), strings.EqualIgnoreCa
 
 `strings.IndexRune(s, r)` gives the byte offset of the first `r`, or -1, and `ContainsRune` says whether there is one. The functions that take a predicate on runes, `func(rune) bool`, work with any of `unicode`'s: `IndexFunc` and `LastIndexFunc` find the first and last rune for which it holds; `TrimFunc`, `TrimLeftFunc` and `TrimRightFunc` lend the string without such runes at its ends; `FieldsFunc` splits around runs of them, each piece a borrow into the string. `strings.Map(f, s)` gives a new string of each rune passed through `f`, dropping a rune for which `f` returns a negative value.
 
+A set of runes written as a string serves the same searches without a function: `s.IndexAny(":=")` and `s.LastIndexAny(chars)` give the offset of the first or last rune that is one of them, as `int?`, and `s.ContainsAny(chars)` says whether there is one; `s.TrimLeft(cutset)`, `s.TrimRight(cutset)` and `s.TrimAny(cutset)` lend the string without such runes at its start, its end, or both, where `s.Trim()` with no set is white space. The set is read as UTF-8, so `"naïve".IndexAny("éï")` is `Some(2)`, and a byte that is not UTF-8 is found by `utf8.RuneError` in the set, as a range over the string reads it. `strings.ContainsFunc(s, f)` is `IndexFunc` as a question.
+
+Several replacements made in one pass are a `strings.Replacer`, built once from pairs of old and new strings and kept: at each position the first pair, in the order given, whose old string starts there replaces it, and the pass moves past the match, so matches never overlap and a new string is never looked at again. `NewReplacer` copies its pairs and returns `None` for an odd count.
+
+```go
+esc := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;") ?? return
+fmt.Println(esc.Replace("a < b & c"))
+// a &lt; b &amp; c
+```
+
+The pairs choose the pass: every old and new string one byte, a table over a copy of the text; otherwise the text is skipped to the next byte one of the old strings starts with, a word at a time, the run before it copied whole, and the match answered by a table when every old string is one byte and by a trie of them when not. An empty old string matches before every rune and at the end, as `ReplaceAll` places it; a pair given before it takes a position alone, and one given after it still matches there, after the empty string's new text.
+
 ## Text in a `[]byte`
 
 A parser often has bytes it has not made a string of, read from a file or a socket, and the string's text methods are methods of `[]byte` too, each by the same algorithm over the bytes read as UTF-8: `Find` and `FindLast` give the offset of a run of bytes as `int?`, `Count`, `HasPrefix` and `HasSuffix` ask, `Trim`, `TrimSpace`, `TrimPrefix` and `TrimSuffix` lend a view of the slice, `ToUpper` and `ToLower` make a new slice, and `Fields`, `Lines`, `Split`, `SplitN` and `SplitOnce` lend views, so a parser cuts its input up with no string between.

@@ -134,10 +134,11 @@ func sliceMethod(t *Slice, name string) *Signature {
 }
 
 // byteSliceMethod: what a []byte has beside every slice's methods, the
-// comparison, and the searches, splits, trims and case a string has
-// for text, each by the string's algorithm over the bytes; Index and
-// Contains stay the slice's, of one byte, and Find and FindLast find a
-// run.
+// comparison, and the searches, splits, trims, cuts and case a string
+// has for text, each by the string's algorithm over the bytes; Index
+// and Contains stay the slice's, of one byte, Find and FindLast find a
+// run, and IndexByte and LastIndexByte have no twin, since Index is the
+// one and FindLast of one byte the other.
 func byteSliceMethod(t *Slice, name string) *Signature {
 	switch name {
 	case "Equal":
@@ -162,6 +163,18 @@ func byteSliceMethod(t *Slice, name string) *Signature {
 		return reads([]*Var{param("sep", ref(t)), param("n", Typ[Int])}, NewSlice(ref(t)))
 	case "SplitOnce":
 		return reads([]*Var{param("sep", ref(t))}, NewOption(NewTuple(ref(t), ref(t))))
+	case "SplitAfter":
+		return reads([]*Var{param("sep", ref(t))}, NewSlice(ref(t)))
+	case "SplitAfterN":
+		return reads([]*Var{param("sep", ref(t)), param("n", Typ[Int])}, NewSlice(ref(t)))
+	case "ContainsAny":
+		return reads([]*Var{param("chars", ref(t))}, Typ[Bool])
+	case "IndexAny", "LastIndexAny":
+		return reads([]*Var{param("chars", ref(t))}, NewOption(Typ[Int]))
+	case "TrimLeft", "TrimRight", "TrimAny":
+		return reads([]*Var{param("cutset", ref(t))}, ref(t))
+	case "CutPrefix", "CutSuffix":
+		return reads([]*Var{param("p", ref(t))}, NewOption(ref(t)))
 	}
 
 	return nil
@@ -288,6 +301,20 @@ func stringMethod(name string) *Signature {
 		return reads([]*Var{param("old", ref(s)), param("new", ref(s))}, s)
 	case "SplitN":
 		return reads([]*Var{param("sep", ref(s)), param("n", Typ[Int])}, NewSlice(ref(s)))
+	case "SplitAfter":
+		return reads([]*Var{param("sep", ref(s))}, NewSlice(ref(s)))
+	case "SplitAfterN":
+		return reads([]*Var{param("sep", ref(s)), param("n", Typ[Int])}, NewSlice(ref(s)))
+	case "ContainsAny":
+		return reads([]*Var{param("chars", ref(s))}, Typ[Bool])
+	case "IndexAny", "LastIndexAny":
+		return reads([]*Var{param("chars", ref(s))}, NewOption(Typ[Int]))
+	case "IndexByte", "LastIndexByte":
+		return reads([]*Var{param("c", aliases[0])}, NewOption(Typ[Int]))
+	case "TrimLeft", "TrimRight", "TrimAny":
+		return reads([]*Var{param("cutset", ref(s))}, ref(s))
+	case "CutPrefix", "CutSuffix":
+		return reads([]*Var{param("p", ref(s))}, NewOption(ref(s)))
 	}
 
 	return nil

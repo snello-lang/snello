@@ -8,3 +8,9 @@ x-42
 true true true true false false
 1 3 1 3
 0 0 0 0
+Some(3) Some(10) None true false Some(4) Some(11) None
+Some(2) Some(10) Some(1)
+"a," "b," "c" 2 b,c 3 1 0
+x--   |   --x | x | true quoted abc
+Some("flag") None Some("file") Some("x") Some("")
+4 flag

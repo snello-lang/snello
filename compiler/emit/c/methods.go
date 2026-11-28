@@ -231,8 +231,8 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 	return "0"
 }
 
-// byteSliceMethod writes the searches, splits, trims and case a []byte
-// has from the string's, run on the bytes as a string view: a view
+// byteSliceMethod writes the searches, splits, trims, cuts and case a
+// []byte has from the string's, run on the bytes as a string view: a view
 // given back is a view of the bytes, a string made is taken as an
 // owned slice, and a slice of views has each piece marked a view by a
 // second call in the same expression, the two joined by a comma. ""
@@ -280,6 +280,41 @@ func (e *Emitter) byteSliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *typ
 		return pieces("sn_split", arg(0))
 	case "SplitN":
 		return pieces("sn_split_n", arg(0), e.valueTo(x.Args[1], types.Typ[types.Int]))
+	case "SplitAfter":
+		return pieces("sn_split_after", arg(0))
+	case "SplitAfterN":
+		return pieces("sn_split_after_n", arg(0), e.valueTo(x.Args[1], types.Typ[types.Int]))
+	case "ContainsAny":
+		return "(sn_string_index_any(" + s + ", " + arg(0) + ") >= 0)"
+	case "IndexAny", "LastIndexAny":
+		fn := "sn_string_index_any"
+		if name == "LastIndexAny" {
+			fn = "sn_string_last_index_any"
+		}
+
+		at := e.temp()
+		e.line("int64_t " + at + " = " + fn + "(" + s + ", " + arg(0) + ");")
+		return e.someIndex(at, x)
+	case "TrimLeft":
+		return "sn_bytes_view(sn_trim_left(" + s + ", " + arg(0) + "))"
+	case "TrimRight":
+		return "sn_bytes_view(sn_trim_right(" + s + ", " + arg(0) + "))"
+	case "TrimAny":
+		return "sn_bytes_view(sn_trim_any(" + s + ", " + arg(0) + "))"
+	case "CutPrefix", "CutSuffix":
+		fn := "sn_cut_prefix"
+		if name == "CutSuffix" {
+			fn = "sn_cut_suffix"
+		}
+
+		out, rest := e.temp(), e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
+		e.line("sn_string " + rest + ";")
+		e.line("if (" + fn + "(" + s + ", " + arg(0) + ", &" + rest + ")) {")
+		e.line(out + ".has = true;")
+		e.line(out + ".val = sn_bytes_view(" + rest + ");")
+		e.line("}")
+		return out
 	case "SplitOnce":
 		out, before, after := e.temp(), e.temp(), e.temp()
 		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
@@ -670,6 +705,44 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 		return "sn_string_replace(" + s + ", " + args[0] + ", " + args[1] + ", INT64_MAX)"
 	case "SplitN":
 		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_split_n(" + s + ", " + args[0] + ", " + args[1] + ", " + out + ")" })
+	case "SplitAfter":
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_split_after(" + s + ", " + args[0] + ", " + out + ")" })
+	case "SplitAfterN":
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string {
+			return "sn_split_after_n(" + s + ", " + args[0] + ", " + args[1] + ", " + out + ")"
+		})
+	case "ContainsAny":
+		return "(sn_string_index_any(" + s + ", " + args[0] + ") >= 0)"
+	case "IndexAny", "LastIndexAny", "IndexByte", "LastIndexByte":
+		fn := "sn_string_index_any"
+		switch sel.Sel.Name {
+		case "LastIndexAny":
+			fn = "sn_string_last_index_any"
+		case "IndexByte":
+			fn = "sn_string_index_byte"
+		case "LastIndexByte":
+			fn = "sn_string_last_index_byte"
+		}
+
+		at := e.temp()
+		e.line("int64_t " + at + " = " + fn + "(" + s + ", " + args[0] + ");")
+		return e.someIndex(at, x)
+	case "TrimLeft":
+		return "sn_trim_left(" + s + ", " + args[0] + ")"
+	case "TrimRight":
+		return "sn_trim_right(" + s + ", " + args[0] + ")"
+	case "TrimAny":
+		return "sn_trim_any(" + s + ", " + args[0] + ")"
+	case "CutPrefix", "CutSuffix":
+		fn := "sn_cut_prefix"
+		if sel.Sel.Name == "CutSuffix" {
+			fn = "sn_cut_suffix"
+		}
+
+		out := e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
+		e.line(out + ".has = " + fn + "(" + s + ", " + args[0] + ", &" + out + ".val);")
+		return out
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on strings")

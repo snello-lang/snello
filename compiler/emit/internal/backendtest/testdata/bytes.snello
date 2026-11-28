@@ -40,4 +40,18 @@ func main() {
 	fmt.Println(string(text.ToUpper()), string(text.ToLower()), len(text.Fields()))
 	empty := []byte{}
 	fmt.Println(len(empty.Fields()), len(empty.Lines()), len(empty.Trim()), empty.Find([]byte("")), empty.HasPrefix([]byte("")))
+
+	// The twins of the string's any-searches, split-afters, cutset trims
+	// and cuts, each a view or a slice of views.
+	kv := []byte("key: value; more")
+	fmt.Println(kv.IndexAny([]byte(":=")), kv.LastIndexAny([]byte(";:")), kv.IndexAny([]byte("qz")), kv.ContainsAny([]byte("; ")), kv.ContainsAny([]byte("")))
+	after := kv.SplitAfter([]byte(" "))
+	fmt.Println(len(after), string(after[0]), string(after[2]), len(kv.SplitAfterN([]byte(" "), 2)), string(kv.SplitAfterN([]byte(" "), 2)[1]))
+	dashed := []byte("  --x--  ")
+	fmt.Println(string(dashed.TrimLeft([]byte(" -"))), "|", string(dashed.TrimRight([]byte(" -"))), "|", string(dashed.TrimAny([]byte(" -"))), len(dashed.TrimAny([]byte(" -x"))))
+	if rest := []byte("--flag").CutPrefix([]byte("--")) {
+		fmt.Println(len(rest), string(rest), string(rest[1:]))
+	}
+
+	fmt.Println([]byte("--flag").CutPrefix([]byte("++")).IsNone(), []byte("file.snello").CutSuffix([]byte(".snello")).IsSome(), []byte("x").CutSuffix([]byte("")).IsSome())
 }
