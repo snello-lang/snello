@@ -703,18 +703,48 @@ bool sn_string_contains(sn_string s, sn_string t) { return find(s, t) >= 0; }
 
 int64_t sn_string_index(sn_string s, sn_string t) { return find(s, t); }
 
+// marked returns a bit at the top of every byte of w equal to the byte
+// pattern repeats, and no other: the exact form, since a borrow from a
+// lower byte would mark a byte above a true one falsely.
+static inline uint64_t marked(uint64_t w, uint64_t pattern) {
+    const uint64_t hi = 0x8080808080808080u, seven = 0x7f7f7f7f7f7f7f7fu;
+    uint64_t z = w ^ pattern;
+    return ~(((z & seven) + seven) | z | seven) & hi;
+}
+
+// next_byte returns where the first byte c at or after p before end is,
+// or end: the words of eight bytes marked at their c, the lowest mark's
+// byte, as memchr finds it but with no call, for the cuts of a text at
+// one byte a few dozen bytes apart.
+static inline const uint8_t *next_byte(const uint8_t *p, const uint8_t *end, uint64_t pattern, uint8_t c) {
+    for (; end - p >= 8; p += 8) {
+        uint64_t w;
+        memcpy(&w, p, 8);
+        uint64_t marks = marked(w, pattern);
+        if (marks != 0) {
+            return p + __builtin_ctzll(marks) / 8;
+        }
+    }
+
+    for (; p < end; p++) {
+        if (*p == c) {
+            break;
+        }
+    }
+
+    return p;
+}
+
 // last_byte returns the offset of the last c in p, or -1: the memrchr
 // glibc has and the other C libraries lack, eight bytes at a time from
 // the end, the highest matching byte of a word picked out of it.
 static int64_t last_byte(const uint8_t *p, int64_t n, uint8_t c) {
-    const uint64_t lo = 0x0101010101010101u, hi = 0x8080808080808080u, seven = 0x7f7f7f7f7f7f7f7fu;
-    uint64_t pattern = lo * c;
+    uint64_t pattern = 0x0101010101010101u * c;
     int64_t i = n;
     for (; i >= 8; i -= 8) {
         uint64_t w;
         memcpy(&w, p + i - 8, 8);
-        uint64_t z = w ^ pattern;
-        uint64_t zero = ~(((z & seven) + seven) | z | seven) & hi; // exact: no byte above a zero one is marked
+        uint64_t zero = marked(w, pattern);
         if (zero != 0) {
             return i - 8 + (63 - __builtin_clzll(zero)) / 8;
         }
@@ -845,6 +875,123 @@ static int64_t count_upto(sn_string s, sn_string t, int64_t limit) {
     return n;
 }
 
+// A rune set is what the any-family and the cutset trims look runes up
+// in: the runes of a string, with the ASCII ones in a bitmap of 256
+// bits, so that a byte below 0x80 is answered by one load and one
+// test, and a string of ASCII alone never decodes a rune.
+typedef struct {
+    uint64_t ascii[4];
+    sn_string chars;
+    bool only_ascii;
+} rune_set;
+
+static rune_set rune_set_of(sn_string chars) {
+    rune_set set = { { 0, 0, 0, 0 }, chars, true };
+    for (int64_t i = 0; i < chars.len; i++) {
+        uint8_t c = chars.ptr[i];
+        if (c >= 0x80) {
+            set.only_ascii = false;
+        } else {
+            set.ascii[c >> 6] |= (uint64_t)1 << (c & 63);
+        }
+    }
+
+    return set;
+}
+
+// rune_set_has reports whether r is in the set: the bitmap for an ASCII
+// rune, and a walk of the runes of chars otherwise, a byte that is no
+// UTF-8 sequence read as U+FFFD on both sides, so that searching for
+// U+FFFD finds such a byte, as a range over the string reads it.
+static inline bool rune_set_has(const rune_set *set, int32_t r) {
+    if (r < 0x80) {
+        return (set->ascii[r >> 6] >> (r & 63)) & 1;
+    }
+
+    if (set->only_ascii) {
+        return false;
+    }
+
+    for (int64_t i = 0; i < set->chars.len;) {
+        int32_t c;
+        i += sn_utf8_decode(set->chars.ptr + i, set->chars.len - i, &c);
+        if (c == r) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// rune_at reads the rune at p, n bytes left, into r and returns its
+// width: one byte for ASCII without a call.
+static inline int rune_at(const uint8_t *p, int64_t n, int32_t *r) {
+    if (p[0] < 0x80) {
+        *r = p[0];
+        return 1;
+    }
+
+    return sn_utf8_decode(p, n, r);
+}
+
+// sn_string_index_any returns the offset of the first rune of s that is
+// one of the runes of chars, or -1; an empty chars finds nothing.
+int64_t sn_string_index_any(sn_string s, sn_string chars) {
+    sn_check_string(s);
+    sn_check_string(chars);
+    if (chars.len == 0) {
+        return -1;
+    }
+
+    rune_set set = rune_set_of(chars);
+    for (int64_t i = 0; i < s.len;) {
+        int32_t r;
+        int w = rune_at(s.ptr + i, s.len - i, &r);
+        if (rune_set_has(&set, r)) {
+            return i;
+        }
+
+        i += w;
+    }
+
+    return -1;
+}
+
+// sn_string_last_index_any returns the offset of the last rune of s
+// that is one of the runes of chars, or -1.
+int64_t sn_string_last_index_any(sn_string s, sn_string chars) {
+    sn_check_string(s);
+    sn_check_string(chars);
+    if (chars.len == 0) {
+        return -1;
+    }
+
+    rune_set set = rune_set_of(chars);
+    for (int64_t end = s.len; end > 0;) {
+        int32_t r;
+        int w = decode_last(s.ptr, end, &r);
+        end -= w;
+        if (rune_set_has(&set, r)) {
+            return end;
+        }
+    }
+
+    return -1;
+}
+
+// sn_string_index_byte and sn_string_last_index_byte return the offset
+// of the first or last byte c in s, or -1: memchr and the runtime's own
+// memrchr.
+int64_t sn_string_index_byte(sn_string s, int64_t c) {
+    sn_check_string(s);
+    return sn_slice_index_byte(s.ptr, s.len, (uint8_t)c);
+}
+
+int64_t sn_string_last_index_byte(sn_string s, int64_t c) {
+    sn_check_string(s);
+    return last_byte(s.ptr, s.len, (uint8_t)c);
+}
+
 // sn_string_count returns the occurrences of t in s that do not
 // overlap; an empty t counts the places between the runes, their
 // number plus one.
@@ -913,11 +1060,73 @@ sn_string sn_trim_prefix(sn_string s, sn_string p) {
 
 sn_string sn_trim_suffix(sn_string s, sn_string p) { return sn_has_suffix(s, p) ? SN_STR(s.ptr, s.len - p.len) : s; }
 
-// sn_split_n splits s at sep into at most n views of s, the last
-// holding the rest, as sn_split splits it; n of zero or less gives
-// none. The cuts are found once to count the pieces, so the result is
-// made at its length.
-void sn_split_n(sn_string s, sn_string sep, int64_t n, sn_slice *out) {
+// sn_trim_left lends s without the runes at its start that are in
+// cutset, sn_trim_right without those at its end, and sn_trim_any
+// without both; an empty cutset trims nothing.
+sn_string sn_trim_left(sn_string s, sn_string cutset) {
+    sn_check_string(s);
+    sn_check_string(cutset);
+    rune_set set = rune_set_of(cutset);
+    int64_t lo = 0;
+    while (lo < s.len) {
+        int32_t r;
+        int w = rune_at(s.ptr + lo, s.len - lo, &r);
+        if (!rune_set_has(&set, r)) {
+            break;
+        }
+
+        lo += w;
+    }
+
+    return SN_STR(s.ptr + lo, s.len - lo);
+}
+
+sn_string sn_trim_right(sn_string s, sn_string cutset) {
+    sn_check_string(s);
+    sn_check_string(cutset);
+    rune_set set = rune_set_of(cutset);
+    int64_t hi = s.len;
+    while (hi > 0) {
+        int32_t r;
+        int w = decode_last(s.ptr, hi, &r);
+        if (!rune_set_has(&set, r)) {
+            break;
+        }
+
+        hi -= w;
+    }
+
+    return SN_STR(s.ptr, hi);
+}
+
+sn_string sn_trim_any(sn_string s, sn_string cutset) { return sn_trim_right(sn_trim_left(s, cutset), cutset); }
+
+// sn_cut_prefix writes into rest what follows p at the start of s and
+// returns true, or returns false with rest untouched when s does not
+// start with p; sn_cut_suffix the same for p at the end.
+bool sn_cut_prefix(sn_string s, sn_string p, sn_string *rest) {
+    if (!sn_has_prefix(s, p)) {
+        return false;
+    }
+
+    *rest = SN_STR(s.ptr + p.len, s.len - p.len);
+    return true;
+}
+
+bool sn_cut_suffix(sn_string s, sn_string p, sn_string *rest) {
+    if (!sn_has_suffix(s, p)) {
+        return false;
+    }
+
+    *rest = SN_STR(s.ptr, s.len - p.len);
+    return true;
+}
+
+// split_n splits s at sep into at most n views of s, the last holding
+// the rest, as sn_split splits it, each piece keeping the sep that ends
+// it when after says so; n of zero or less gives none. The cuts are
+// found once to count the pieces, so the result is made at its length.
+static void split_n(sn_string s, sn_string sep, int64_t n, bool after, sn_slice *out) {
     sn_check_string(s);
     sn_check_string(sep);
     out->ptr = NULL;
@@ -934,35 +1143,40 @@ void sn_split_n(sn_string s, sn_string sep, int64_t n, sn_slice *out) {
             pieces = n;
         }
     } else {
-        for (int64_t start = 0; pieces < n;) {
-            int64_t at = find(SN_STR(s.ptr + start, s.len - start), sep);
-            if (at < 0) {
-                break;
-            }
-
-            pieces++;
-            start += at + sep.len;
-        }
+        pieces += count_upto(s, sep, n == INT64_MAX ? INT64_MAX : n - 1); // a one-byte sep counted a word at a time
     }
 
     sn_slice_make(out, 0, pieces, sizeof(sn_string));
     sn_string *f = out->ptr;
     int64_t start = 0;
+    uint64_t pattern = 0x0101010101010101u * (sep.len == 1 ? sep.ptr[0] : 0);
     for (int64_t i = 0; i < pieces - 1; i++) {
         int64_t at;
         if (sep.len == 0) {
             int32_t r;
             at = sn_utf8_decode(s.ptr + start, s.len - start, &r);
+        } else if (sep.len == 1) {
+            at = next_byte(s.ptr + start, s.ptr + s.len, pattern, sep.ptr[0]) - (s.ptr + start);
         } else {
             at = find(SN_STR(s.ptr + start, s.len - start), sep);
         }
 
-        f[out->len++] = SN_STR(s.ptr + start, at);
+        f[out->len++] = SN_STR(s.ptr + start, after ? at + sep.len : at);
         start += at + sep.len;
     }
 
     f[out->len++] = SN_STR(s.ptr + start, s.len - start);
 }
+
+void sn_split_n(sn_string s, sn_string sep, int64_t n, sn_slice *out) { split_n(s, sep, n, false, out); }
+
+// sn_split_after and sn_split_after_n split s as sn_split and
+// sn_split_n do, each piece keeping the sep that ends it, so the pieces
+// join back to s; the last piece has none. An empty sep gives each
+// UTF-8 sequence, as for sn_split.
+void sn_split_after(sn_string s, sn_string sep, sn_slice *out) { split_n(s, sep, INT64_MAX, true, out); }
+
+void sn_split_after_n(sn_string s, sn_string sep, int64_t n, sn_slice *out) { split_n(s, sep, n, true, out); }
 
 // sn_bytes_equal reports whether a and b hold the same bytes.
 bool sn_bytes_equal(sn_slice_u8 a, sn_slice_u8 b) {
@@ -972,6 +1186,28 @@ bool sn_bytes_equal(sn_slice_u8 a, sn_slice_u8 b) {
 // sn_bytes_find returns the offset of the first run of a's bytes equal
 // to b, or -1, by the search a string's Index makes.
 int64_t sn_bytes_find(sn_slice_u8 a, sn_slice_u8 b) { return find(SN_STR(a.ptr, a.len), SN_STR(b.ptr, b.len)); }
+
+// sn_bytes_owned takes a string a routine made as an owned slice of
+// its bytes: the empty string, which no routine allocates, becomes the
+// empty slice, and any other result is the routine's own block, handed
+// over.
+sn_slice_u8 sn_bytes_owned(sn_string s) {
+    if (s.cap == 0) {
+        return (sn_slice_u8){ 0 };
+    }
+
+    return (sn_slice_u8){ (uint8_t *)s.ptr, s.len, s.cap };
+}
+
+// sn_strings_to_bytes makes a slice of string views one of byte views:
+// the layouts are one but for each piece's cap, SN_VIEW for a view of
+// bytes as for a sub-slice.
+void sn_strings_to_bytes(sn_slice *pieces) {
+    sn_slice_u8 *p = pieces->ptr;
+    for (int64_t i = 0; i < pieces->len; i++) {
+        p[i].cap = SN_VIEW;
+    }
+}
 
 // sn_fields splits s around runs of white space, the runes
 // unicode.IsSpace reports, into views of s, as strings.Fields does.
@@ -1061,32 +1297,67 @@ void sn_runes(sn_string s, sn_slice *out) {
     }
 }
 
+// cut_line appends to out the line that runs from start to the newline
+// at nl, without a carriage return before the newline.
+static inline void cut_line(sn_slice *out, const uint8_t *start, const uint8_t *nl) {
+    const uint8_t *stop = nl;
+    if (stop > start && stop[-1] == '\r') {
+        stop--;
+    }
+
+    ((sn_string *)out->ptr)[out->len++] = SN_STR(start, stop - start);
+}
+
 // sn_lines splits s at every newline into views of s, each without
 // its newline and a carriage return before it; a last line without a
-// newline is a line, a trailing newline does not make an empty one.
+// newline is a line, kept whole to a carriage return that ends it,
+// and a trailing newline does not make an empty one. The newlines are
+// counted first, eight bytes at a time, so that the result is made
+// once at its length, and found the same way, each line cut at the
+// next marked byte of the word.
 void sn_lines(sn_string s, sn_slice *out) {
     sn_check_string(s);
     out->ptr = NULL;
     out->len = 0;
     out->cap = 0;
-    int64_t start = 0;
-    for (int64_t i = 0; i <= s.len; i++) {
-        if (i < s.len && s.ptr[i] != '\n') {
-            continue;
-        }
+    const uint64_t pattern = 0x0101010101010101u * '\n';
+    const uint8_t *p = s.ptr, *end = s.ptr + s.len;
+    int64_t n = s.len > 0 && end[-1] != '\n'; // the line after the last newline
+    for (; end - p >= 8; p += 8) {
+        uint64_t w;
+        memcpy(&w, p, 8);
+        n += __builtin_popcountll(marked(w, pattern));
+    }
 
-        if (i == s.len && start == s.len) {
-            break; // nothing after the last newline, or an empty string
-        }
+    for (; p < end; p++) {
+        n += *p == '\n';
+    }
 
-        int64_t end = i;
-        if (end > start && s.ptr[end - 1] == '\r') {
-            end--;
-        }
+    if (n == 0) {
+        return;
+    }
 
-        sn_string line = SN_STR(s.ptr + start, end - start);
-        sn_slice_push(out, &line, sizeof line);
-        start = i + 1;
+    sn_slice_make(out, 0, n, sizeof(sn_string));
+    const uint8_t *start = s.ptr;
+    for (p = s.ptr; end - p >= 8; p += 8) {
+        uint64_t w;
+        memcpy(&w, p, 8);
+        for (uint64_t marks = marked(w, pattern); marks != 0; marks &= marks - 1) {
+            const uint8_t *nl = p + __builtin_ctzll(marks) / 8;
+            cut_line(out, start, nl);
+            start = nl + 1;
+        }
+    }
+
+    for (; p < end; p++) {
+        if (*p == '\n') {
+            cut_line(out, start, p);
+            start = p + 1;
+        }
+    }
+
+    if (start < end) {
+        ((sn_string *)out->ptr)[out->len++] = SN_STR(start, end - start);
     }
 }
 
@@ -1277,18 +1548,82 @@ int64_t sn_strings_copyString(sn_slice_u8 *dst, sn_string s) {
     return n;
 }
 
+// sn_strings_mapBytes replaces each byte of b by the byte of table at
+// its value, a table of 256: the Replacer's pass when every pair is a
+// byte for a byte.
+void sn_strings_mapBytes(sn_slice_u8 *b, sn_slice_u8 table) {
+    sn_check_slice((sn_slice *)b);
+    sn_check_slice((sn_slice *)&table);
+    if (table.len < 256) {
+        return;
+    }
+
+    uint8_t *p = b->ptr;
+    for (int64_t i = 0; i < b->len; i++) {
+        p[i] = table.ptr[p[i]];
+    }
+}
+
+// sn_strings_skipTo returns the offset of the first byte of s at or
+// after from that is one of firsts, or the length of s: the Replacer's
+// run between two places where an old string may start. Up to four
+// bytes are found a word of eight at a time, each byte of the word
+// compared with every one of them at once; more are looked up in
+// starts, a table of 256 bytes with a value other than zero at each of
+// firsts.
+int64_t sn_strings_skipTo(sn_string s, int64_t from, sn_slice_u8 firsts, sn_slice_u8 starts) {
+    sn_check_string(s);
+    sn_check_slice((sn_slice *)&firsts);
+    sn_check_slice((sn_slice *)&starts);
+    int64_t i = from < 0 ? 0 : from;
+    if (firsts.len == 0 || starts.len < 256 || i > s.len) {
+        return s.len;
+    }
+
+    if (firsts.len <= 4) {
+        const uint64_t lo = 0x0101010101010101u, hi = 0x8080808080808080u;
+        uint64_t patterns[4];
+        for (int64_t k = 0; k < 4; k++) {
+            patterns[k] = lo * firsts.ptr[k < firsts.len ? k : 0];
+        }
+
+        for (; s.len - i >= 8; i += 8) {
+            uint64_t w;
+            memcpy(&w, s.ptr + i, 8);
+            uint64_t marks = 0;
+            for (int k = 0; k < 4; k++) {
+                uint64_t z = w ^ patterns[k];
+                marks |= (z - lo) & ~z & hi; // a mark above a true one may be false; the lowest is true
+            }
+
+            if (marks != 0) {
+                return i + __builtin_ctzll(marks) / 8;
+            }
+        }
+    }
+
+    for (; i < s.len && starts.ptr[s.ptr[i]] == 0; i++) {
+    }
+
+    return i;
+}
+
 // sn_strings_appendString appends the bytes of s to b in one copy,
 // growing it once: the strings package's Builder and Repeat write
 // through it.
 void sn_strings_appendString(sn_slice_u8 *buf, sn_string s) {
     sn_slice *b = (sn_slice *)buf; // the same three words
+    sn_check_slice(b);
     sn_check_string(s);
     if (s.len == 0) {
         return;
     }
 
-    sn_slice_own(b, "WriteString");
-    sn_slice_grow(b, b->len + s.len, 1);
+    if (b->len + s.len > b->cap) { // room is the common case: a positive cap is an owned block, so the checks are the slow path's
+        sn_slice_own(b, "WriteString");
+        sn_slice_grow(b, b->len + s.len, 1);
+    }
+
     sn_copy_piece((uint8_t *)b->ptr + b->len, (const uint8_t *)s.ptr, (size_t)s.len);
     b->len += s.len;
 }

@@ -61,10 +61,10 @@ The check is one comparison per lookup, and it is a runtime check, not a compile
 
 ## Walking an arena
 
-`a.Iter()` walks the values in the order of their slots, each with the index that names it, and a `range` over it lends them for the loop:
+`a.Iter()` walks the values in the order of their slots, each with the index that names it, and a `range` over the arena lent walks through it, lending them for the loop:
 
 ```go
-for i, v := range a.Iter() {
+for i, v := range ref a {
 	fmt.Println(i, v)      // an Index<T> and a ref T
 }
 ```

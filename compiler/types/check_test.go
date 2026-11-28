@@ -315,6 +315,11 @@ var handledErrors = map[string]bool{
 	"lent-through-values.snello": true,
 	// A value holding a mut borrow carries it wherever it moves.
 	"holder-moved.snello": true,
+	// A method's result borrows its receiver unless its trait's word says
+	// what the result holds.
+	"iter-item-ties-receiver.snello": true,
+	// A word-keeping method's result holds what its arguments hold.
+	"word-argument-held.snello": true,
 }
 
 func TestNegativePrograms(t *testing.T) {

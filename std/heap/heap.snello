@@ -16,8 +16,20 @@
 // replaces the root down to a leaf and back up, Floyd's bottom-up
 // descent, which makes about half the comparisons of comparing it
 // with a child at every level. Elements that compare Equal come out in
-// no particular order: a heap is not a stable sort.
+// no particular order: a heap is not a stable sort. Extend adds many
+// elements at once and restores the order the cheaper way, Retain drops
+// elements in place, Drain hands every element out, IntoSorted turns
+// the heap into a sorted slice in place, and PeekMut lends the least
+// element for changing, restoring the order when the borrow ends.
 package heap
+
+import ("iter"; "math/bits")
+
+// Past this many elements the cost of restoring the order after
+// elements were appended, by Extend or by Retain, is judged by a fixed
+// depth, where below it the depth of the heap decides.
+const largeHeap = 2048
+const largeHeapDepth = 11
 
 // A Heap owns its elements and hands them back least first, by the Cmp
 // of T. It is moved, or lent with ref and mut; when it goes out of
@@ -42,6 +54,31 @@ struct Heap<T: Ord> {
 //	greatest := h.Pop() // Some(Reverse{V: 3})
 struct Reverse<T: Ord> impl Eq, Ord {
 	V T
+}
+
+// A Drain hands the heap's elements out, owned, in no particular order,
+// until the heap is empty; the heap is lent mut for as long as the
+// Drain lives, and the elements still in the heap when the Drain is
+// dropped are dropped with it, so the heap is empty after a Drain
+// however far it was pulled. Heap.Drain makes one, and the adapters of
+// iter.Iterator wrap it.
+//
+//	for v := range h.Drain() { ... }
+struct Drain<T: Ord> impl iter.Iterator<T>, Drop {
+	h mut Heap<T>
+}
+
+// A PeekMut lends the least element of a heap for changing, and puts it
+// back in its place when it is dropped: a change of the least element
+// is one sift down, where a Pop and a Push would be a sift up and a
+// sift down. The heap is lent mut for as long as the PeekMut lives.
+// Heap.PeekMut makes one.
+//
+//	if top := h.PeekMut() {
+//		*top.Get() += 10
+//	} // the heap is in order again here
+struct PeekMut<T: Ord> impl Drop {
+	h mut Heap<T>
 }
 
 // New returns an empty heap of T, which allocates nothing until the
@@ -112,6 +149,100 @@ func (h mut Heap<T>) Pop() T? {
 	return v
 }
 
+// Extend adds every item of it, an iterator of owned elements, which it
+// pulls to the end, and restores the heap's order the cheaper way: the
+// elements added are sifted up one by one, O(k log n) for k added to
+// n, unless they are many next to the heap, when the whole heap is
+// built again in O(n+k), Floyd's construction, the choice by the count
+// and the depth as Rust's BinaryHeap makes it. The iterator is lent
+// mut.
+//
+//	h.Extend(mut more.Iter().Map(clone))
+func (h mut Heap<T>) Extend<I: iter.Iterator<T>>(it mut I) {
+	start := len(h.items)
+	for {
+		h.items.Push(it.Next() ?? break)
+	}
+
+	h.rebuildTail(start)
+}
+
+// Retain calls keep once for each element, in the heap's own order,
+// and drops every element for which keep returns false; the elements
+// kept after the first one dropped are moved into its place and the
+// heap's order is restored from there on, the cheaper way, as Extend
+// restores it. keep is given the element lent, and held for the call
+// alone.
+//
+//	h.Retain(func(v ref int) bool { return *v > 0 })
+func (h mut Heap<T>) Retain(keep func(ref T) bool) {
+	w := 0
+	first := -1
+	for i := 0; i < len(h.items); i++ {
+		if !keep(ref h.items[i]) {
+			if first < 0 {
+				first = i
+			}
+
+			continue
+		}
+
+		if w != i {
+			h.items.Swap(w, i)
+		}
+
+		w++
+	}
+
+	if first >= 0 {
+		h.items.Truncate(w)
+		h.rebuildTail(first)
+	}
+}
+
+// Drain returns a walk that hands every element out, owned, in no
+// particular order, and leaves the heap empty: each item costs O(1),
+// where popping them in order costs O(log n) each. The heap is lent mut
+// for as long as the walk lives.
+//
+//	all := h.Drain().Collect()
+func (h mut Heap<T>) Drain() Drain<T> {
+	return Drain<T>{h: h}
+}
+
+// IntoSorted takes the heap, owned, and returns its elements as a slice
+// ordered least first, in place: the heap's slice is sorted by moving
+// the least element to the end of the part not yet sorted, n times,
+// which allocates nothing and costs O(n log n) comparisons.
+//
+//	sorted := h.IntoSorted()
+func (h Heap<T>) IntoSorted() []T {
+	for end := len(h.items) - 1; end > 0; end-- {
+		h.items.Swap(0, end)
+		h.siftDownTo(0, end)
+	}
+
+	h.items.Reverse()
+	return h.items
+}
+
+// PeekMut lends the least element for changing, through a PeekMut, or
+// returns None when the heap is empty. When the PeekMut is dropped the
+// element is moved down to its place, one sift of O(log n), so the heap
+// is in order again. The heap is lent mut for as long as the PeekMut
+// lives.
+//
+//	if top := h.PeekMut() {
+//		*top.Get() = 100
+//	}
+func (h mut Heap<T>) PeekMut() PeekMut<T>? {
+	if len(h.items) == 0 {
+		return None
+	}
+
+	return Some(PeekMut<T>{h: h})
+}
+
 // Peek lends the least element without removing it, or returns None
 // when the heap is empty. The borrow lasts as long as the heap's, so
 // the heap is not changed while it lives. It costs O(1).
@@ -132,6 +263,65 @@ func (h ref Heap<T>) Peek() ref T? {
 // Equal when they are equal. Both are lent, read only.
 func (r ref Reverse<T>) Cmp(o ref Reverse<T>) Ordering {
 	return o.V.Cmp(ref r.V)
+}
+
+// Next hands the next element out, owned, or None once the heap is
+// empty: the last element of the heap's slice, which is O(1) and keeps
+// the rest in order.
+func (it mut Drain<T>) Next() T? {
+	return it.h.items.Pop()
+}
+
+// Drop drops the elements still in the heap, so that a Drain not pulled
+// to the end empties the heap all the same, as its word says.
+func (it mut Drain<T>) Drop() {
+	it.h.Clear()
+}
+
+// Get lends the least element for changing. The borrow lasts as long as
+// the PeekMut's.
+func (p mut PeekMut<T>) Get() mut T {
+	return mut p.h.items[0]
+}
+
+// Drop puts the element lent back in its place: it is moved down while
+// a child is less than it, one sift of O(log n).
+func (p mut PeekMut<T>) Drop() {
+	p.h.siftDown(0)
+}
+
+// rebuildTail restores the heap's order after elements were appended
+// from the index start on: the appended elements are sifted up one by
+// one, about k log2(start) comparisons for k of them, unless building
+// the whole heap again, about 2n comparisons, is cheaper: when the
+// appended are more than the rest, when the heap is small and 2n is
+// less than k times its depth, and when it is large and 2n is less than
+// k times a fixed depth of eleven, which measured as the crossing point.
+func (h mut Heap<T>) rebuildTail(start int) {
+	n := len(h.items)
+	tail := n - start
+	if tail == 0 {
+		return
+	}
+
+	rebuild := start < tail
+	if !rebuild && n <= largeHeap {
+		rebuild = 2*n < tail*(bits.Len(uint(start))-1)
+	} else if !rebuild {
+		rebuild = 2*n < tail*largeHeapDepth
+	}
+
+	if rebuild {
+		for i := n/2 - 1; i >= 0; i-- {
+			h.siftDown(i)
+		}
+
+		return
+	}
+
+	for i := start; i < n; i++ {
+		h.siftUp(i)
+	}
 }
 
 // siftRootDown puts the element at the root in its place after a Pop
@@ -181,7 +371,13 @@ func (h mut Heap<T>) siftUp(i int) {
 // siftDown moves the element at i away from the root while one of its
 // children is less than it, swapping it with the lesser child.
 func (h mut Heap<T>) siftDown(i int) {
-	n := len(h.items)
+	h.siftDownTo(i, len(h.items))
+}
+
+// siftDownTo is siftDown over the first n elements alone, as if the
+// heap ended there: IntoSorted keeps the elements it has placed past
+// n.
+func (h mut Heap<T>) siftDownTo(i int, n int) {
 	for {
 		least := 2*i + 1
 		if least >= n {

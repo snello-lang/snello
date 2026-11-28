@@ -4,7 +4,7 @@
 
 package bufio_test
 
-import ("bufio"; "expect"; "io"; "os"; "strings"; "testing"; "unicode/utf8")
+import ("bufio"; "bytes"; "expect"; "io"; "os"; "strings"; "testing"; "unicode/utf8")
 
 // The bytes the tests end their lines and records with.
 const newline byte = '\n'
@@ -336,4 +336,283 @@ func BenchmarkWriteString() {
 	w := bufio.NewWriter(mut f)
 	testing.ResetTimer()
 	for testing.Loop() { _ = w.WriteString("line\n") }
+}
+
+// The split functions: bytes, runes whole across reads, lines and words
+// through NewScannerSplit as through their own constructors, and a
+// program's own cut at commas.
+func TestSplitFunctions() {
+	in := strings.NewReader("héy".Clone())
+	byBytes := bufio.NewScannerSplit(mut in, bufio.ScanBytes)
+	seen := []string{}
+	for byBytes.Scan() {
+		seen.Push(byBytes.Text())
+	}
+
+	expect.Equal(ref len(seen), ref 4) // four bytes, é being two
+	expect.Equal(ref seen[0], "h")
+	var t = Trickle{data: []byte("aé　b\xffz"), at: 0} // runes of one, two and three bytes, cut across reads, and a byte that starts none
+	runes := bufio.NewScannerSplit(mut t, bufio.ScanRunes)
+	got := []string{}
+	for runes.Scan() {
+		got.Push(runes.Text())
+	}
+
+	expect.EqualSlice(ref got, ref []string{"a".Clone(), "é".Clone(), "　".Clone(), "b".Clone(), "\xff".Clone(), "z".Clone()})
+	expect.True(runes.Err().IsNone())
+	lines := strings.NewReader("one\r\ntwo\n\nthree".Clone())
+	byFunction := bufio.NewScannerSplit(mut lines, bufio.ScanLines)
+	read := []string{}
+	for byFunction.Scan() {
+		read.Push(byFunction.Text())
+	}
+
+	expect.EqualSlice(ref read, ref []string{"one".Clone(), "two".Clone(), "".Clone(), "three".Clone()})
+	var w = Trickle{data: []byte("  one two\tthree　four\n\n five\xffsix  "), at: 0}
+	words := bufio.NewScannerSplit(mut w, bufio.ScanWords)
+	found := []string{}
+	for words.Scan() {
+		found.Push(words.Text())
+	}
+
+	expect.EqualSlice(ref found, ref []string{"one".Clone(), "two".Clone(), "three".Clone(), "four".Clone(), "five\xffsix".Clone()})
+	commas := func(data ref []byte, atEOF bool) bufio.Split? {
+		if i := data.Index(ref ',') {
+			return Some(bufio.Split{Start: 0, End: i, Advance: i + 1})
+		}
+
+		if atEOF && len(data) > 0 {
+			return Some(bufio.Split{Start: 0, End: len(data), Advance: len(data)})
+		}
+
+		return None
+	}
+	csv := strings.NewReader("a,bb,,ccc".Clone())
+	fields := bufio.NewScannerSplit(mut csv, commas)
+	parts := []string{}
+	for fields.Scan() {
+		parts.Push(fields.Text())
+	}
+
+	expect.EqualSlice(ref parts, ref []string{"a".Clone(), "bb".Clone(), "".Clone(), "ccc".Clone()})
+	expect.True(fields.Err().IsNone())
+	expect.Equal(ref len(fields.Bytes()), ref 0) // empty once Scan returned false
+	empty := strings.NewReader("".Clone())
+	none := bufio.NewScannerSplit(mut empty, bufio.ScanRunes)
+	expect.False(none.Scan())
+	stuck := func(data ref []byte, atEOF bool) bufio.Split? { return Some(bufio.Split{Start: 0, End: 0, Advance: 0}) } // never moves: more input until the end, then a clean end
+	never := strings.NewReader("abc".Clone())
+	halted := bufio.NewScannerSplit(mut never, stuck)
+	expect.False(halted.Scan())
+	expect.True(halted.Err().IsNone())
+	beyond := func(data ref []byte, atEOF bool) bufio.Split? { return Some(bufio.Split{Start: 0, End: 1, Advance: 100}) } // past the data: the scan ends with the error
+	over := strings.NewReader("abc".Clone())
+	cut := bufio.NewScannerSplit(mut over, beyond)
+	expect.False(cut.Scan())
+	match cut.Err() {
+		Some(e) => expect.Equal(ref e.Error(), "bufio.Scanner: bad split"),
+		None => expect.Fail("a split past the data ended the scan with no error"),
+	}
+
+	overlap := func(data ref []byte, atEOF bool) bufio.Split? { return Some(bufio.Split{Start: 0, End: 2, Advance: 1}) } // a token past the move: tokens would overlap
+	lapped := strings.NewReader("abc".Clone())
+	twice := bufio.NewScannerSplit(mut lapped, overlap)
+	expect.False(twice.Scan())
+	expect.True(twice.Err().IsSome())
+	fixed := func(data ref []byte, atEOF bool) bufio.Split? { // records of two bytes, written to the rule that data is never empty before the end
+		if len(data) < 2 && !atEOF {
+			return None
+		}
+
+		n := min(2, len(data))
+		if n == 0 {
+			return None
+		}
+
+		return Some(bufio.Split{Start: 0, End: n, Advance: n})
+	}
+	records := strings.NewReader("abcde".Clone())
+	pairs := bufio.NewScannerSplit(mut records, fixed)
+	got2 := []string{}
+	for pairs.Scan() {
+		got2.Push(pairs.Text())
+	}
+
+	expect.EqualSlice(ref got2, ref []string{"ab".Clone(), "cd".Clone(), "e".Clone()})
+	long := strings.NewReader(strings.Repeat("y", pastTokenLimit) ?? "")
+	big := bufio.NewScannerSplit(mut long, commas)
+	expect.False(big.Scan()) // a token past the limit ends the scan
+	match big.Err() {
+		Some(e) => expect.Equal(ref e.Error(), "bufio.Scanner: token too long"),
+		None => expect.Fail("the scan ended with no error"),
+	}
+}
+
+// A Drip hands out at most step bytes a call, and fails with its error
+// once it has handed out fail bytes.
+struct Drip impl io.Reader {
+	data []byte
+	at   int
+	step int
+	fail int
+}
+
+// Read hands out the next bytes of d, at most step of them, or fails
+// once fail bytes are out.
+func (d mut Drip) Read(buf mut []byte) Result<int, io.Error> {
+	if d.at >= d.fail {
+		return Err(io.NewError("read".Clone(), "drip".Clone(), "broken".Clone(), io.Other))
+	}
+
+	n := min(d.step, len(buf), len(d.data)-d.at)
+	for i := 0; i < n; i++ {
+		buf[i] = d.data[d.at+i]
+	}
+
+	d.at += n
+	return Ok(n)
+}
+
+// A Breaking writer takes bytes until it has taken limit, then fails
+// every write.
+struct Breaking impl io.Writer {
+	taken int
+	limit int
+}
+
+// Write takes buf while the limit allows and fails after it.
+func (b mut Breaking) Write(buf ref []byte) Result<int, io.Error> {
+	if b.taken+len(buf) > b.limit {
+		return Err(io.NewError("write".Clone(), "breaking".Clone(), "full".Clone(), io.Other))
+	}
+
+	b.taken += len(buf)
+	return Ok(len(buf))
+}
+
+// ReadSlice lends a line from the buffer and refuses one longer than
+// it; Discard moves past bytes; Buffered, Size and Reset say and clear
+// what the buffer holds.
+func TestReadSliceDiscardReset() {
+	in := strings.NewReader("one\ntwo\nthree".Clone())
+	r := bufio.NewReader(mut in)
+	expect.Equal(ref r.Buffered(), ref 0)
+	expect.Equal(ref r.Size(), ref 4096)
+	line := expect.IsSome(expect.IsOk(r.ReadSlice('\n')))
+	expect.True(line.Equal(ref []byte("one\n")))
+	expect.Equal(ref r.Buffered(), ref 9) // the rest was read in the same block
+	expect.Equal(ref expect.IsOk(r.Discard(2)), ref 2)
+	expect.Equal(ref expect.IsOk(r.Discard(0)), ref 0)
+	expect.Equal(ref expect.IsOk(r.Discard(-5)), ref 0)
+	line = expect.IsSome(expect.IsOk(r.ReadSlice('\n')))
+	expect.True(line.Equal(ref []byte("o\n")))
+	last := expect.IsSome(expect.IsOk(r.ReadSlice('\n'))) // no newline: the rest is the last line
+	expect.True(last.Equal(ref []byte("three")))
+	expect.IsNone(expect.IsOk(r.ReadSlice('\n')))
+	expect.True(r.UnreadByte()) // the last byte of the last line
+	expect.Equal(ref r.Buffered(), ref 1)
+	r.Reset()
+	expect.Equal(ref r.Buffered(), ref 0)
+	expect.False(r.UnreadByte())
+	expect.IsNone(expect.IsOk(r.ReadSlice('\n')))
+	long := strings.NewReader(strings.Repeat("x", 5000) ?? "")
+	full := bufio.NewReader(mut long)
+	e := expect.IsErr(full.ReadSlice('\n'))
+	expect.Equal(ref e.Error(), "bufio: buffer full")
+	expect.Equal(ref full.Buffered(), ref 4096) // the bytes stay for ReadBytes
+	rest := expect.IsSome(expect.IsOk(full.ReadBytes('\n')))
+	expect.Equal(ref len(rest), ref 5000)
+	short := strings.NewReader("abc".Clone())
+	past := bufio.NewReader(mut short)
+	expect.Equal(ref expect.IsOk(past.Discard(10)), ref 3) // fewer at the end
+	expect.Equal(ref expect.IsOk(past.Discard(1)), ref 0)
+	exact := strings.NewReader(strings.Repeat("z", 4096) ?? "")
+	edge := bufio.NewReader(mut exact)
+	e2 := expect.IsErr(edge.ReadSlice('\n')) // a line of exactly the buffer's size and no delimiter: full
+	expect.Equal(ref e2.Error(), "bufio: buffer full")
+	var failing = Drip{data: []byte("0123456789"), at: 0, step: 3, fail: 7}
+	broken := bufio.NewReader(mut failing)
+	e3 := expect.IsErr(broken.Discard(100)) // the reader fails after seven bytes: its error, the bytes before it gone
+	expect.Contains(ref e3.Error(), "broken")
+	expect.Equal(ref broken.Buffered(), ref 0)
+}
+
+// WriteRune writes a rune's bytes, Size says the buffer's, and Reset
+// drops what was buffered and the error that stopped the Writer.
+func TestWriteRuneSizeReset() {
+	var sink bytes.Buffer
+	w := bufio.NewWriterSize(mut sink, 8)
+	expect.Equal(ref w.Size(), ref 8)
+	expect.Equal(ref expect.IsOk(w.WriteRune('a')), ref 1)
+	expect.Equal(ref expect.IsOk(w.WriteRune('é')), ref 2)
+	expect.Equal(ref expect.IsOk(w.WriteRune('　')), ref 3)
+	expect.Equal(ref expect.IsOk(w.WriteRune('\U0001F600')), ref 4) // crosses the buffer's end: flushed on the way
+	expect.Equal(ref expect.IsOk(w.WriteRune(-1)), ref 3)           // no code point: U+FFFD
+	expect.IsOk(w.Flush())
+	w.WriteString("kept").Unwrap()
+	expect.Equal(ref w.Buffered(), ref 4)
+	w.Reset()
+	expect.Equal(ref w.Buffered(), ref 0)
+	expect.IsOk(w.Flush())
+	expect.Equal(ref sink.String(), "aé　\U0001F600�") // the kept bytes never reached the sink
+	var wall = Breaking{taken: 0, limit: 4}
+	blocked := bufio.NewWriterSize(mut wall, 4)
+	expect.Equal(ref expect.IsOk(blocked.WriteRune('\u00e9')), ref 2)
+	expect.Equal(ref expect.IsOk(blocked.WriteRune('\u00e9')), ref 2) // the first two bytes flushed to make room: the writer took four
+	expect.Equal(ref expect.IsOk(blocked.WriteRune('x')), ref 1)     // room for a byte
+	expect.IsErr(blocked.WriteRune('\u3000'))                      // no room for three: the flush fails, the writer being full
+	expect.IsErr(blocked.WriteRune('z'))                            // the error is kept for every call
+	blocked.Reset()                                                 // drops the error and the bytes
+	expect.Equal(ref blocked.Buffered(), ref 0)
+	expect.Equal(ref expect.IsOk(blocked.WriteRune('y')), ref 1)   // writes again
+}
+
+// BenchmarkScanRunes measures scanning a megabyte of text rune by rune
+// through the provided split function.
+func BenchmarkScanRunes() {
+	text := strings.Repeat("héllo wörld, scanning runes and commas,line by line\n", benchLines*20) ?? ""
+	testing.ResetTimer()
+	for testing.Loop() {
+		in := strings.NewReader(text.Clone())
+		s := bufio.NewScannerSplit(mut in, bufio.ScanRunes)
+		for s.Scan() {}
+	}
+}
+
+// BenchmarkSplit measures a split function of a program's own, cutting
+// a megabyte of text at commas.
+func BenchmarkSplit() {
+	text := strings.Repeat("héllo wörld, scanning runes and commas,line by line\n", benchLines*20) ?? ""
+	commas := func(data ref []byte, atEOF bool) bufio.Split? {
+		if i := data.Index(ref ',') {
+			return Some(bufio.Split{Start: 0, End: i, Advance: i + 1})
+		}
+
+		if atEOF && len(data) > 0 {
+			return Some(bufio.Split{Start: 0, End: len(data), Advance: len(data)})
+		}
+
+		return None
+	}
+	testing.ResetTimer()
+	for testing.Loop() {
+		in := strings.NewReader(text.Clone())
+		s := bufio.NewScannerSplit(mut in, commas)
+		for s.Scan() {}
+	}
+}
+
+// BenchmarkWriteRune measures a two-byte rune written into a buffer that
+// is never flushed, with nothing allocated.
+func BenchmarkWriteRune() {
+	var sink bytes.Buffer
+	w := bufio.NewWriterSize(mut sink, 1<<20)
+	testing.ResetTimer()
+	for testing.Loop() {
+		if w.Available() < 4 {
+			w.Reset()
+		}
+
+		_ = w.WriteRune('\u00e9')
+	}
 }

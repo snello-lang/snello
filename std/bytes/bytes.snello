@@ -75,6 +75,22 @@ func (b ref Buffer) Len() int {
 	return len(b.buf) - b.off
 }
 
+// Cap returns the capacity of the Buffer's slice: how many bytes it
+// holds without allocating, the bytes already read among them, since
+// dropping them frees room, not capacity.
+func (b ref Buffer) Cap() int {
+	return cap(b.buf)
+}
+
+// Available returns how many bytes can be written before the Buffer
+// allocates or moves what it holds: the room after the bytes written,
+// read or not. Grow(n) makes it at least n.
+//
+//	if b.Available() < len(rec) { b.Grow(len(rec)) }
+func (b ref Buffer) Available() int {
+	return cap(b.buf) - len(b.buf)
+}
+
 // Truncate keeps the first n bytes not read yet and drops the rest, as
 // a slice's Truncate does: an n at or past Len keeps them all, and an n
 // of zero or less drops them all and empties the Buffer, as Reset

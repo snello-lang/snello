@@ -32,9 +32,33 @@ func main() {
 		fmt.Printf("%d ", l.Len())
 	}
 	fmt.Println(n, len("".Lines()), len("x\n".Lines()))
+	long := "first line!\r\nsecond\n\nfourth line here, past eight bytes\r\n\nlast\r" // a \r\n across a word boundary; a bare \r ending the text stays
+	for l := range long.Lines() {
+		fmt.Printf("%d ", l.Len())
+	}
+	fmt.Println(len(long.Lines()))
 	c := "7 Z"
 	fmt.Println(c[0].IsDigit(), c[1].IsSpace(), c[2].IsLetter(), c[2].IsUpper(), c[2].IsLower(), c[0].IsLetter())
 	fmt.Println(min(3, 1, 2), max(3, 1, 2), min(2.5, 1), max(-1, len(c)))
 	e := ""
 	fmt.Println(len(e.ToUpper()), len(e.ToLower()), len(e + e), len(e.Trim())) // built empty: no block to leak
+
+	// The searches for any of a set of runes and for one byte, the
+	// splits that keep the separator, the trims with a cutset and the
+	// cuts that say whether they cut.
+	kv := "key: value; more"
+	fmt.Println(kv.IndexAny(":="), kv.LastIndexAny(";:"), kv.IndexAny("qz"), kv.ContainsAny("; "), kv.ContainsAny(""), kv.IndexByte(' '), kv.LastIndexByte(' '), kv.IndexByte('z'))
+	fmt.Println("naïve café".IndexAny("éï"), "naïve café".LastIndexAny("éï"), "a\xffb".IndexAny("\uFFFD")) // runes past ASCII, and a byte that is not UTF-8 found as U+FFFD
+	for piece := range "a,b,c".SplitAfter(",") {
+		fmt.Printf("%q ", piece)
+	}
+	fmt.Println(len("a,b,c".SplitAfterN(",", 2)), "a,b,c".SplitAfterN(",", 2)[1], len("abc".SplitAfter("")), len("".SplitAfter(",")), len("x".SplitAfterN(",", 0)))
+	fmt.Println("  --x--  ".TrimLeft(" -"), "|", "  --x--  ".TrimRight(" -"), "|", "  --x--  ".TrimAny(" -"), "|", "xyx".TrimAny("xy") == "", "«quoted»".TrimAny("«»"), "abc".TrimLeft(""))
+	fmt.Println("--flag".CutPrefix("--"), "--flag".CutPrefix("++"), "file.snello".CutSuffix(".snello"), "x".CutPrefix(""), "".CutSuffix(""))
+	if rest := "--flag".CutPrefix("--") {
+		fmt.Println(rest.Len(), rest)
+	}
+
+	view := "héllo".Bytes() // the string's bytes lent as a slice, nothing copied
+	fmt.Println(len(view), view[1], view[2:4].Equal(ref []byte("\xa9l")), string(view))
 }

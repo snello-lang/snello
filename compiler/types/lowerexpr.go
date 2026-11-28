@@ -22,32 +22,12 @@ import (
 func (l *lowering) value(e ast.Expr, want Type) Operand {
 	o := l.valueOf(e, want)
 	if r, ok := want.(*Ref); ok && o.IsValue() && o.Path == "" {
-		if t := l.f.Temps[o.Temp].Type; t != nil && (!isBorrow(t) || Identical(r.elem, t)) && !isNever(t) && t != Typ[Invalid] {
-			if p, ok := l.borrowedPlace(o); ok && isBorrow(t) { // ref x of a borrow variable, which the typing reads as x's own borrow: where a borrow of it is wanted, x's slot is lent
-				lent := l.lendAs(p, e, r, e.Pos())
-				l.f.Temps[lent.Temp].Itself = true
-				return lent
-			}
-
-			lent := l.lendAs(o, e, l.refOf(t, r), e.Pos()) // a value made here given where a borrow is wanted is lent, as an owned place is: the statement holds it, and what takes the borrow holds a borrow of it
-			l.f.Temps[lent.Temp].Itself = isBorrow(t)      // a borrow made here lent where a borrow of it is wanted: its own slot, the temporary
-			return lent
+		if t := l.f.Temps[o.Temp].Type; t != nil && !isBorrow(t) && !isNever(t) && t != Typ[Invalid] {
+			return l.lendAs(o, e, l.refOf(t, r), e.Pos()) // a value made here given where a borrow is wanted is lent, as an owned place is: the statement holds it, and what takes the borrow holds a borrow of it
 		}
 	}
 
 	return o
-}
-
-// borrowedPlace returns the variable's place the temporary o was just
-// made a borrow of, when the last instruction written is that borrow.
-func (l *lowering) borrowedPlace(o Operand) (Operand, bool) {
-	if n := len(l.f.Instrs); n > 0 {
-		if in := &l.f.Instrs[n-1]; in.Op == OpBorrow && in.To == o && !in.Place.IsTemp() {
-			return in.Place, true
-		}
-	}
-
-	return Operand{}, false
 }
 
 // valueOf is value but for the borrow of a value made here that a
@@ -189,23 +169,11 @@ func (l *lowering) root(e ast.Expr) Operand {
 }
 
 // use reads, lends or moves the place p for a use of its value where a
-// value of type want is wanted; a borrow stored behind a borrow, wanted
-// as it is, is read through the outer one, and a borrow given where a
-// borrow of it is wanted is lent itself.
+// value of type want is wanted. A borrow given where a borrow is wanted
+// is read, its borrow passed on, since a borrow of a borrow is a borrow
+// of its target.
 func (l *lowering) use(p Operand, e ast.Expr, want Type) Operand {
 	t := l.typeOf(e)
-	if r, ok := want.(*Ref); ok && isBorrow(t) && Identical(r.elem, t) { // a borrow given where a borrow of it is wanted: its own place is lent, as ref r lends it
-		tmp := l.lendAs(p, e, r, e.Pos())
-		l.f.Temps[tmp.Temp].Itself = true
-		return tmp
-	}
-
-	if r, ok := t.(*Ref); ok && isBorrow(r.elem) && want != nil && !AssignableTo(t, want) && AssignableTo(r.elem, want) { // a borrow read out through a borrow of it, x of type ref ref string where a ref string is wanted: what x points at is the value
-		through := l.sub(p, []byte("*"))
-		l.emit(Instr{Op: OpRead, Place: through, Expr: e, Pos: e.Pos()})
-		return through
-	}
-
 	if r, ok := want.(*Ref); ok && !isBorrow(t) {
 		return l.lendAs(p, e, l.refOf(t, r), e.Pos())
 	}

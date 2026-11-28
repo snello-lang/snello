@@ -141,13 +141,15 @@ func CheckPrefixes(libraries []Library) error {
 // say it never returns yet; the cells of rc and sync, held by their
 // handles as an address, since several handles own one cell and a mut
 // is reached through a ref, which the language refuses and the count
-// and the lock make safe there; the slots of a deque's buffer, which
-// hold an element or nothing and so cannot be values of the language,
-// which the deque's count and head make safe there; and testing.Catch
+// and the lock make safe there; the slots of a deque's buffer and of a
+// btree's nodes, which hold an element or nothing and so cannot be
+// values of the language, which each package's counts make safe there;
+// and testing.Catch
 // runs a function under the runtime's mark, which takes the function
 // as C takes one, through an adapter the backend writes.
 // The functions of math/bits are written too, each as an instruction,
-// and BitOp reads their names.
+// and BitOp and WideOp read their names; so are the float bits of math,
+// each a copy, which FloatBits reads.
 var lowered = map[string]bool{
 	"fmt.Println": true, "fmt.Printf": true, "fmt.Sprint": true, "fmt.Sprintf": true,
 	"fmt.Fprint": true, "fmt.Fprintln": true, "fmt.Fprintf": true, "os.Exit": true,
@@ -155,6 +157,8 @@ var lowered = map[string]bool{
 	"sync.rawNew": true, "sync.rawMut": true, "sync.rawTake": true,
 	"deque.rawAlloc": true, "deque.rawFree": true, "deque.rawPut": true, "deque.rawTake": true,
 	"deque.rawRef": true, "deque.rawMut": true, "deque.rawMove": true,
+	"btree.rawAlloc": true, "btree.rawFree": true, "btree.rawPut": true, "btree.rawTake": true,
+	"btree.rawRef": true, "btree.rawMut": true, "btree.rawMove": true, "btree.rawWord": true, "btree.rawSetWord": true,
 	"testing.Catch": true, "testing.Logf": true, "expect.Failf": true,
 }
 
@@ -658,7 +662,7 @@ func Key(fn *types.Func) string {
 	}
 
 	key := fn.Pkg().Path() + "." + fn.Name()
-	if _, _, ok := BitOp(key); ok || lowered[key] {
+	if inPlace(key) || lowered[key] {
 		return key
 	}
 
@@ -668,8 +672,8 @@ func Key(fn *types.Func) string {
 // BitOp reads the key of a function of math/bits, which both backends
 // write in place of the call as the processor's instruction: the
 // operation, LeadingZeros, TrailingZeros, OnesCount, RotateLeft,
-// Reverse or Len, and the width in bits of the type it is on, which the
-// name ends with, 64 for the one on uint that names none.
+// Reverse, ReverseBytes or Len, and the width in bits of the type it is
+// on, which the name ends with, 64 for the one on uint that names none.
 func BitOp(key string) (op string, width int, ok bool) {
 	name, found := strings.CutPrefix(key, "math/bits.")
 	if !found {
@@ -678,7 +682,7 @@ func BitOp(key string) (op string, width int, ok bool) {
 
 	op = strings.TrimRight(name, "0123456789")
 	switch op {
-	case "LeadingZeros", "TrailingZeros", "OnesCount", "RotateLeft", "Reverse", "Len":
+	case "LeadingZeros", "TrailingZeros", "OnesCount", "RotateLeft", "Reverse", "Len", "ReverseBytes":
 	default:
 		return "", 0, false
 	}
@@ -687,6 +691,10 @@ func BitOp(key string) (op string, width int, ok bool) {
 	case "", "64":
 		return op, 64, true
 	case "8":
+		if op == "ReverseBytes" { // one byte has no order to reverse
+			return "", 0, false
+		}
+
 		return op, 8, true
 	case "16":
 		return op, 16, true
@@ -697,15 +705,58 @@ func BitOp(key string) (op string, width int, ok bool) {
 	return "", 0, false
 }
 
+// WideOp reads the key of a function of math/bits on two words at once,
+// which both backends write in place of the call as the processor's
+// instructions, Add64, Sub64 or Mul64, the sum and carry, difference and
+// borrow, or the two halves of the product; a value of one is the
+// function the library writes.
+func WideOp(key string) (op string, ok bool) {
+	switch key {
+	case "math/bits.Add64", "math/bits.Sub64", "math/bits.Mul64":
+		return strings.TrimPrefix(key, "math/bits."), true
+	}
+
+	return "", false
+}
+
+// FloatBits reads the key of a function of math that copies the bits of
+// a float into the unsigned integer of its width or back, which both
+// backends write in place of the call, as a move or as nothing: the
+// width, 64 or 32, and whether the copy is from the float to its bits.
+func FloatBits(key string) (width int, toBits bool, ok bool) {
+	switch key {
+	case "math.Float64bits":
+		return 64, true, true
+	case "math.Float64frombits":
+		return 64, false, true
+	case "math.Float32bits":
+		return 32, true, true
+	case "math.Float32frombits":
+		return 32, false, true
+	}
+
+	return 0, false, false
+}
+
 // HasSymbol reports whether fn is a function the program may name
 // where it does not call it, as a value or as what a task runs: every
 // function but the ones the compiler writes, which have no symbol to
-// name, and of those the functions of math/bits, which the runtime
-// defines as well.
+// name, and of those the functions of math/bits and the float bits of
+// math, which the runtime defines as well.
 func HasSymbol(fn *types.Func) bool {
 	key := Key(fn)
+	return key == "" || inPlace(key)
+}
+
+// inPlace reports whether key names a function both backends write in
+// place of a call as the processor's instructions or a copy, each with
+// a symbol too, for a value of it: the functions of math/bits and the
+// float bits of math.
+func inPlace(key string) bool {
 	_, _, bit := BitOp(key)
-	return key == "" || bit
+	_, wide := WideOp(key)
+	_, _, float := FloatBits(key)
+	return bit || wide || float
 }
 
 // Links returns the system libraries the bindings link, each once, in

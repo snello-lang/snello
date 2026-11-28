@@ -62,13 +62,6 @@ void sn_bufio_appendBytes(sn_slice_u8 *buf, sn_slice_u8 p) {
     b->len += p.len;
 }
 
-// sn_bufio_bytesOf lends the bytes of s as a view of a []byte, which
-// the program only reads.
-sn_slice_u8 sn_bufio_bytesOf(sn_string s) {
-    sn_check_string(s);
-    return (sn_slice_u8){ (uint8_t *)s.ptr, s.len, SN_VIEW };
-}
-
 // sn_bufio_slide moves the bytes of b from lo up to hi to its start,
 // where a buffer keeps what it has not handed out yet.
 void sn_bufio_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi) {

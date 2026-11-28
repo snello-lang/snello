@@ -29,6 +29,7 @@ const windows = "windows"
 var FunctionValues = map[string]string{
 	"sync":                 "Once.Do calls the function it is given",
 	"catch-across-threads": "testing.Catch calls the function it is given",
+	"map-task":             "Retain calls the function it is given",
 }
 
 // Bounded fails t for each spawn of the program name built at bin whose

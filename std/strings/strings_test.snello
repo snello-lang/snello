@@ -4,7 +4,7 @@
 
 package strings_test
 
-import ("bufio"; "expect"; "strings"; "testing")
+import ("bufio"; "expect"; "fmt"; "io"; "strings"; "testing"; "unicode/utf8")
 
 // Repeat writes a string n times, and refuses a negative count and one
 // whose result no int can measure.
@@ -206,4 +206,151 @@ func TestGrow() {
 	b.WriteString("grown")
 	expect.Equal(ref b.String(), "grown")
 	expect.Equal(ref b.Len(), ref 5)
+}
+
+// ContainsFunc says whether any rune satisfies the predicate.
+func TestContainsFunc() {
+	digit := func(r rune) bool { return r >= '0' && r <= '9' }
+	expect.True(strings.ContainsFunc("room 101", digit))
+	expect.False(strings.ContainsFunc("room", digit))
+	expect.False(strings.ContainsFunc("", digit))
+}
+
+// The Reader reads bytes and runes one at a time, steps back over the
+// last one, and seeks from the start, the current position and the end.
+func TestReaderBytesAndRunes() {
+	r := strings.NewReader("aé")
+	expect.Equal(ref expect.IsSome(r.ReadByte()), ref byte('a'))
+	expect.True(r.UnreadByte())
+	expect.Equal(ref expect.IsSome(r.ReadByte()), ref byte('a'))
+	c, width := expect.IsSome(r.ReadRune())
+	expect.Equal(ref c, ref 'é')
+	expect.Equal(ref width, ref 2)
+	expect.True(r.UnreadRune())
+	expect.False(r.UnreadRune()) // only the rune the last ReadRune returned
+	c, width = expect.IsSome(r.ReadRune())
+	expect.Equal(ref c, ref 'é')
+	expect.IsNone(r.ReadRune())
+	expect.IsNone(r.ReadByte())
+	expect.False(r.UnreadRune()) // after a read that returned nothing
+	expect.Equal(ref r.Len(), ref 0)
+	expect.True(r.UnreadByte()) // back over the last byte of é
+	expect.Equal(ref r.Len(), ref 1)
+	fresh := strings.NewReader("x")
+	expect.False(fresh.UnreadByte()) // nothing read yet
+	expect.False(fresh.UnreadRune())
+	bad := strings.NewReader("\xff")
+	c, width = expect.IsSome(bad.ReadRune()) // a byte that is not UTF-8: U+FFFD of width one
+	expect.Equal(ref c, ref utf8.RuneError)
+	expect.Equal(ref width, ref 1)
+}
+
+// Seek moves from the start, the current position and the end, fails
+// before the start and past what an int counts, and allows a position
+// past the end, where nothing is read and nothing can be unread.
+func TestReaderSeek() {
+	r := strings.NewReader("hello, world")
+	expect.Equal(ref expect.IsOk(r.Seek(io.Start(7))), ref u64(7))
+	expect.Equal(ref expect.IsSome(r.ReadByte()), ref byte('w'))
+	expect.Equal(ref expect.IsOk(r.Seek(io.Current(-1))), ref u64(7))
+	expect.Equal(ref expect.IsSome(r.ReadByte()), ref byte('w'))
+	expect.Equal(ref expect.IsOk(r.Seek(io.End(-5))), ref u64(7))
+	expect.Equal(ref r.Len(), ref 5)
+	expect.Equal(ref expect.IsOk(r.Seek(io.End(10))), ref u64(22)) // past the end: allowed, nothing to read
+	expect.Equal(ref r.Len(), ref 0)
+	expect.IsNone(r.ReadByte())
+	buf := make([]byte, 4)
+	expect.Equal(ref expect.IsOk(r.Read(mut buf)), ref 0)
+	expect.False(r.UnreadByte()) // past the end, nothing was read
+	expect.Equal(ref expect.IsErr(r.Seek(io.Current(-100))).Error(), "seek: negative position")
+	expect.Equal(ref expect.IsErr(r.Seek(io.Start(18446744073709551615))).Error(), "seek: position beyond what an int counts")
+	expect.Equal(ref expect.IsOk(r.Seek(io.Start(0))), ref u64(0))
+	expect.Equal(ref expect.IsSome(r.ReadByte()), ref byte('h'))
+	expect.True(r.UnreadByte())
+	expect.Equal(ref expect.IsOk(r.Seek(io.Start(0))), ref u64(0))
+	expect.False(r.UnreadByte()) // a seek forgets what was read
+}
+
+// The Replacer's three shapes: bytes to bytes, bytes to text, and text,
+// with the first pair winning a position, no overlapping matches, and
+// an empty old string placed before every rune and at the end, a pair
+// given after it matching at the same position too.
+func TestReplacer() {
+	swap := expect.IsSome(strings.NewReplacer("a", "b", "b", "a"))
+	expect.Equal(ref swap.Replace("abracadabra"), "barbcbdbarb")
+	expect.Equal(ref swap.Replace(""), "")
+	spread := expect.IsSome(strings.NewReplacer("a", "xx", "b", "", "é", "e"))
+	expect.Equal(ref spread.Replace("abcé"), "xxce") // é is two bytes, so this is the text kind too
+	drop := expect.IsSome(strings.NewReplacer("a", "xx", "b", ""))
+	expect.Equal(ref drop.Replace("abcab"), "xxcxx")
+	esc := expect.IsSome(strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;"))
+	expect.Equal(ref esc.Replace("a < b & c > d"), "a &lt; b &amp; c &gt; d")
+	expect.Equal(ref esc.Replace("plain"), "plain")
+	first := expect.IsSome(strings.NewReplacer("ab", "1", "a", "2"))
+	expect.Equal(ref first.Replace("abc abd"), "1c 1d") // the longer pair, given first, wins
+	shorter := expect.IsSome(strings.NewReplacer("a", "2", "ab", "1"))
+	expect.Equal(ref shorter.Replace("abc"), "2bc") // the pair given first wins, though shorter
+	chain := expect.IsSome(strings.NewReplacer("aaa", "x", "aa", "y"))
+	expect.Equal(ref chain.Replace("aaaaa"), "xy") // no overlap: the pass moves past a match
+	empty := expect.IsSome(strings.NewReplacer("", "-"))
+	expect.Equal(ref empty.Replace("abc"), "-a-b-c-")
+	expect.Equal(ref empty.Replace(""), "-")
+	emptyLast := expect.IsSome(strings.NewReplacer("b", "B", "", "-"))
+	expect.Equal(ref emptyLast.Replace("abc"), "-aB-c-") // b, given before the empty string, takes its position
+	emptyFirst := expect.IsSome(strings.NewReplacer("", "-", "b", "B"))
+	expect.Equal(ref emptyFirst.Replace("abc"), "-a-B-c-") // the empty string, given first, matches everywhere, and the later pair still matches after it
+	accent := expect.IsSome(strings.NewReplacer("", "-", "é", "e"))
+	expect.Equal(ref accent.Replace("é"), "-e-")
+	none := expect.IsSome(strings.NewReplacer())
+	expect.Equal(ref none.Replace("as is"), "as is")
+	expect.IsNone(strings.NewReplacer("odd"))
+	word := expect.IsSome(strings.NewReplacer("naïve", "naive", "ï", "i"))
+	expect.Equal(ref word.Replace("naïve ï"), "naive i")
+	five := expect.IsSome(strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&#34;", "'", "&#39;")) // five start bytes: past the four found a word at a time
+	expect.Equal(ref five.Replace(`<a href="x">it's & more</a>`), "&lt;a href=&#34;x&#34;&gt;it&#39;s &amp; more&lt;/a&gt;")
+	twice := expect.IsSome(strings.NewReplacer("a", "x", "a", "y")) // the first pair of a byte wins, in the table kind
+	expect.Equal(ref twice.Replace("aaa"), "xxx")
+	twiceText := expect.IsSome(strings.NewReplacer("ab", "x", "ab", "yy")) // and in the trie kind
+	expect.Equal(ref twiceText.Replace("abab"), "xx")
+	mixed := expect.IsSome(strings.NewReplacer("a", "xx", "a", "y", "b", "z")) // a losing pair of one byte for one does not change the kind
+	expect.Equal(ref mixed.Replace("abba"), "xxzzxx")
+}
+
+// ReadAt copies from an offset and leaves the position alone.
+func TestReaderReadAt() {
+	r := strings.NewReader("hello, world")
+	buf := make([]byte, 5)
+	expect.Equal(ref expect.IsOk(r.ReadAt(mut buf, 7)), ref 5)
+	expect.Equal(ref string(buf), "world")
+	expect.Equal(ref expect.IsOk(r.ReadAt(mut buf, 10)), ref 2) // short at the end
+	expect.Equal(ref expect.IsOk(r.ReadAt(mut buf, 12)), ref 0)
+	expect.Equal(ref expect.IsOk(r.ReadAt(mut buf, 18446744073709551615)), ref 0)
+	expect.Equal(ref r.Len(), ref 12) // nothing read from the position
+	expect.Equal(ref expect.IsSome(r.ReadByte()), ref byte('h'))
+}
+
+// A Builder is an io.Writer: fmt.Fprintf writes into it, io.WriteString
+// and io.Copy fill it, each byte appended once.
+func TestBuilderWriter() {
+	var b strings.Builder
+	fmt.Fprintf(mut b, "%d-%s", 7, "x")
+	expect.Equal(ref expect.IsOk(io.WriteString(mut b, "|y")), ref 2)
+	src := strings.NewReader("|z".Clone())
+	expect.Equal(ref expect.IsOk(io.Copy(mut b, mut src)), ref i64(2))
+	expect.Equal(ref expect.IsOk(b.Write(ref []byte{})), ref 0)
+	expect.Equal(ref b.String(), "7-x|y|z")
+	expect.Equal(ref b.Len(), ref 7)
+}
+
+// BenchmarkFprintf measures a short format written into a Builder as an
+// io.Writer.
+func BenchmarkFprintf() {
+	var b strings.Builder
+	for testing.Loop() {
+		if b.Len() > 1<<20 {
+			b.Reset()
+		}
+
+		fmt.Fprintf(mut b, "%d:%s;", 7, "v")
+	}
 }

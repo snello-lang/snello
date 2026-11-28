@@ -10,7 +10,9 @@
 // consumed when it owns its items; one made for the loop is dropped
 // after it, and an item the loop binds nothing to is dropped at once.
 // A map or channel type with Next is ranged as an iterator, and a
-// map's Entry walks its entries by place, from any place.
+// map's Entry walks its entries by place, from any place. A collection
+// with Iter is ranged lent through it: range ref b, and range b with b
+// a borrow, walk b.Iter().
 
 package main
 
@@ -136,4 +138,19 @@ func main() {
 	}
 
 	fmt.Println(total, len(b.xs))
+	for _, s := range ref b {
+		fmt.Println("lent", s)
+	}
+
+	fmt.Println(count(ref b))
+}
+
+// count walks a lent bag without naming its Iter.
+func count(b ref Bag) int {
+	n := 0
+	for range b {
+		n++
+	}
+
+	return n
 }

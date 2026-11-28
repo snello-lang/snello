@@ -263,8 +263,23 @@ type Named struct {
 // NewPointer returns the type *elem.
 func NewPointer(elem Type) *Pointer { return &Pointer{elem} }
 
-// NewRef returns the type ref elem, or mut elem.
-func NewRef(elem Type, mut bool) *Ref { return &Ref{elem, mut} }
+// NewRef returns the type ref elem, or mut elem when mut says so. A ref
+// of a borrow is a borrow of its target, ref (ref T) and ref (mut T)
+// both ref T: a ref of a borrow is a copy of a pointer that cannot
+// change what it points at, and gives nothing the borrow itself does
+// not, so the two are one type. A mut of a borrow is never written,
+// which typexpr refuses; the compiler makes mut (ref T) for a borrow
+// reached through a mut borrow of the place holding it, m ?? return
+// with m a mut (ref T?), and a type parameter standing for a borrow
+// under mut T makes one too, which the borrow pass checks as any mut
+// borrow of a place.
+func NewRef(elem Type, mut bool) *Ref {
+	if r, ok := elem.(*Ref); ok && !mut {
+		return &Ref{r.elem, false}
+	}
+
+	return &Ref{elem, mut}
+}
 
 // NewOption returns the type elem?.
 func NewOption(elem Type) *Option { return &Option{elem} }

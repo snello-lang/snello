@@ -4,7 +4,7 @@
 
 package set_test
 
-import ("expect"; "fmt"; "set"; "testing")
+import ("expect"; "fmt"; "iter"; "set"; "testing")
 
 // Insert, Contains and Remove keep each value once, and a value
 // inserted again after its removal goes to the end of the order.
@@ -75,4 +75,79 @@ func TestRemovedValuesAreSkipped() {
 	}
 
 	expect.Equal(ref fmt.Sprint(seen), "[1 2 4]")
+}
+
+// Union, Intersection, Difference and SymmetricDifference change a set
+// by another, which they use up: the order is the first set's, with
+// new values at the end.
+func TestAlgebra() {
+	a := set.From([]string{"a".Clone(), "b".Clone(), "c".Clone()})
+	a.Union(set.From([]string{"c".Clone(), "d".Clone()}))
+	expect.Equal(ref fmt.Sprint(a), "set[a b c d]")
+	a.Intersection(set.From([]string{"d".Clone(), "b".Clone(), "z".Clone()}))
+	expect.Equal(ref fmt.Sprint(a), "set[b d]")
+	a.Difference(set.From([]string{"d".Clone(), "q".Clone()}))
+	expect.Equal(ref fmt.Sprint(a), "set[b]")
+	a.SymmetricDifference(set.From([]string{"b".Clone(), "e".Clone()}))
+	expect.Equal(ref fmt.Sprint(a), "set[e]")
+	b := set.From([]int{1, 2})
+	b.Union(set.New<int>())
+	expect.Equal(ref fmt.Sprint(b), "set[1 2]")
+	b.Intersection(set.New<int>())
+	expect.True(b.IsEmpty())
+	b.Union(set.From([]int{3}))
+	expect.Equal(ref fmt.Sprint(b), "set[3]")
+}
+
+// Clone gives an algebra method a copy, so the set given stays.
+func TestClone() {
+	a := set.From([]string{"x".Clone()})
+	b := set.From([]string{"y".Clone()})
+	a.Union(set.Clone(ref b))
+	expect.Equal(ref fmt.Sprint(a), "set[x y]")
+	expect.Equal(ref fmt.Sprint(b), "set[y]")
+	expect.True(set.Clone(ref set.New<int>()).IsEmpty())
+}
+
+// IsSubset, IsSuperset and IsDisjoint compare two sets; the empty set
+// is a subset of, and disjoint from, every set.
+func TestComparisons() {
+	a := set.From([]int{1, 2, 3})
+	b := set.From([]int{2, 3})
+	c := set.From([]int{4})
+	expect.True(b.IsSubset(ref a))
+	expect.False(a.IsSubset(ref b))
+	expect.True(a.IsSuperset(ref b))
+	expect.False(b.IsSuperset(ref a))
+	expect.True(a.IsSubset(ref a))
+	expect.False(c.IsSubset(ref a))
+	empty := set.New<int>()
+	expect.True(empty.IsSubset(ref c))
+	expect.True(empty.IsDisjoint(ref c))
+	expect.True(c.IsDisjoint(ref a))
+	expect.True(a.IsDisjoint(ref c)) // the larger first: the smaller is walked
+	expect.False(a.IsDisjoint(ref b))
+	expect.False(b.IsDisjoint(ref a))
+}
+
+// FromIter and Extend take the items of an iterator, each once, and
+// Retain keeps the values a function says yes to, in their order.
+func TestFromIterExtendRetain() {
+	xs := []int{5, 1, 5, 2}
+	s := set.FromIter(mut iter.Over(ref xs).Map(owned))
+	expect.Equal(ref fmt.Sprint(s), "set[5 1 2]")
+	more := []int{2, 7}
+	s.Extend(mut iter.Over(ref more).Map(owned))
+	expect.Equal(ref fmt.Sprint(s), "set[5 1 2 7]")
+	s.Retain(func(v ref int) bool { return *v%2 == 1 })
+	expect.Equal(ref fmt.Sprint(s), "set[5 1 7]")
+	s.Retain(func(v ref int) bool { return false })
+	expect.True(s.IsEmpty())
+	expect.True(s.Insert(9))
+	expect.Equal(ref fmt.Sprint(s), "set[9]")
+}
+
+// owned copies a lent int, for a Map to owned items.
+func owned(x ref int) int {
+	return *x
 }

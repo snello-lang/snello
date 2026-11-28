@@ -118,6 +118,45 @@ func TestGrow() {
 	expect.Equal(ref b.String(), "fits")
 }
 
+// Cap is the slice's capacity, read bytes included, and Available the
+// room after the bytes written; Grow makes room, a write takes it, and
+// reading changes neither until the read bytes are dropped.
+func TestCapAndAvailable() {
+	var b bytes.Buffer
+	expect.Equal(ref b.Cap(), ref 0)
+	expect.Equal(ref b.Available(), ref 0)
+	b.Grow(64)
+	expect.True(b.Cap() >= 64)
+	expect.Equal(ref b.Available(), ref b.Cap())
+	b.WriteString("twelve bytes")
+	expect.Equal(ref b.Available(), ref b.Cap()-12)
+	expect.IsSome(b.ReadByte())
+	expect.Equal(ref b.Len(), ref 11)
+	expect.Equal(ref b.Available(), ref b.Cap()-12) // a read frees nothing by itself
+	room := b.Available()
+	for i := 0; i < room; i++ {
+		b.WriteByte('x')
+	}
+
+	expect.Equal(ref b.Available(), ref 0)
+	before := b.Cap()
+	b.WriteByte('y') // full, with one byte read: too few to drop, so the slice grows
+	expect.True(b.Cap() > before)
+	expect.Equal(ref b.Len(), ref before)
+	mostlyRead := bytes.NewBuffer(make([]byte, 8, 8))
+	for i := 0; i < 6; i++ {
+		expect.IsSome(mostlyRead.ReadByte())
+	}
+
+	mostlyRead.WriteByte('z') // full, with most bytes read: they are dropped and the capacity stays
+	expect.Equal(ref mostlyRead.Cap(), ref 8)
+	expect.Equal(ref mostlyRead.Len(), ref 3)
+	expect.Equal(ref mostlyRead.Available(), ref 5)
+	held := bytes.NewBuffer(make([]byte, 3, 10))
+	expect.Equal(ref held.Cap(), ref 10)
+	expect.Equal(ref held.Available(), ref 7)
+}
+
 // A Grow drops the bytes that were read, so nothing is put back after
 // one: the Buffer holds what it held.
 func TestGrowEndsUnread() {

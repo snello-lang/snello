@@ -784,10 +784,114 @@ func (xs mut []T) Truncate(n int)
 // the same bytes.
 func (b ref []byte) Equal(o ref []byte) bool
 
-// Find returns the offset of the first run of bytes equal to sub, lent,
-// or None when there is none; an empty sub is found at 0. Index finds
+// Find returns the offset of the first run of bytes equal to t, lent,
+// or None when there is none; an empty t is found at 0. Index finds
 // one byte, as it finds one element of any slice.
-func (b ref []byte) Find(sub ref []byte) int?
+func (b ref []byte) Find(t ref []byte) int?
+
+// FindLast returns the offset of the last run of bytes equal to t,
+// lent, or None when there is none; an empty t is found at len(b).
+func (b ref []byte) FindLast(t ref []byte) int?
+
+// Count returns how many runs of bytes equal to t, lent, b holds, none
+// overlapping; an empty t counts one more than the UTF-8 sequences in
+// b, as the string's Count does.
+func (b ref []byte) Count(t ref []byte) int
+
+// HasPrefix reports whether b starts with the bytes of t, lent.
+func (b ref []byte) HasPrefix(t ref []byte) bool
+
+// HasSuffix reports whether b ends with the bytes of t, lent.
+func (b ref []byte) HasSuffix(t ref []byte) bool
+
+// Trim lends the bytes of b without the white space at either end, the
+// runes unicode.IsSpace reports, read as UTF-8; the borrow is b's.
+func (b ref []byte) Trim() ref []byte
+
+// TrimSpace lends the bytes of b without the white space at either
+// end, as Trim does.
+func (b ref []byte) TrimSpace() ref []byte
+
+// TrimPrefix lends the bytes of b after the prefix p, lent, or all of b
+// when b does not start with p.
+func (b ref []byte) TrimPrefix(p ref []byte) ref []byte
+
+// TrimSuffix lends the bytes of b before the suffix p, lent, or all of
+// b when b does not end with p.
+func (b ref []byte) TrimSuffix(p ref []byte) ref []byte
+
+// ToUpper returns a new slice with every letter of b, read as UTF-8,
+// in upper case, as the string's ToUpper maps it; a byte that is not
+// UTF-8 becomes the replacement rune U+FFFD, as it does there.
+func (b ref []byte) ToUpper() []byte
+
+// ToLower returns a new slice with every letter of b, read as UTF-8,
+// in lower case, as the string's ToLower maps it; a byte that is not
+// UTF-8 becomes the replacement rune U+FFFD, as in ToUpper.
+func (b ref []byte) ToLower() []byte
+
+// Fields lends the runs of b between white space, the runes
+// unicode.IsSpace reports, read as UTF-8, as a slice of views into b;
+// nothing is copied.
+func (b ref []byte) Fields() []ref []byte
+
+// Lines lends the lines of b, each without its newline and a carriage
+// return before it, as a slice of views into b; a last line without a
+// newline is a line, whole to a carriage return that ends it, and a
+// trailing newline makes no empty one.
+func (b ref []byte) Lines() []ref []byte
+
+// Split lends the runs of b between each sep, lent, as a slice of
+// views into b; an empty sep splits after every UTF-8 sequence.
+func (b ref []byte) Split(sep ref []byte) []ref []byte
+
+// SplitN is Split giving at most n views, the last holding the rest;
+// an n of zero or less gives none.
+func (b ref []byte) SplitN(sep ref []byte, n int) []ref []byte
+
+// SplitOnce lends the bytes before and after the first sep, lent, or
+// returns None when b holds no sep.
+func (b ref []byte) SplitOnce(sep ref []byte) (ref []byte, ref []byte)?
+
+// SplitAfter lends the pieces of b cut after each sep, lent, each piece
+// but the last ending with sep, as the string's SplitAfter cuts.
+func (b ref []byte) SplitAfter(sep ref []byte) []ref []byte
+
+// SplitAfterN is SplitAfter giving at most n views, the last holding
+// the rest; an n of zero or less gives none.
+func (b ref []byte) SplitAfterN(sep ref []byte, n int) []ref []byte
+
+// ContainsAny reports whether any rune of chars, read as UTF-8, is in
+// b, read the same way.
+func (b ref []byte) ContainsAny(chars ref []byte) bool
+
+// IndexAny returns the offset of the first rune of b that is one of the
+// runes of chars, both read as UTF-8, or None when there is none; a
+// byte that is not UTF-8 reads as U+FFFD on both sides.
+func (b ref []byte) IndexAny(chars ref []byte) int?
+
+// LastIndexAny returns the offset of the last rune of b that is one of
+// the runes of chars, or None when there is none.
+func (b ref []byte) LastIndexAny(chars ref []byte) int?
+
+// TrimLeft lends b without the runes at its start that are in cutset,
+// both read as UTF-8; an empty cutset trims nothing.
+func (b ref []byte) TrimLeft(cutset ref []byte) ref []byte
+
+// TrimRight lends b without the runes at its end that are in cutset.
+func (b ref []byte) TrimRight(cutset ref []byte) ref []byte
+
+// TrimAny lends b without the runes at either end that are in cutset:
+// TrimLeft and TrimRight in one.
+func (b ref []byte) TrimAny(cutset ref []byte) ref []byte
+
+// CutPrefix lends the bytes of b after p, lent, at its start, or
+// returns None when b does not start with p.
+func (b ref []byte) CutPrefix(p ref []byte) (ref []byte)?
+
+// CutSuffix lends the bytes of b before p, lent, at its end, or returns
+// None when b does not end with p.
+func (b ref []byte) CutSuffix(p ref []byte) (ref []byte)?
 
 // Get lends the value under k, or None when the key is absent. The
 // borrow lives as long as the map's, and the lookup costs constant
@@ -834,6 +938,16 @@ func (m mut map[K]V) GetOrInsert(k K, v V) mut V
 // so; Entry is for a type built over a map that walks them itself, as
 // set's Iter does, from 0 and from each place found plus one.
 func (m ref map[K]V) Entry(i int) (int, ref K, ref V)?
+
+// Retain calls keep once for each entry, in insertion order, and drops
+// every entry for which keep returns false; the entries that stay keep
+// their order. keep is given the key lent and the value lent mut, so it
+// may change a value that stays. The map holds keep for the call alone.
+// No key is hashed or compared: an entry dropped is taken out at its
+// place.
+//
+//	counts.Retain(func(word ref string, n mut int) bool { return *n > 1 })
+func (m mut map[K]V) Retain(keep func(ref K, mut V) bool)
 
 // Clone returns another handle on the same channel, of the same
 // direction, to hand to another task: a channel handle is owned,
@@ -897,8 +1011,8 @@ func (s ref string) ToLower() string
 
 // Lines lends the lines of the string, split at each newline and
 // without it, nor a carriage return before it; a last line without a
-// newline is a line, and a trailing newline does not make an empty
-// one. A range over them yields each as a ref string into s, with
+// newline is a line, whole to a carriage return that ends it, and a
+// trailing newline does not make an empty one. A range over them yields each as a ref string into s, with
 // nothing copied but the slice of borrows itself.
 //
 //	for line := range text.Lines() { ... }
@@ -988,6 +1102,78 @@ func (s ref string) TrimSpace() ref string
 //
 //	"k=v=w".SplitN("=", 2) // "k", "v=w"
 func (s ref string) SplitN(sep ref string, n int) []ref string
+
+// SplitAfter lends the pieces of the string cut after each sep, so that
+// each piece but the last ends with sep and the pieces join back to the
+// string; an empty sep gives each UTF-8 sequence, as Split does.
+//
+//	"a,b,c".SplitAfter(",") // "a,", "b,", "c"
+func (s ref string) SplitAfter(sep ref string) []ref string
+
+// SplitAfterN is SplitAfter giving at most n pieces, the last holding
+// the rest; an n of zero or less gives none.
+func (s ref string) SplitAfterN(sep ref string, n int) []ref string
+
+// ContainsAny reports whether any rune of chars is in the string; no
+// rune of an empty chars is.
+func (s ref string) ContainsAny(chars ref string) bool
+
+// IndexAny returns the byte offset of the first rune of the string that
+// is one of the runes of chars, or None when there is none; a byte that
+// is not UTF-8 is read as U+FFFD on both sides, so a chars holding
+// U+FFFD finds such a byte, as a range over the string reads it.
+//
+//	"key: value".IndexAny(":=") // Some(3)
+func (s ref string) IndexAny(chars ref string) int?
+
+// LastIndexAny returns the byte offset of the last rune of the string
+// that is one of the runes of chars, or None when there is none.
+func (s ref string) LastIndexAny(chars ref string) int?
+
+// IndexByte returns the offset of the first byte c in the string, or
+// None when there is none.
+func (s ref string) IndexByte(c byte) int?
+
+// LastIndexByte returns the offset of the last byte c in the string, or
+// None when there is none.
+func (s ref string) LastIndexByte(c byte) int?
+
+// TrimLeft lends the string without the runes at its start that are in
+// cutset, with nothing copied; an empty cutset trims nothing. Trim with
+// no cutset trims white space.
+//
+//	"  --x".TrimLeft(" -") // "x"
+func (s ref string) TrimLeft(cutset ref string) ref string
+
+// TrimRight lends the string without the runes at its end that are in
+// cutset, with nothing copied.
+func (s ref string) TrimRight(cutset ref string) ref string
+
+// TrimAny lends the string without the runes at either end that are in
+// cutset, with nothing copied: TrimLeft and TrimRight in one.
+//
+//	`"quoted"`.TrimAny(`"`) // quoted
+func (s ref string) TrimAny(cutset ref string) ref string
+
+// CutPrefix lends the string after p at its start, or returns None
+// when the string does not start with p; every string starts with "".
+// It is TrimPrefix as a question, the rest or None, where TrimPrefix
+// gives the whole string back when p is not there.
+//
+//	if rest := line.CutPrefix("--") { ... }
+func (s ref string) CutPrefix(p ref string) ref string?
+
+// CutSuffix lends the string before p at its end, or returns None when
+// the string does not end with p.
+func (s ref string) CutSuffix(p ref string) ref string?
+
+// Bytes lends the bytes of the string as a slice, with nothing copied:
+// the view an io.Writer is handed, where []byte(s) makes a copy the
+// writer only reads. The borrow is the string's, so the slice cannot be
+// changed or kept past it.
+//
+//	w.Write(s.Bytes())?
+func (s ref string) Bytes() ref []byte
 
 // IsDigit reports whether the byte is an ASCII decimal digit, '0' to
 // '9'. A byte above 127 is no digit; text beyond ASCII is read by its

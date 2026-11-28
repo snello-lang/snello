@@ -36,6 +36,22 @@ Growing and shrinking are methods, since a slice owns its elements and the metho
 | `xs.Sort()`, `xs.SortBy(less)` | Sort in place, keeping equal elements in their order; `Sort` orders numbers and strings, `SortBy` takes the ordering as a function |
 | `xs.Clone()` | A new slice holding a copy of every element |
 
+The `slices` package adds what these do not, as functions over a slice lent, `ref xs`, or lent for changing, `mut xs`, since a method on `[]T` is the language's:
+
+| Function | What it does |
+|---|---|
+| `slices.IndexBy(ref xs, f)`, `slices.ContainsBy(ref xs, f)` | The position of the first element `f` says yes to, as `int?`, and whether there is one |
+| `slices.Min(ref xs)`, `slices.Max(ref xs)` | The least and the greatest element by `Cmp`, as `ref T?` |
+| `slices.Equal(ref xs, ref ys)` | Whether two slices hold the same elements in the same order |
+| `slices.Retain(mut xs, keep)` | Drops the elements `keep` refuses, in place, keeping the order |
+| `slices.Dedup(mut xs)` | Drops each element equal to the one before it, so a sorted slice holds each value once |
+| `slices.Fill(mut xs, ref v)` | Sets every element to a clone of `v` |
+| `slices.Concat(ref a, ref b, ...)`, `slices.Repeat(ref xs, n)` | A new slice of clones of the elements, joined, or repeated `n` times |
+| `slices.Chunks(ref xs, n)`, `slices.Windows(ref xs, n)` | Walks over the slice in pieces of `n`, and over every run of `n` neighbours, each piece lent |
+| `slices.EachChunk(mut xs, n, f)` | Gives `f` each piece of `n` lent for changing, since a walk cannot lend for changing |
+
+`sort` orders and searches: `sort.Sort(mut xs)` and `sort.SortBy(mut xs, less)`, `sort.Search(ref xs, ref x)` on a sorted slice and `sort.SearchBy(ref xs, cmp)` with the order as a function, and `sort.IsSorted`.
+
 `Push`, `Pop`, `Insert`, `Remove`, `RemoveValue`, `Clear`, `Swap`, `Reverse`, `Sort`, `Extend` and `Truncate` change the slice, so they need it owned or lent with `mut`; through a `ref` they are an error. `Swap` is how an algorithm moves elements it does not own a copy of: Go's `xs[i], xs[j] = xs[j], xs[i]` would move each element out of the slice, which is refused for a type that is not `Copy`, `cannot move xs[j] out of the slice`. The core tree uses most of them:
 
 ```go
@@ -58,7 +74,7 @@ func (b mut Bag) bump() {
 
 Ranging over an owned slice by value moves each element out, as chapter 5 describes, which is how `wordfreq` turns a map into a list.
 
-Two slices do not compare with `==`: equality of a list is a question with more than one answer. Elements compare, which is what `Contains`, `RemoveValue` and `Index` use, so their element must be `Eq`, or a slice of such elements, which they compare element by element, or a borrow of one, as the pieces `Split` gives are; `Sort` needs `Ord`, and `Extend` and `Clone` need `Clone`, and the compiler says so at the call: `Contains needs the elements to be Eq: Point is not`. A `[]byte` has two methods of its own: `b.Equal(o)` compares the bytes of two, and `b.Find(sub)` gives the offset of a run of bytes, `int?`, by the search `s.Index` makes; `b.Index(c)` finds one byte, as `Index` finds one element of any slice.
+Two slices do not compare with `==`: equality of a list is a question with more than one answer, and `slices.Equal(ref xs, ref ys)` gives the usual one, element by element. Elements compare, which is what `Contains`, `RemoveValue` and `Index` use, so their element must be `Eq`, or a slice of such elements, which they compare element by element, or a borrow of one, as the pieces `Split` gives are; `Sort` needs `Ord`, and `Extend` and `Clone` need `Clone`, and the compiler says so at the call: `Contains needs the elements to be Eq: Point is not`. A `[]byte` has the string's text methods of its own, chapter 19: `b.Equal(o)` compares the bytes of two, `b.Find(sub)` and `b.FindLast(sub)` give the offset of a run of bytes, `int?`, by the search `s.Index` makes, and `Count`, `HasPrefix`, `HasSuffix`, the trims, `ToUpper`, `ToLower`, `Fields`, `Lines`, `Split`, `SplitN` and `SplitOnce` work on the bytes as on a string; `b.Index(c)` and `b.Contains(c)` find one byte, as they find one element of any slice.
 
 ## Strings
 
@@ -69,15 +85,21 @@ Operations on text are methods. Most return views into the string, which cost no
 | Method | Returns |
 |---|---|
 | `s.Len()` | The length in bytes, like `len(s)` |
+| `s.Bytes()` | The bytes as a `ref []byte`, a view with nothing copied: what an `io.Writer` is handed, where `[]byte(s)` copies |
 | `s.Trim()` | `s` without white space at either end, as a borrow: Go's `strings.TrimSpace` |
 | `s.Fields()` | The pieces between white space, each a borrow; use it in a `for` |
 | `s.Lines()` | The lines, without their newline or a carriage return before it, each a borrow; a last line without a newline counts, a trailing newline makes no empty one. Go's `strings.Lines` keeps each newline |
 | `s.Split(sep)` | The pieces between each `sep`, likewise; an empty `sep` gives each UTF-8 sequence, and none of an empty string |
 | `s.SplitOnce(sep)` | The parts before and after the first `sep`, as `(ref string, ref string)?` |
 | `s.SplitN(sep, n)` | At most `n` pieces, the last holding the rest; zero or less gives none, since `Split` is the name for all |
+| `s.SplitAfter(sep)`, `s.SplitAfterN(sep, n)` | The same cuts made after each `sep`, so each piece but the last keeps it and the pieces join back to `s` |
 | `s.TrimSpace()` | The same as `Trim`, under Go's name |
 | `s.TrimPrefix(p)`, `s.TrimSuffix(p)` | `s` without `p` at its start or end, as a borrow; `s` itself when `p` is not there |
+| `s.CutPrefix(p)`, `s.CutSuffix(p)` | The rest after `p` at the start, or before `p` at the end, as `ref string?`: `None` when `p` is not there, so `if rest := line.CutPrefix("--") { ... }` says whether it cut |
+| `s.TrimLeft(cutset)`, `s.TrimRight(cutset)`, `s.TrimAny(cutset)` | `s` without the runes of `cutset` at its start, its end, or both, as a borrow: `line.TrimAny(" -")` strips spaces and dashes from both ends |
 | `s.Index(t)`, `s.LastIndex(t)` | The offset of the first or last `t`, as `int?`: `None` when it is not there |
+| `s.IndexAny(chars)`, `s.LastIndexAny(chars)`, `s.ContainsAny(chars)` | The offset of the first or last rune that is one of the runes of `chars`, as `int?`, and whether there is one: `line.IndexAny(":=")` finds the first of either |
+| `s.IndexByte(c)`, `s.LastIndexByte(c)` | The offset of the first or last byte `c`, as `int?` |
 | `s.Count(t)` | How many times `t` occurs without overlapping; an empty `t` counts the runes plus one |
 | `s.Replace(old, new, n)`, `s.ReplaceAll(old, new)` | A new, owned string with the first `n`, or every, `old` replaced; `n` of zero or less replaces none |
 | `s.HasPrefix(t)`, `s.HasSuffix(t)`, `s.Contains(t)` | Whether `t` begins, ends or appears in `s` |
@@ -115,6 +137,7 @@ The methods say what happens to the entry:
 | `m.GetOrInsert(k, v)` | The value under `k` as a `mut V`, storing `v` first when the key is absent; one lookup either way, and `k` and `v` are dropped when the key is there |
 | `m.Remove(k)` | Takes the entry out and returns its value as `V?` |
 | `m.Contains(k)` | Whether the key is there |
+| `m.Retain(keep)` | Calls `keep(ref k, mut v)` once per entry, in order, and drops every entry it returns false for; a kept value may be changed |
 | `m.Clone()` | A new map with a clone of every entry; its keys and values must be `Clone` |
 
 `GetOrInsert` is the counter's method when `m[k] += 1` will not do, a value with no zero value or one to build only once: `*groups.GetOrInsert(key, 0) += 1`.
@@ -131,9 +154,13 @@ A key is any type that is `Eq` and `Hash` (chapter 11): numbers, strings, boolea
 
 Two maps do not compare with `==`, for the same reason two slices do not.
 
+The `maps` package walks and fills a map: `maps.Keys(ref m)` and `maps.Values(ref m)` are walks over the keys or the values alone, lending each in insertion order, with the adapters of chapter 31, `maps.Keys(ref ages).Map(clone).Collect()`; `maps.Extend(mut m, mut it)` adds the pairs an iterator gives, a key already there taking the new value, and `maps.FromIter(mut it)` makes a map of them.
+
 ## Deques and sets
 
 Two collections of the standard library stand beside the slice and the map. A `deque.Deque<T>` is a queue with two ends: `PushBack` and `PopFront` make a queue, `PushBack` and `PopBack` a stack, and `Front`, `Back` and `Get` read without removing. Each takes constant time, a push amortized over the doubling of the buffer, since the elements lie in a ring over one buffer, where a slice used as a queue moves every remaining element down on each `Remove(0)`. A deque has no zero value, since it frees its buffer when it goes: one comes from `deque.New<T>()` or `deque.WithCapacity<T>(n)`. A deque prints as `deque[a b c]` and a set as `set[a b c]`.
+
+The middle is reached too: `d.Insert(i, v)` and `d.Remove(i)` move the shorter side of the ring, at most half the elements, where a slice moves everything after `i`; an `i` past either end clamps for `Insert` and gives `None` for `Remove`. `d.Rotate(n)` turns the deque `n` places toward the back, the last `n` elements coming round to the front, a negative `n` the other way, by moving the fewer elements; a full ring moves none. `d.Truncate(n)` keeps the first `n`, `d.Retain(keep)` drops the elements `keep` refuses in one pass, `d.Extend(mut it)` adds an iterator's items at the back, and `deque.Contains(ref d, ref v)` and `deque.Index(ref d, ref v)` find an element by `Eq`, functions since they ask more of `T` than the type does. A range over the deque lent `mut` changes the elements in place: `for v := range mut d { *v *= 2 }`.
 
 ```go
 queue := deque.New<NodeID>()
@@ -145,6 +172,9 @@ for {
 ```
 
 A `set.Set<T>` holds each value once, for a `T` that is `Eq` and `Hash` as a map's key is. `Insert` adds a value and reports whether it was new, `Contains` asks, `Remove` takes one out and reports whether it was there, and `set.From(xs)` makes one from a slice. It is a map of the values to nothing, as Go writes `map[T]struct{}`, so it costs what the map costs.
+`set.FromIter(mut it)` and `s.Extend(mut it)` take the items of an iterator of owned values, and `s.Retain(keep)` drops the values `keep` refuses.
+
+The algebra changes a set in place by another set, which it takes and uses up, moving the values and copying nothing: `a.Union(b)` adds `b`'s values, `a.Intersection(b)` keeps only the values `b` holds too, `a.Difference(b)` removes the values `b` holds, and `a.SymmetricDifference(b)` leaves the values held by exactly one of the two. After the call `b` is gone; to keep it, give a copy, `a.Union(set.Clone(ref b))`, so the one copy a program pays is written where it is paid. `a.IsSubset(ref b)`, `a.IsSuperset(ref b)` and `a.IsDisjoint(ref b)` compare two sets and change neither. A walk over what two sets share is a loop: `for v := range b.Iter() { if a.Contains(v) { ... } }`.
 
 ```go
 seen := set.New<string>()
@@ -155,7 +185,23 @@ for _, w := range ref words {
 }
 ```
 
-Both are walked with `range` over their `Iter`, which lends each element for the loop: `for v := range d.Iter()` from front to back, and `for v := range s.Iter()` in the order the values were inserted. A walk over a collection is a value with a `Next` method, chapter 3, and the loop holds the collection lent until it ends, so the body reads it and cannot change it.
+Both are walked with `range` over the collection lent, which lends each element for the loop: `for v := range ref d` from front to back, and `for v := range ref s` in the order the values were inserted. A walk over a collection is a value with a `Next` method, chapter 3, which the collection's `Iter` gives and `range ref` calls for it, as `range mut` calls `IterMut` where the type has one; `d.Iter()` is written out when adapters follow it, `d.Iter().Filter(f)`. The loop holds the collection lent until it ends, so the body reads it and cannot change it.
+
+## Ordered maps and sets
+
+A `map[K]V` finds a key in constant time and keeps its entries in the order they were inserted. When the keys themselves must stay in order, least first, `btree.Map<K, V>` and `btree.Set<T>` do, for a `K` or `T` that is `Ord`: a range over either walks the keys in the order of their `Cmp`, `First` and `Last` read the ends, `PopFirst` and `PopLast` take them, and `Range(from, to)` and `From(key)` walk from a given key. The price is `O(log n)` comparisons per lookup instead of one hash, which for a million keys is about twenty.
+
+```go
+ranks := btree.New<string, int>()
+ranks.Insert("pear".Clone(), 3)
+ranks.Insert("apple".Clone(), 1)
+if old := ranks.Insert("pear".Clone(), 30) { ... } // Some(3): the key was there
+for name, rank := range ref ranks { ... }           // apple 1, then pear 30
+for name, rank := range ranks.Range("b", "q") { ... } // from b up to but not q
+first := ranks.First() ?? return                   // (ref "apple", ref 1)
+```
+
+`Insert` returns the value a key had, or `None` when the key is new; `Get`, `GetMut`, `Contains` and `Remove` are the hash map's, each `O(log n)`. A map has no zero value, since it frees its nodes when it goes: one comes from `btree.New<K, V>()`, and a set from `btree.NewSet<T>()`. A map prints as `map[apple:1 pear:30]`, in key order. A `btree.Set<T>` is the same over values alone: `Insert` reports whether the value was new, `Remove` whether it was there, and it prints as `set[1 3 5]`. Both are B-trees: a node is one block of up to fifteen keys, an inner node's keys each beside the child before it, every leaf at the same depth, a scan of each node's keys on the way down with the last key first, so keys that arrive in order pass each node in one comparison, and no node moved on a change but the one that splits or merges. Chapter 14 names what each operation costs.
 
 ## Arrays
 

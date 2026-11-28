@@ -13,10 +13,11 @@
 // reads bytes, and the transformations as functions, for a call that
 // reads better that way or a function value to pass along.
 //
-// Every parameter here is a borrow, ref string, but NewReader's: a call
-// lends its argument and gets a new string back, and the argument stays
-// with its owner. NewReader takes the string, so that the Reader can be
-// held by what reads it.
+// Every parameter here is a borrow, ref string, but NewReader's and
+// NewReplacer's: a call lends its argument and gets a new string back,
+// and the argument stays with its owner. NewReader takes the string, so
+// that the Reader can be held by what reads it, and NewReplacer copies
+// its pairs, so that a Replacer is built once and kept.
 package strings
 
 import (
@@ -24,6 +25,25 @@ import (
 	"math"
 	"unicode/utf8"
 )
+
+// nothingToUnread is the Reader's width of the last rune when no
+// ReadRune can be undone.
+const nothingToUnread int = -1
+
+// none marks a Replacer's table entry or trie node that stands for no
+// pair.
+const none int = -1
+
+// The kinds of Replacer, chosen by the shape of the pairs: every old
+// string one byte and every new one too, every old string one byte, or
+// any longer.
+const byteToByte int = 0
+const byteToText int = 1
+const text int = 2
+
+// byteValues is how many values a byte has, the size of the Replacer's
+// tables indexed by a byte.
+const byteValues int = 256
 
 // A Builder accumulates text piece by piece and gives it back as one
 // string, cheaper than joining with + at every step, which copies the
@@ -36,8 +56,9 @@ import (
 //
 // A Builder owns the bytes it holds and is passed mut to be written
 // to. Its buffer grows as a slice's does, doubling, so n bytes written
-// one piece at a time cost O(n) in all.
-struct Builder {
+// one piece at a time cost O(n) in all. It is an io.Writer, so
+// fmt.Fprintf writes into it and io.Copy fills it.
+struct Builder impl io.Writer {
 	buf []byte
 }
 
@@ -49,9 +70,67 @@ struct Builder {
 //
 //	r := strings.NewReader("one\ntwo")
 //	sc := bufio.NewScanner(mut r)
-struct Reader impl io.Reader {
-	s  string
-	at int // the bytes before at have been read
+struct Reader impl io.Reader, io.Seeker, io.ReaderAt {
+	s             string
+	at            int // the bytes before at have been read; Seek may put it past the end
+	lastRuneWidth int // the width of the rune the last ReadRune returned, which UnreadRune steps back over, or nothingToUnread
+}
+
+// A Replacer replaces several old strings by their new ones in one pass
+// over a text: at each position the first pair, in the order given,
+// whose old string starts there replaces it, and the pass moves past
+// what it replaced, so matches never overlap. It is built once by
+// NewReplacer, which copies the pairs, and used as often as wanted:
+//
+//	esc := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;") ?? return
+//	esc.Replace("a < b & c") // "a &lt; b &amp; c"
+//
+// Three shapes of pairs take three paths: every old and every new one
+// byte, a table of 256 bytes mapped over a copy of the text; every old
+// one byte, a table saying which pair a byte is;
+// and otherwise a trie of the old strings, its root a table of 256,
+// entered only at a byte some old string starts with, found a word at
+// a time, the rest of the text copied in runs.
+struct Replacer {
+	pairs  []pair // old and new, in the order given, owned
+	starts []byte // a byteValues table: 1 at each byte an old string starts with
+	firsts []byte // the bytes old strings start with, each once, in the order met
+	root   []int  // a byteValues table, for the text kind: the trie node one byte from the root, or none
+	leaves []int  // a byteValues table, for the text kind: the pair whose old string is that one byte and no longer old string shares it, or none
+	table  []int  // a byteValues table, for the one-byte kinds: the pair the byte is, or none
+	bytes  []byte // a byteValues table, for the byteToByte kind: what each byte becomes, itself when no pair is it
+	nodes  []node // the trie of the old strings from nodes[0], for the text kind
+	empty  int    // the first pair whose old string is empty, or none
+	kind   int    // byteToByte, byteToText or text
+}
+
+// A pair is one replacement: old, what is looked for, and new, what
+// takes its place.
+struct pair {
+	old string
+	new string
+}
+
+// A node of the trie: the pair whose old string ends here, or none, and
+// the edges to the nodes one byte on.
+struct node {
+	pair  int
+	edges []edge
+}
+
+// An edge of the trie: the byte it is taken on and the node it leads
+// to.
+struct edge impl Copy {
+	c  byte
+	to int
+}
+
+// Write appends the bytes of p, which it only reads, to the builder,
+// and returns their count; it never fails, so the result is always Ok.
+// It is io.Writer's method.
+func (b mut Builder) Write(p ref []byte) Result<int, io.Error> {
+	b.buf.Extend(p)
+	return Ok(len(p))
 }
 
 // WriteString appends the bytes of s, which it only reads, to the
@@ -117,7 +196,7 @@ func (b mut Builder) Grow(n int) {
 // which the Reader owns from then on: a literal moves in with nothing
 // copied, and a string the caller keeps is passed as s.Clone().
 func NewReader(s string) Reader {
-	return Reader{s: s, at: 0}
+	return Reader{s: s, at: 0, lastRuneWidth: nothingToUnread}
 }
 
 // Read copies into buf the bytes not read yet that fit, by memcpy, and
@@ -126,14 +205,186 @@ func NewReader(s string) Reader {
 // Reader moves past the bytes it copied. Reading a string never fails,
 // so the result is always Ok.
 func (r mut Reader) Read(buf mut []byte) Result<int, io.Error> {
+	r.lastRuneWidth = nothingToUnread
+	if r.at >= len(r.s) {
+		return Ok(0)
+	}
+
 	n := copyString(mut buf, r.s[r.at:])
 	r.at += n
 	return Ok(n)
 }
 
-// Len returns the number of bytes of the string not read yet.
+// ReadByte returns the byte at the position and moves the position one
+// byte on, so that the next read starts after it; at the end of the
+// string it returns None and the position stays. Reading a string
+// cannot fail, so there is no error to check, where bufio.Reader's
+// ReadByte gives a Result.
+//
+//	for {
+//		c := r.ReadByte() ?? break
+//		...
+//	}
+func (r mut Reader) ReadByte() byte? {
+	r.lastRuneWidth = nothingToUnread
+	if r.at >= len(r.s) {
+		return None
+	}
+
+	c := r.s[r.at]
+	r.at++
+	return Some(c)
+}
+
+// UnreadByte moves the position one byte back, so that the next read
+// gives the last byte read again, and reports true. At the start of
+// the string, and after a Seek past its end, there is no byte to go
+// back over: it returns false and changes nothing.
+func (r mut Reader) UnreadByte() bool {
+	if r.at <= 0 || r.at > len(r.s) {
+		return false
+	}
+
+	r.at--
+	r.lastRuneWidth = nothingToUnread
+	return true
+}
+
+// ReadRune returns the rune at the position and its width in bytes,
+// and moves the position past it; at the end of the string it returns
+// None and the position stays. A byte that is not UTF-8 reads as
+// utf8.RuneError of width one, as a range over a string reads it.
+//
+//	for {
+//		c, width := r.ReadRune() ?? break
+//		...
+//	}
+func (r mut Reader) ReadRune() (rune, int)? {
+	if r.at >= len(r.s) {
+		r.lastRuneWidth = nothingToUnread
+		return None
+	}
+
+	if c := r.s[r.at]; c < 0x80 {
+		r.at++
+		r.lastRuneWidth = 1
+		return Some((rune(c), 1))
+	}
+
+	c, width := utf8.DecodeRuneInString(r.s[r.at:])
+	r.at += width
+	r.lastRuneWidth = width
+	return Some((c, width))
+}
+
+// UnreadRune moves the position back over the rune the last call
+// returned, so that the next read gives it again, and reports true,
+// when that call was ReadRune. After any other call, Read, ReadByte,
+// Seek, UnreadByte or a ReadRune that returned None, it returns false
+// and changes nothing, since only the width ReadRune measured says how
+// far back the rune begins.
+func (r mut Reader) UnreadRune() bool {
+	if r.lastRuneWidth == nothingToUnread {
+		return false
+	}
+
+	r.at -= r.lastRuneWidth
+	r.lastRuneWidth = nothingToUnread
+	return true
+}
+
+// Seek moves the position to where pos says, counted from the start,
+// from the current position or from the end, and returns the new
+// position as bytes from the start. A position before the start fails
+// with an io.Error, and one past the end is allowed, as io.Seeker says
+// of a file: every read there gives nothing, and Len is zero. A Seek
+// forgets the last read, so UnreadByte and UnreadRune after it return
+// false.
+//
+//	r.Seek(io.Start(0))?           // back to the start
+//	size := r.Seek(io.End(0))?     // to the end, which is the length
+func (r mut Reader) Seek(pos io.SeekFrom) Result<u64, io.Error> {
+	at := match pos {
+		io.Start(n) => position(n),
+		io.Current(n) => i64(r.at).CheckedAdd(n),
+		io.End(n) => i64(len(r.s)).CheckedAdd(n),
+	}
+
+	moved := at ?? return Err(io.NewError("seek", "", "position beyond what an int counts", io.Other))
+	if moved < 0 {
+		return Err(io.NewError("seek", "", "negative position", io.Other))
+	}
+
+	r.at = int(moved)
+	r.lastRuneWidth = nothingToUnread
+	return Ok(u64(moved))
+}
+
+// ReadAt copies into buf the bytes of the string from the offset off,
+// as many as fit, and returns how many: fewer than buf holds at the end
+// of the string, and none at or past it. The position the reads use
+// stays where it was. It is io.ReaderAt's method and never fails.
+func (r ref Reader) ReadAt(buf mut []byte, off u64) Result<int, io.Error> {
+	if off >= u64(len(r.s)) {
+		return Ok(0)
+	}
+
+	return Ok(copyString(mut buf, r.s[int(off):]))
+}
+
+// Len returns the number of bytes of the string not read yet: none
+// after a Seek past the end.
 func (r ref Reader) Len() int {
-	return r.s.Len() - r.at
+	if r.at >= len(r.s) {
+		return 0
+	}
+
+	return len(r.s) - r.at
+}
+
+// NewReplacer returns a Replacer of the pairs old, new, old, new in
+// oldnew, in that order, which it copies, or None for an odd count. A
+// Replacer of no pairs copies the text.
+//
+//	swap := strings.NewReplacer("a", "b", "b", "a") ?? return
+func NewReplacer(oldnew ...ref string) Replacer? {
+	if len(oldnew)%2 != 0 {
+		return None
+	}
+
+	r := Replacer{pairs: make([]pair, 0, len(oldnew)/2), starts: make([]byte, byteValues), firsts: []byte{}, root: []int{}, leaves: []int{}, table: []int{}, bytes: []byte{}, nodes: []node{}, empty: none, kind: text}
+	for i := 0; i < len(oldnew); i += 2 {
+		r.pairs.Push(pair{old: oldnew[i].Clone(), new: oldnew[i+1].Clone()})
+	}
+
+	oneByte := true
+	for _, p := range ref r.pairs {
+		if len(p.old) != 1 {
+			oneByte = false
+		}
+	}
+
+	if oneByte {
+		r.buildTable()
+	} else {
+		r.buildTrie()
+	}
+
+	return Some(r)
+}
+
+// Replace returns a new string: s with every match replaced in one
+// pass, as the type describes. A Replacer of no pairs returns a copy.
+func (r ref Replacer) Replace(s ref string) string {
+	if r.kind == byteToByte {
+		return r.replaceBytes(s)
+	}
+
+	if r.kind == byteToText {
+		return r.replaceByteText(s)
+	}
+
+	return r.replaceText(s)
 }
 
 // Repeat returns a new string of s written n times in a row, and the
@@ -240,6 +491,12 @@ func IndexFunc(s ref string, f func(rune) bool) int {
 	}
 
 	return -1
+}
+
+// ContainsFunc reports whether f returns true for any rune of s, as
+// IndexFunc finds it.
+func ContainsFunc(s ref string, f func(rune) bool) bool {
+	return IndexFunc(s, f) >= 0
 }
 
 // LastIndexFunc returns the byte offset in s of the last rune for which
@@ -367,6 +624,269 @@ func Map(f func(rune) rune, s ref string) string {
 	return b.String()
 }
 
+// position is the i64 a position counted from the start is, or None
+// past what an int counts.
+func position(n u64) i64? {
+	if n > u64(math.MaxInt) {
+		return None
+	}
+
+	return Some(i64(n))
+}
+
+// buildTable fills the tables of the one-byte kinds: each byte's pair,
+// the first pair in the order given winning, and the kind, byteToByte
+// when every new string is one byte too, with the table of what each
+// byte becomes, so that the pass over the text is one lookup a byte.
+func (r mut Replacer) buildTable() {
+	r.table = make([]int, 0, byteValues)
+	r.bytes = make([]byte, 0, byteValues)
+	for i := 0; i < byteValues; i++ {
+		r.table.Push(none)
+		r.bytes.Push(byte(i))
+	}
+
+	r.kind = byteToByte
+	for i := 0; i < len(r.pairs); i++ {
+		c := r.pairs[i].old[0]
+		if r.table[int(c)] != none {
+			continue // an earlier pair has the byte
+		}
+
+		r.table[int(c)] = i
+		r.start(c)
+		if len(r.pairs[i].new) == 1 {
+			r.bytes[int(c)] = r.pairs[i].new[0]
+		} else {
+			r.kind = byteToText
+		}
+	}
+}
+
+// buildTrie makes the trie of the old strings for the text kind: each
+// old string a path of bytes from the root, the pair recorded at its
+// last node, the first pair in the order given winning a node that two
+// share; an empty old string is recorded apart, since it matches
+// everywhere.
+func (r mut Replacer) buildTrie() {
+	r.nodes = []node{node{pair: none, edges: []edge{}}}
+	r.root = make([]int, 0, byteValues)
+	r.leaves = make([]int, 0, byteValues)
+	for i := 0; i < byteValues; i++ {
+		r.root.Push(none)
+		r.leaves.Push(none)
+	}
+
+	for i := 0; i < len(r.pairs); i++ {
+		n := len(r.pairs[i].old)
+		if n == 0 {
+			if r.empty == none {
+				r.empty = i
+			}
+
+			continue
+		}
+
+		at := 0
+		for j := 0; j < n; j++ {
+			c := r.pairs[i].old[j]
+			if j == 0 {
+				r.start(c)
+			}
+
+			at = r.step(at, c)
+		}
+
+		if r.nodes[at].pair == none {
+			r.nodes[at].pair = i
+		}
+	}
+
+	for c := 0; c < byteValues; c++ { // a one-byte old string that shares its byte with no longer one is answered from the root
+		if at := r.root[c]; at != none && len(r.nodes[at].edges) == 0 {
+			r.leaves[c] = r.nodes[at].pair
+		}
+	}
+}
+
+// start records c as a byte some old string starts with: in the table
+// and, the first time, in the list.
+func (r mut Replacer) start(c byte) {
+	if r.starts[int(c)] == 0 {
+		r.starts[int(c)] = 1
+		r.firsts.Push(c)
+	}
+}
+
+// step returns the node the edge for c leads to from the node at, made
+// when there is none yet: from the root by its table, below it by the
+// node's edges.
+func (r mut Replacer) step(at int, c byte) int {
+	if at == 0 {
+		if to := r.root[int(c)]; to != none {
+			return to
+		}
+	} else {
+		for _, e := range ref r.nodes[at].edges {
+			if e.c == c {
+				return e.to
+			}
+		}
+	}
+
+	to := len(r.nodes)
+	r.nodes.Push(node{pair: none, edges: []edge{}})
+	if at == 0 {
+		r.root[int(c)] = to
+	} else {
+		r.nodes[at].edges.Push(edge{c: c, to: to})
+	}
+
+	return to
+}
+
+// lookup finds the pair whose old string starts at offset i of s, the
+// first in the order given among those that do, and returns it with
+// the length matched, or none and zero when none starts there: the
+// root's tables take the first byte, answering a one-byte old string
+// that shares it with no longer one at once, the edges each byte after.
+func (r ref Replacer) lookup(s ref string, i int) (int, int) {
+	if i >= len(s) {
+		return (none, 0)
+	}
+
+	c := int(s[i])
+	if p := r.leaves[c]; p != none {
+		return (p, 1)
+	}
+
+	at := r.root[c]
+	if at == none {
+		return (none, 0)
+	}
+
+	best := none
+	length := 0
+	for j := i + 1; ; j++ {
+		n := ref r.nodes[at]
+		if n.pair != none && (best == none || n.pair < best) {
+			best = n.pair
+			length = j - i
+		}
+
+		if j == len(s) {
+			break
+		}
+
+		next := none
+		for _, e := range ref n.edges {
+			if e.c == s[j] {
+				next = e.to
+				break
+			}
+		}
+
+		if next == none {
+			break
+		}
+
+		at = next
+	}
+
+	return (best, length)
+}
+
+// replaceBytes maps each byte of a copy of s through the table of what
+// it becomes: one lookup a byte, with no branch, and nothing to look
+// ahead for.
+func (r ref Replacer) replaceBytes(s ref string) string {
+	b := []byte(s)
+	mapBytes(mut b, ref r.bytes)
+	return ownString(b)
+}
+
+// replaceByteText writes s into a builder, skipping to each mapped
+// byte a word at a time, the runs between copied whole and each mapped
+// byte's new string in its place.
+func (r ref Replacer) replaceByteText(s ref string) string {
+	var b Builder
+	b.Grow(len(s))
+	start := 0
+	for i := skipTo(s, 0, ref r.firsts, ref r.starts); i < len(s); i = skipTo(s, i, ref r.firsts, ref r.starts) {
+		b.WriteString(s[start:i])
+		b.WriteString(ref r.pairs[r.table[int(s[i])]].new)
+		i++
+		start = i
+	}
+
+	b.WriteString(s[start:])
+	return b.String()
+}
+
+// replaceText walks s, entering the trie only at a byte some old
+// string starts with, skipped to a word at a time, and writes the runs
+// between matches whole. With an empty old string among the pairs the
+// walk is replaceEvery's.
+func (r ref Replacer) replaceText(s ref string) string {
+	if r.empty != none {
+		return r.replaceEvery(s)
+	}
+
+	var b Builder
+	b.Grow(len(s))
+	start := 0
+	for i := skipTo(s, 0, ref r.firsts, ref r.starts); i < len(s); i = skipTo(s, i, ref r.firsts, ref r.starts) {
+		p, length := r.lookup(s, i)
+		if p == none {
+			i++
+			continue
+		}
+
+		b.WriteString(s[start:i])
+		b.WriteString(ref r.pairs[p].new)
+		i += length
+		start = i
+	}
+
+	b.WriteString(s[start:])
+	return b.String()
+}
+
+// replaceEvery is the walk with an empty old string among the pairs: it
+// matches at every position, its new string written before the rune
+// there and once more at the end, as the string's ReplaceAll places
+// it. A pair given before the empty string takes a position alone; one
+// given after it still matches there, after the empty string's new
+// text.
+func (r ref Replacer) replaceEvery(s ref string) string {
+	var b Builder
+	b.Grow(len(s))
+	start := 0
+	i := 0
+	for i < len(s) {
+		p, length := r.lookup(s, i)
+		b.WriteString(s[start:i])
+		if p == none || p > r.empty {
+			b.WriteString(ref r.pairs[r.empty].new)
+			if p == none {
+				_, length = utf8.DecodeRuneInString(s[i:])
+				b.WriteString(s[i : i+length])
+				i += length
+				start = i
+				continue
+			}
+		}
+
+		b.WriteString(ref r.pairs[p].new)
+		i += length
+		start = i
+	}
+
+	b.WriteString(s[start:])
+	b.WriteString(ref r.pairs[r.empty].new)
+	return b.String()
+}
+
 // appendString appends the bytes of s to b in one copy, growing b
 // once. The runtime provides it.
 func appendString(b mut []byte, s ref string)
@@ -399,3 +919,13 @@ func copyString(dst mut []byte, src ref string) int
 // ownString makes b, which it takes, the string's bytes, with no copy.
 // The runtime provides it.
 func ownString(b []byte) string
+
+// mapBytes replaces each byte of b by the byte of table, of 256, at its
+// value. The runtime provides it.
+func mapBytes(b mut []byte, table ref []byte)
+
+// skipTo returns the offset of the first byte of s at or after from
+// that is one of firsts, or len(s); starts is the table of 256 with a
+// value other than zero at each of them. The runtime provides it, a
+// word at a time for up to four bytes.
+func skipTo(s ref string, from int, firsts ref []byte, starts ref []byte) int

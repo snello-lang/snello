@@ -1,0 +1,266 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package btree_test
+
+import ("btree"; "expect"; "fmt"; "sort"; "testing")
+
+// The map keeps its keys in order: Insert returns the value replaced,
+// Get, GetMut and Contains find a key, Remove takes one out, and it
+// prints in key order.
+func TestMapBasics() {
+	m := btree.New<string, int>()
+	expect.True(m.IsEmpty())
+	expect.IsNone(m.Insert("pear".Clone(), 3))
+	expect.IsNone(m.Insert("apple".Clone(), 1))
+	expect.IsNone(m.Insert("fig".Clone(), 2))
+	expect.Equal(ref expect.IsSome(m.Insert("fig".Clone(), 20)), ref 2)
+	expect.Equal(ref m.Len(), ref 3)
+	expect.Equal(ref fmt.Sprint(m), "map[apple:1 fig:20 pear:3]")
+	expect.Equal(ref expect.IsSome(m.Get("fig")), ref 20)
+	expect.True(m.Get("kiwi").IsNone())
+	expect.True(m.Contains("apple"))
+	expect.False(m.Contains("banana"))
+	if v := m.GetMut("apple") { *v += 10 }
+	expect.Equal(ref expect.IsSome(m.Get("apple")), ref 11)
+	expect.Equal(ref expect.IsSome(m.Remove("fig")), ref 20)
+	expect.IsNone(m.Remove("fig"))
+	expect.Equal(ref fmt.Sprint(m), "map[apple:11 pear:3]")
+	if (k, v) := m.First() { expect.Equal(k, "apple"); expect.Equal(v, ref 11) } else { expect.Fail("no first") }
+	if (k, v) := m.Last() { expect.Equal(k, "pear"); expect.Equal(v, ref 3) } else { expect.Fail("no last") }
+	m.Clear()
+	expect.True(m.IsEmpty())
+	expect.True(m.First().IsNone())
+	expect.True(m.Last().IsNone())
+	expect.IsNone(m.PopFirst())
+	expect.Equal(ref fmt.Sprint(m), "map[]")
+	expect.IsNone(m.Insert("z".Clone(), 26))
+	expect.Equal(ref fmt.Sprint(m), "map[z:26]")
+}
+
+// Thousands of keys inserted and removed in scattered and sorted
+// orders, against a sorted slice: every split, refill and merge of
+// the nodes keeps the keys in order and every key findable.
+func TestAgainstModel() {
+	for _, n := range []int{1, 2, 31, 32, 33, 100, 1000, 5000} {
+		m := btree.New<int, int>()
+		model := []int{}
+		for i := 0; i < n; i++ {
+			k := (i * 7919) % n
+			expect.IsNone(m.Insert(k, k*2))
+			model.Push(k)
+		}
+
+		sort.Sort(mut model)
+		expectSame(ref m, ref model)
+		for _, k := range ref model {
+			expect.Equal(ref expect.IsSome(m.Get(k)), ref *k*2)
+		}
+
+		// Remove every third key, scattered, then check, then the rest from
+		// the ends in turn.
+		kept := []int{}
+		for i := 0; i < n; i++ {
+			k := (i * 7919) % n
+			if i%3 == 0 {
+				expect.Equal(ref expect.IsSome(m.Remove(ref k)), ref k*2)
+				expect.IsNone(m.Remove(ref k))
+			} else {
+				kept.Push(k)
+			}
+		}
+
+		sort.Sort(mut kept)
+		expectSame(ref m, ref kept)
+		for len(kept) > 0 {
+			if len(kept)%2 == 0 {
+				k, v := expect.IsSome(m.PopFirst())
+				expect.Equal(ref k, ref kept.Remove(0))
+				expect.Equal(ref v, ref k*2)
+			} else {
+				k, v := expect.IsSome(m.PopLast())
+				expect.Equal(ref k, ref expect.IsSome(kept.Pop()))
+				expect.Equal(ref v, ref k*2)
+			}
+		}
+
+		expect.True(m.IsEmpty())
+		expect.IsNone(m.PopLast())
+		// The map is usable again after it emptied.
+		m.Insert(5, 10)
+		expect.Equal(ref fmt.Sprint(m), "map[5:10]")
+	}
+}
+
+// Removing in ascending and in descending order, and removing from an
+// inner node, each merges and refills nodes on the way down.
+func TestRemoveOrders() {
+	for _, order := range []int{0, 1, 2} {
+		m := btree.New<int, int>()
+		n := 2000
+		for i := 0; i < n; i++ {
+			m.Insert(i, i*2)
+		}
+
+		for i := 0; i < n; i++ {
+			k := i
+			if order == 1 {
+				k = n - 1 - i
+			} else if order == 2 {
+				k = (i * 613) % n // scattered, so inner keys are removed too
+			}
+
+			expect.Equal(ref expect.IsSome(m.Remove(ref k)), ref k*2)
+			expect.Equal(ref m.Len(), ref n-1-i)
+		}
+
+		expect.True(m.IsEmpty())
+	}
+
+	// Keys of inner nodes removed directly: those that split moved up.
+	m := btree.New<int, int>()
+	for i := 0; i < 500; i++ {
+		m.Insert(i, i*2)
+	}
+
+	for k := 15; k < 500; k += 32 { // the middles of the first leaves
+		expect.Equal(ref expect.IsSome(m.Remove(ref k)), ref k*2)
+	}
+
+	model := []int{}
+	for i := 0; i < 500; i++ {
+		if (i-15)%32 != 0 {
+			model.Push(i)
+		}
+	}
+
+	expectSame(ref m, ref model)
+}
+
+// Range walks the keys at least from and less than to, From the keys
+// from one on, each in order, whether or not the bounds are keys.
+func TestRangeFrom() {
+	m := btree.New<int, string>()
+	for i := 0; i < 200; i += 2 {
+		m.Insert(i, fmt.Sprint(i))
+	}
+
+	expect.Equal(ref keysOf(m.Range(ref 10, ref 20)), "[10 12 14 16 18]")
+	expect.Equal(ref keysOf(m.Range(ref 11, ref 21)), "[12 14 16 18 20]")
+	expect.Equal(ref keysOf(m.Range(ref -5, ref 4)), "[0 2]")
+	expect.Equal(ref keysOf(m.Range(ref 196, ref 1000)), "[196 198]")
+	expect.Equal(ref keysOf(m.Range(ref 20, ref 20)), "[]")
+	expect.Equal(ref keysOf(m.Range(ref 30, ref 20)), "[]")
+	expect.Equal(ref keysOf(m.Range(ref 500, ref 600)), "[]")
+	expect.Equal(ref keysOf(m.From(ref 190)), "[190 192 194 196 198]")
+	expect.Equal(ref keysOf(m.From(ref 191)), "[192 194 196 198]")
+	expect.Equal(ref keysOf(m.From(ref 199)), "[]")
+	expect.Equal(ref keysOf(m.From(ref -1)).Len(), ref keysOf(m.Iter()).Len())
+	expect.Equal(ref m.Range(ref 0, ref 200).Count(), ref 100)
+	expect.Equal(ref m.Range(ref 63, ref 128).Count(), ref 32) // across several leaves
+	total := 0
+	for k, v := range m.Range(ref 4, ref 10) {
+		total += *k
+		expect.Equal(v, ref fmt.Sprint(k))
+	}
+
+	expect.Equal(ref total, ref 18)
+	empty := btree.New<int, int>()
+	expect.Equal(ref empty.Range(ref 0, ref 10).Count(), ref 0)
+	expect.Equal(ref empty.From(ref 0).Count(), ref 0)
+}
+
+// String keys and values are owned by the map, moved in and out, and
+// dropped with it; the key given for a key already present is dropped.
+func TestStrings() {
+	m := btree.New<string, string>()
+	for i := 0; i < 300; i++ {
+		m.Insert(fmt.Sprint("k", (i*37)%300), fmt.Sprint("v", i))
+	}
+
+	expect.Equal(ref m.Len(), ref 300)
+	expect.Equal(ref expect.IsSome(m.Insert("k7".Clone(), "new".Clone())), ref fmt.Sprint("v", 7*73%300))
+	expect.Equal(ref expect.IsSome(m.Get("k7")), "new")
+	if (k, _) := m.First() { expect.Equal(k, "k0") } else { expect.Fail("no first") }
+	if (k, _) := m.Last() { expect.Equal(k, "k99") } else { expect.Fail("no last") }
+	for i := 0; i < 300; i += 2 {
+		expect.True(m.Remove(ref fmt.Sprint("k", i)).IsSome())
+	}
+
+	expect.Equal(ref m.Len(), ref 150)
+	words := m.Iter().Map(func(e (ref string, ref string)) string {
+		k, _ := e
+		return k.Clone()
+	}).Count()
+	expect.Equal(ref words, ref 150)
+}
+
+// A set holds each value once, in order, with the ends readable and
+// removable, and ranges as the map does.
+func TestSet() {
+	s := btree.NewSet<int>()
+	expect.True(s.IsEmpty())
+	for _, v := range []int{5, 3, 9, 3, 1, 7, 5} {
+		s.Insert(v)
+	}
+
+	expect.Equal(ref s.Len(), ref 5)
+	expect.Equal(ref fmt.Sprint(s), "set[1 3 5 7 9]")
+	expect.True(s.Contains(ref 7))
+	expect.False(s.Contains(ref 8))
+	expect.False(s.Insert(7))
+	expect.True(s.Insert(8))
+	expect.True(s.Remove(ref 8))
+	expect.False(s.Remove(ref 8))
+	expect.Equal(ref expect.IsSome(s.First()), ref 1)
+	expect.Equal(ref expect.IsSome(s.Last()), ref 9)
+	expect.Equal(ref expect.IsSome(s.PopFirst()), ref 1)
+	expect.Equal(ref expect.IsSome(s.PopLast()), ref 9)
+	expect.Equal(ref fmt.Sprint(s), "set[3 5 7]")
+	sum := 0
+	for v := range ref s {
+		sum += *v
+	}
+
+	expect.Equal(ref sum, ref 15)
+	expect.Equal(ref s.Range(ref 4, ref 8).Count(), ref 2)
+	expect.Equal(ref s.From(ref 5).Count(), ref 2)
+	expect.Equal(ref s.Iter().Filter(func(v ref int) bool { return *v > 3 }).Count(), ref 2)
+	s.Clear()
+	expect.True(s.IsEmpty())
+	expect.IsNone(s.PopFirst())
+	words := btree.NewSet<string>()
+	for i := 0; i < 1000; i++ {
+		words.Insert(fmt.Sprint("w", (i*7919)%1000))
+	}
+
+	expect.Equal(ref words.Len(), ref 1000)
+	expect.Equal(ref expect.IsSome(words.First()), "w0")
+	expect.Equal(ref expect.IsSome(words.Last()), "w999")
+	expect.Equal(ref words.Range("w10", "w2").Count(), ref 110) // w10 to w19 and w100 to w199
+}
+
+// expectSame expects the map's keys, in order, to be the sorted model,
+// and its values twice the keys.
+func expectSame(m ref btree.Map<int, int>, model ref []int) {
+	expect.Equal(ref m.Len(), ref len(model))
+	i := 0
+	for k, v := range m {
+		expect.Equal(k, ref model[i])
+		expect.Equal(v, ref *k*2)
+		i++
+	}
+
+	expect.Equal(ref i, ref len(model))
+}
+
+// keysOf collects the keys a walk gives, printed as a slice.
+func keysOf(it btree.Iter<int, string>) string {
+	keys := []int{}
+	for k, _ := range it {
+		keys.Push(*k)
+	}
+
+	return fmt.Sprint(keys)
+}

@@ -22,12 +22,29 @@ Every function takes and returns an `f64`. A program working in another float ty
 | `Abs`, `Min`, `Max` | the absolute value, the smaller and the larger |
 | `Inf`, `NaN`, `IsInf`, `IsNaN` | an infinity by its sign, a value that is not a number, and the tests for them |
 | `Signbit`, `Copysign` | whether a value is negative, negative zero included, and a value with another's sign |
+| `Dim` | `x - y` when positive, else 0 |
+| `Frexp`, `Ldexp` | a float as a fraction in [½, 1) and a power of two, `(f64, int)`, and the float back from them |
+| `Modf` | the whole part and the fraction, `(f64, f64)`, both with the sign of `x` |
+| `Remainder`, `FMA` | the IEEE remainder, `x` less the nearest multiple of `y`, and `x*y + z` rounded once |
+| `Expm1`, `Log1p`, `Exp2` | e^x - 1 and log(1 + x), exact near zero where the plain forms lose their digits, and 2^x |
+| `Asinh`, `Acosh`, `Atanh` | the inverse hyperbolic functions |
+| `Gamma`, `Lgamma` | the gamma function, and the logarithm of its magnitude with its sign, `(f64, int)` |
+| `Erf`, `Erfc` | the error function and its complement, exact where `1 - Erf(x)` would be zero |
+| `Nextafter`, `Pow10` | the next float toward `y`, and 10^n over the whole range of a double, within one unit in the last place |
+| `Float64bits`, `Float64frombits`, `Float32bits`, `Float32frombits` | the bits of a float as the unsigned integer of its width and back: a copy, which the compiler writes in place |
 
 ```go
 fmt.Println(math.Floor(-2.5), math.Ceil(-2.5), math.Trunc(-2.5), math.Round(-2.5))   // -3 -2 -2 -3
 fmt.Println(math.Sqrt(144), math.Mod(-7, 3))                                         // 12 -1
 fmt.Printf("%.6f %.6f %.6f\n", math.Pow(2, 10), math.Log2(1024), math.Hypot(3, 4))   // 1024.000000 10.000000 5.000000
 fmt.Printf("%.6f %.6f\n", math.Sin(math.Pi / 6), math.Atan2(1, -1))                  // 0.500000 2.356194
+```
+
+A function that answers two things returns a pair, taken apart where it is called: `frac, exp := math.Frexp(8)` gives `0.5` and `4`, `whole, frac := math.Modf(-2.5)` gives `-2` and `-0.5`, and `lg, sign := math.Lgamma(-0.5)` the logarithm with the sign of the gamma function there, `-1`. A binary format or a hash reads a float through its bits, `math.Float64bits(1.0)` is `0x3ff0000000000000`, and `Float64frombits` makes the float back; the compiler writes the two as a copy of the bits, in place, so they cost nothing.
+
+```go
+fmt.Println(math.Float64bits(1.0), math.Float32bits(f32(1.0)), math.Float64frombits(0x4000000000000000))   // 4607182418800017408 1065353216 2
+fmt.Println(math.Gamma(5), math.Erf(math.Inf(1)), math.Pow10(-3), math.Nextafter(1, 2))                    // 24 1 0.001 1.0000000000000002
 ```
 
 The special cases are those of IEEE 754 as the C standard lists them, which Go's `math` follows too: the square root or the logarithm of a negative number is `NaN`, the logarithm of zero is `-Inf`, anything to the power zero is 1, and a remainder by zero is `NaN`. None of them is an error to handle: the result says what happened, and `IsNaN` and `IsInf` read it.
@@ -64,7 +81,7 @@ A typed limit compares and assigns to a value of its own type with no conversion
 
 ## `math/bits`
 
-`math/bits` has six operations on the bits of an unsigned integer, each for `uint` and, with the width in its name, for `u8`, `u16`, `u32` and `u64`:
+`math/bits` has seven operations on the bits of an unsigned integer, each for `uint` and, with the width in its name, for `u8`, `u16`, `u32` and `u64`, `ReverseBytes` without the `u8` form, one byte having no order to reverse:
 
 | Function | What it returns |
 |---|---|
@@ -74,6 +91,7 @@ A typed limit compares and assigns to a value of its own type with no conversion
 | `Len(x)` | the bits needed to write `x` |
 | `RotateLeft(x, k)` | `x` turned left by `k` bits, the bits leaving at the top coming back at the bottom |
 | `Reverse(x)` | `x` with its bits in the opposite order |
+| `ReverseBytes(x)` | `x` with its bytes in the opposite order, for `uint`, `u16`, `u32` and `u64`: the other byte order |
 
 ```go
 var board u64 = 0x00ff00000000ff00
@@ -85,7 +103,15 @@ fmt.Println(bits.Reverse8(row), bits.RotateLeft8(row, 3), bits.LeadingZeros8(row
 
 Every one is defined for every argument. Zero has as many leading and trailing zeros as the type has bits, `bits.LeadingZeros8(0)` is 8, and a length of zero. A rotation by a negative count turns right, and a count of the width or more turns as the count modulo the width does, so `RotateLeft8(x, 8)` is `x`.
 
-A call of one of these is not a call when the program runs: the compiler writes the processor's instruction in its place, in a debug build as in a release build. A function of the package is still a value a program may keep and pass on, `f := bits.OnesCount64`, and a call through the value is an ordinary call.
+Four functions work on two words at once, the arithmetic a hash, a checksum or a number of many words is built from. `Add64(x, y, carry)` gives the sum and the carry out of it, `Sub64(x, y, borrow)` the difference and the borrow, `Mul64(x, y)` the high and low halves of the 128-bit product, and `Div64(hi, lo, y)` the quotient and remainder of a 128-bit number as an option: `None` for a zero divisor, or a quotient that does not fit 64 bits, where Go's panics.
+
+```go
+sum, carry := bits.Add64(1<<63, 1<<63, 0)         // 0 1
+hi, lo := bits.Mul64(1<<32, 1<<32)                 // 1 0
+quo, rem := bits.Div64(hi, lo+5, 1<<32) ?? return  // 4294967296 5
+```
+
+A call of one of these is not a call when the program runs: the compiler writes the processor's instruction in its place, in a debug build as in a release build, the two-word operations included. A function of the package is still a value a program may keep and pass on, `f := bits.OnesCount64`, and a call through the value is an ordinary call.
 
 ## `math/rand`: a generator with a seed
 
@@ -142,8 +168,10 @@ Use a `Rand` when a run must repeat, and the package functions everywhere else.
 
 ## For maintainers
 
-- **`math`.** `std/math/math.snello` declares each function without a body, and `runtime/c/math.c` defines it as one call of the C math library's, `sn_math_Floor` calling `floor`, declared in `snello.h`. `Abs`, `Min` and `Max` are Snello, with Go's answers on zeros and `NaN`. The constants and limits are typed literals, each the exact value of its limit. The special cases are the C library's, which are IEEE 754's; `math_test.snello` holds each against its exact value or, for the functions the system computes, within a few units in the last place.
-- **`math/bits`: the declarations.** `std/math/bits/bits.snello` declares the thirty functions, six operations at five widths, each with a plain signature, so the checker knows nothing of the package.
+- **`math`: six of the runtime's own.** `Erf`, `Erfc`, `Asinh`, `Atanh` and `Lgamma` are written in `runtime/c/math.c` from FreeBSD's msun and `Gamma` from Cephes, the algorithms Go's package uses, since the system's library computes them slower than those on the machines measured; each keeps the library's special cases and is checked against Go's answers. `Frexp`, `Modf` and `Lgamma` are Snello wrappers over natives that store the second result through a pointer, `Pow10` reads two tables of exact powers, and the four `Float...bits` are written in place by `FloatBits` in `compiler/emit/lower/lower.go`, both backends copying the bits, with runtime forms for a value of one.
+- **`math/bits`: two words at once.** `Add64`, `Sub64` and `Mul64` are written in place by `WideOp` in `compiler/emit/lower/lower.go`: the C backend through the header's inline functions over the compiler's overflow builtins and a 128-bit multiply, the LLVM backend through the overflow intrinsics and a multiply widened to 128 bits, each building the pair in place; their Snello bodies stand for a value of one. `Div64` checks its arguments in Snello and divides in the runtime, `sn_math__bits_div64`, by one instruction on x86-64 and Knuth's algorithm D at base 2^32 elsewhere. `ReverseBytes` is a `BitOp` like the other six, a byte swap.
+- **`math`.** `std/math/math.snello` declares each function without a body, and `runtime/c/math.c` defines it as one call of the C math library's but for the six above, `sn_math_Floor` calling `floor`, declared in `snello.h`. `Abs`, `Min` and `Max` are Snello, with Go's answers on zeros and `NaN`. The constants and limits are typed literals, each the exact value of its limit. The special cases are the C library's, which are IEEE 754's; `math_test.snello` holds each against its exact value or, for the functions the system computes, within a few units in the last place.
+- **`math/bits`: the declarations.** `std/math/bits/bits.snello` declares the thirty-eight functions, seven operations at their widths and the four on two words, each with a plain signature, so the checker knows nothing of the package.
 - **`math/bits`: the lowering.** `BitOp` in `compiler/emit/lower/lower.go` reads a function's key, `math/bits.LeadingZeros8`, into its operation and width, and `Key` returns the key so that both backends write the call themselves. The C backend, `libraryCall` in `compiler/emit/c/library.go`, calls the header's `sn_bits_LeadingZeros8`, a function in `snello.h` that is always written in place, over the compiler's builtins: `__builtin_clzll`, `__builtin_ctzll`, `__builtin_popcountll`, a shift pair the compiler reads as a rotation, and `__builtin_bitreverse64` where the compiler has it, else Go's swap of neighbours, pairs, nibbles and bytes. A width under 64 is counted in a 64-bit word with a one set just past the value, so zero gives the width with no test. The LLVM backend, `bitOp` in `compiler/emit/llvm/library.go`, writes `llvm.ctlz`, `llvm.cttz`, both told that zero is no poison, `llvm.ctpop`, `llvm.bitreverse` and `llvm.fshl` with the value as both halves, on the width's own integer type.
 - **`math/bits`: a function as a value.** `runtime/c/math.c` defines every function under the library's name too, `sn_math__bits_OnesCount64`, each the header's. The `selector` of each backend lets a function of the package be a value, where every other function the compiler writes is refused as one, and the value names that definition.
 - **The seeded generator.** `std/math/rand/rand.snello` is Snello but for two functions of the runtime. `Rand.next` is Go's `PCG.next` and `PCG.Uint64`: the state times a 128-bit multiplier plus an increment, then DXSM, with the carry out of the low half written as a comparison. `below` is Go's `uint64n`: a mask for a power of two, else Lemire's multiply, the high half of the 128-bit product of 64 random bits and the bound, with a redraw when the low half falls under `-n % n`, tested against `n` first so that the division is rare. `shuffle` is Go's Fisher and Yates loop from the last element down. Each drawing is written once, generic over the private trait `source`, which `Rand` and the runtime's source both implement, so a method and its package function are one body compiled twice.

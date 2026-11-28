@@ -19,18 +19,44 @@ import (
 // writes are listed in emit/lower, with the reason for each; this file
 // writes them in C: fmt's printing as the runtime's printers chosen by
 // the type of each argument, os.Exit as the runtime's exit, the
-// primitives of rc and sync as the pointer itself, and the functions
-// of math/bits as the compiler's builtins.
+// primitives of rc and sync as the pointer itself, the functions of
+// math/bits as the compiler's builtins, the two-word ones among them
+// into the pair they return, and the float bits of math as the header's
+// copies.
+
+// paramTypes lists the types of the parameters of the function x calls,
+// which its arguments are made to.
+func (e *Emitter) paramTypes(x *ast.CallExpr) []types.Type {
+	params := e.typeOf(x.Fun).(*types.Signature).Params()
+	wants := make([]types.Type, len(params))
+	for i, p := range params {
+		wants[i] = p.Type()
+	}
+
+	return wants
+}
 
 // libraryCall writes the call x of the lowered function key.
 func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 	if op, width, ok := lower.BitOp(key); ok { // the runtime header's function over the compiler's builtin, always written in place
-		var wants []types.Type
-		for _, p := range e.typeOf(x.Fun).(*types.Signature).Params() {
-			wants = append(wants, p.Type())
+		return "sn_bits_" + op + strconv.Itoa(width) + "(" + strings.Join(e.operands(x.Args, e.paramTypes(x)), ", ") + ")"
+	}
+
+	if op, ok := lower.WideOp(key); ok { // the header's function over the compiler's builtins: the first word returned, the second stored into the pair
+		out := e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
+		e.line(out + ".e0 = sn_bits_" + op + "(" + strings.Join(e.operands(x.Args, e.paramTypes(x)), ", ") + ", &" + out + ".e1);")
+		return out
+	}
+
+	if width, toBits, ok := lower.FloatBits(key); ok { // the header's copy of the bits, which the C compiler writes as a move or as nothing
+		arg := e.operands(x.Args, e.paramTypes(x))[0]
+		fn := "sn_f" + strconv.Itoa(width) + "_bits("
+		if !toBits {
+			fn = "sn_f" + strconv.Itoa(width) + "_from_bits("
 		}
 
-		return "sn_bits_" + op + strconv.Itoa(width) + "(" + strings.Join(e.operands(x.Args, wants), ", ") + ")"
+		return fn + arg + ")"
 	}
 
 	switch key {
@@ -58,8 +84,10 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 	case "rc.rawNew", "rc.rawMut", "rc.rawFree", "rc.moveOut", "rc.leak",
 		"sync.rawNew", "sync.rawMut", "sync.rawTake":
 		return e.cellCall(x, key)
-	case "deque.rawAlloc", "deque.rawFree", "deque.rawPut", "deque.rawTake", "deque.rawRef", "deque.rawMut", "deque.rawMove":
-		return e.rawCall(x, key)
+	case "deque.rawAlloc", "deque.rawFree", "deque.rawPut", "deque.rawTake", "deque.rawRef", "deque.rawMut", "deque.rawMove",
+		"btree.rawAlloc", "btree.rawFree", "btree.rawPut", "btree.rawTake", "btree.rawRef", "btree.rawMut", "btree.rawMove",
+		"btree.rawWord", "btree.rawSetWord":
+		return e.rawCall(x, rawName(key))
 	case "testing.Logf", "expect.Failf": // the format read at compile time as fmt's are, the line handed to the unformatted function with the place of this call
 		fn := e.info.Uses[x.Fun.(*ast.SelectorExpr).Sel].(*types.Func)
 		e.locate(x, fn)
@@ -359,15 +387,19 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 	return truncated(e.text(v, a))
 }
 
-// rawCall writes a primitive of the deque's buffer: a block of slots of
-// the element type, held by the deque as its address, each slot holding
-// an element or nothing. The deque knows which: its head and its count
-// name the slots that hold one, so a slot is written only when it holds
-// nothing, read only when it holds one, and the elements are moved, not
-// copied. rawAlloc makes a block of n slots, n above zero, and rawFree
+// rawCall writes a primitive of a block of slots of the element type,
+// held by a deque as its buffer or by a btree as a node, as its
+// address, each slot holding an element or nothing. The package knows
+// which: the deque's head and count, and a node's count, name the slots
+// that hold one, so a slot is written only when it holds nothing, read
+// only when it holds one, and the elements are moved, not copied. The
+// key is the primitive's name, the same in both packages. A block
+// carries a few words of its holder's before its slots, which rawWord
+// reads and rawSetWord writes, a node's count and its other blocks.
+// rawAlloc makes a block of n slots, n above zero, and rawFree
 // frees one; rawPut moves an element into a slot and rawTake moves one
 // out; rawRef and rawMut lend the element in a slot, as a map's Get and
-// GetMut lend an entry, the borrow tied to the deque; rawMove moves n
+// GetMut lend an entry, the borrow tied to the owner; rawMove moves n
 // elements from one run of slots to another as one block. The element
 // type is the call's type argument.
 func (e *Emitter) rawCall(x *ast.CallExpr, key string) string {
@@ -380,8 +412,19 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) string {
 		return out
 	}
 
-	if key == "deque.rawFree" {
-		e.line("sn_free((void *)(intptr_t)(" + e.operands(x.Args, ints(1))[0] + "));")
+	if key == "rawFree" {
+		e.line("sn_free_slots((void *)(intptr_t)(" + e.operands(x.Args, ints(1))[0] + "));")
+		return ""
+	}
+
+	if key == "rawWord" { // a word of the block's header, before its slots
+		args := e.operands(x.Args, ints(2))
+		return "(*sn_slot_word((void *)(intptr_t)(" + args[0] + "), " + args[1] + "))"
+	}
+
+	if key == "rawSetWord" {
+		args := e.operands(x.Args, ints(3))
+		e.line("*sn_slot_word((void *)(intptr_t)(" + args[0] + "), " + args[1] + ") = " + args[2] + ";")
 		return ""
 	}
 
@@ -392,21 +435,21 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) string {
 	ct := e.cType(t, x.Pos())
 	slots := func(p string) string { return "((" + ct + " *)(intptr_t)(" + p + "))" }
 	switch key {
-	case "deque.rawAlloc":
+	case "rawAlloc":
 		n := e.operands(x.Args, ints(1))[0]
-		return "((sn_int)(intptr_t)sn_alloc_elems(" + n + ", sizeof(" + ct + ")))"
-	case "deque.rawPut":
+		return "((sn_int)(intptr_t)sn_alloc_slots(" + n + ", sizeof(" + ct + ")))"
+	case "rawPut":
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int], t})
 		e.line(slots(args[0]) + "[" + args[1] + "] = " + args[2] + ";")
 		return ""
-	case "deque.rawTake":
+	case "rawTake":
 		args := e.operands(x.Args, ints(2))
 		out := e.temp()
 		e.line(ct + " " + out + " = " + slots(args[0]) + "[" + args[1] + "];") // the slot holds nothing from here on, which the deque's count says
 		return out
-	case "deque.rawRef", "deque.rawMut":
+	case "rawRef", "rawMut":
 		args := e.operands(x.Args[:2], ints(2))
-		if key == "deque.rawRef" {
+		if key == "rawRef" {
 			return slots(args[0]) + "[" + args[1] + "]" // a ref is the value it views, as a map's Get lends it
 		}
 
@@ -416,6 +459,12 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) string {
 		e.line("__builtin_memmove(" + slots(args[0]) + " + " + args[1] + ", " + slots(args[2]) + " + " + args[3] + ", (size_t)(" + args[4] + ") * sizeof(" + ct + "));")
 		return ""
 	}
+}
+
+// rawName returns the primitive's name out of its key, package.name:
+// the deque and the btree declare the same primitives.
+func rawName(key string) string {
+	return key[strings.IndexByte(key, '.')+1:]
 }
 
 // cellCall writes a primitive of the cells rc and sync share among
@@ -472,8 +521,9 @@ func (e *Emitter) cellCall(x *ast.CallExpr, key string) string {
 
 // primitiveType is the type a primitive the compiler writes for the
 // library works on, its call's first type argument: the element of the
-// deque's buffer, or the cell or box a handle holds. A call without one,
-// which the library never writes, is reported.
+// deque's buffer or of a btree's node, or the cell or box a handle
+// holds. A call without one, which the library never writes, is
+// reported.
 func (e *Emitter) primitiveType(x *ast.CallExpr) (types.Type, bool) {
 	id, ok := x.Fun.(*ast.Ident) // the library calls its own function by name
 	if sel, isSel := x.Fun.(*ast.SelectorExpr); isSel {

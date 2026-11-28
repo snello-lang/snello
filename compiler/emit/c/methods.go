@@ -6,6 +6,7 @@ package c
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/emit/lower"
@@ -79,7 +80,7 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 var mutating = map[string]bool{
 	"Push": true, "Pop": true, "Insert": true, "Remove": true, "RemoveValue": true,
 	"Clear": true, "Swap": true, "Reverse": true, "Sort": true, "SortBy": true, "GetMut": true,
-	"Extend": true, "Truncate": true, "GetOrInsert": true,
+	"Extend": true, "Truncate": true, "GetOrInsert": true, "Retain": true,
 }
 
 func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Slice) string {
@@ -222,8 +223,111 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		return e.someIndex(at, x)
 	}
 
+	if v := e.byteSliceMethod(x, sel, t, place); v != "" {
+		return v
+	}
+
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on slices")
 	return "0"
+}
+
+// byteSliceMethod writes the searches, splits, trims, cuts and case a
+// []byte has from the string's, run on the bytes as a string view: a view
+// given back is a view of the bytes, a string made is taken as an
+// owned slice, and a slice of views has each piece marked a view by a
+// second call in the same expression, the two joined by a comma. ""
+// for any other method, and for a slice of any other element.
+func (e *Emitter) byteSliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Slice, place string) string {
+	if !byteEqual(t.Elem()) {
+		return ""
+	}
+
+	name := sel.Sel.Name
+	s := "sn_bytes_as_string(" + place + ")"
+	arg := func(i int) string { return "sn_bytes_as_string(" + e.looked(x.Args[i], t) + ")" }
+	pieces := func(call string, args ...string) string {
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string {
+			return call + "(" + strings.Join(append(append([]string{s}, args...), out), ", ") + "), sn_strings_to_bytes(" + out + ")"
+		})
+	}
+
+	switch name {
+	case "FindLast":
+		at := e.temp()
+		e.line("int64_t " + at + " = sn_string_last_index(" + s + ", " + arg(0) + ");")
+		return e.someIndex(at, x)
+	case "Count":
+		return "sn_string_count(" + s + ", " + arg(0) + ")"
+	case "HasPrefix":
+		return "sn_has_prefix(" + s + ", " + arg(0) + ")"
+	case "HasSuffix":
+		return "sn_has_suffix(" + s + ", " + arg(0) + ")"
+	case "Trim", "TrimSpace":
+		return "sn_bytes_view(sn_trim(" + s + "))"
+	case "TrimPrefix":
+		return "sn_bytes_view(sn_trim_prefix(" + s + ", " + arg(0) + "))"
+	case "TrimSuffix":
+		return "sn_bytes_view(sn_trim_suffix(" + s + ", " + arg(0) + "))"
+	case "ToUpper":
+		return "sn_bytes_owned(sn_to_upper(" + s + "))"
+	case "ToLower":
+		return "sn_bytes_owned(sn_to_lower(" + s + "))"
+	case "Fields":
+		return pieces("sn_fields")
+	case "Lines":
+		return pieces("sn_lines")
+	case "Split":
+		return pieces("sn_split", arg(0))
+	case "SplitN":
+		return pieces("sn_split_n", arg(0), e.valueTo(x.Args[1], types.Typ[types.Int]))
+	case "SplitAfter":
+		return pieces("sn_split_after", arg(0))
+	case "SplitAfterN":
+		return pieces("sn_split_after_n", arg(0), e.valueTo(x.Args[1], types.Typ[types.Int]))
+	case "ContainsAny":
+		return "(sn_string_index_any(" + s + ", " + arg(0) + ") >= 0)"
+	case "IndexAny", "LastIndexAny":
+		fn := "sn_string_index_any"
+		if name == "LastIndexAny" {
+			fn = "sn_string_last_index_any"
+		}
+
+		at := e.temp()
+		e.line("int64_t " + at + " = " + fn + "(" + s + ", " + arg(0) + ");")
+		return e.someIndex(at, x)
+	case "TrimLeft":
+		return "sn_bytes_view(sn_trim_left(" + s + ", " + arg(0) + "))"
+	case "TrimRight":
+		return "sn_bytes_view(sn_trim_right(" + s + ", " + arg(0) + "))"
+	case "TrimAny":
+		return "sn_bytes_view(sn_trim_any(" + s + ", " + arg(0) + "))"
+	case "CutPrefix", "CutSuffix":
+		fn := "sn_cut_prefix"
+		if name == "CutSuffix" {
+			fn = "sn_cut_suffix"
+		}
+
+		out, rest := e.temp(), e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
+		e.line("sn_string " + rest + ";")
+		e.line("if (" + fn + "(" + s + ", " + arg(0) + ", &" + rest + ")) {")
+		e.line(out + ".has = true;")
+		e.line(out + ".val = sn_bytes_view(" + rest + ");")
+		e.line("}")
+		return out
+	case "SplitOnce":
+		out, before, after := e.temp(), e.temp(), e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
+		e.line("sn_string " + before + ", " + after + ";")
+		e.line("if (sn_split_once(" + s + ", " + arg(0) + ", &" + before + ", &" + after + ")) {")
+		e.line(out + ".has = true;")
+		e.line(out + ".val.e0 = sn_bytes_view(" + before + ");")
+		e.line(out + ".val.e1 = sn_bytes_view(" + after + ");")
+		e.line("}")
+		return out
+	}
+
+	return ""
 }
 
 // lessAdapter returns the name of the function that lets the runtime
@@ -418,6 +522,10 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 		e.line(e.cType(t, x.Pos()) + " " + out + ";")
 		e.line("sn_map_clone(&" + place + ", " + mt + ", &" + out + ");")
 		return out
+	case "Retain":
+		keep := e.saved(x.Args[0], e.typeOf(x.Args[0]))
+		e.line(e.mapRetain(t, x.Pos()) + "(&" + place + ", " + keep + ");")
+		return ""
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on maps")
@@ -489,6 +597,32 @@ func (e *Emitter) mapGetOrInsert(t *types.Map, pos token.Pos) string {
 	put(&e.protos, head, ";\n")
 	put(&e.helpers, head, " {\n\tvoid *added;\n\t", v, " *slot = sn_map_slot((sn_map *)m, ", mt, ", &k, &added);\n")
 	put(&e.helpers, "\tif (added == NULL) {\n\t\t", e.dropIfNeeded("k", t.Key(), pos), "\n\t\t", e.dropIfNeeded("v", t.Value(), pos), "\n\t} else {\n\t\t*slot = v;\n\t}\n\n\treturn slot;\n}\n\n")
+	return name
+}
+
+// mapRetain writes the function that walks a map's live entries in
+// order, gives each to keep, the key as a ref parameter is passed and
+// the value at its address, and takes out at its place each entry keep
+// refuses: the runtime drops the key and the value and frees the slot,
+// with no key hashed or compared again. The function is read out of
+// the function value once, before the loop: the value's box has its
+// address passed to each call, so a read inside the loop would be a
+// load the C compiler cannot fold where the function is known, and the
+// call would stay one through a pointer, which costs a task calling
+// Retain the bound of its stack.
+func (e *Emitter) mapRetain(t *types.Map, pos token.Pos) string {
+	name := "sn_mapretain_" + lower.Mangle(t)
+	if e.state[name] != undeclared {
+		return name
+	}
+
+	e.state[name] = defined
+	keep := types.NewSignature(nil, []*types.Var{types.NewVar(token.NoPos, "k", types.NewRef(t.Key(), false)), types.NewVar(token.NoPos, "v", types.NewRef(t.Value(), true))}, types.Typ[types.Bool])
+	mt, k, v := e.mapType(t, pos), e.cType(t.Key(), pos), e.cType(t.Value(), pos)
+	head := "static void " + name + "(" + e.cType(t, pos) + " *m, " + e.cType(keep, pos) + " keep)"
+	put(&e.protos, head, ";\n")
+	put(&e.helpers, head, " {\n\t__typeof__(keep.fn) fn = keep.fn;\n\tfor (int64_t i = sn_map_next((sn_map *)m, 0); i >= 0; i = sn_map_next((sn_map *)m, i + 1)) {\n")
+	put(&e.helpers, "\t\tif (!fn(keep.box, ((", k, " *)m->keys)[i], &((", v, " *)m->vals)[i])) {\n\t\t\tsn_map_remove_at((sn_map *)m, ", mt, ", i);\n\t\t}\n\t}\n}\n\n")
 	return name
 }
 
@@ -571,6 +705,46 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 		return "sn_string_replace(" + s + ", " + args[0] + ", " + args[1] + ", INT64_MAX)"
 	case "SplitN":
 		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_split_n(" + s + ", " + args[0] + ", " + args[1] + ", " + out + ")" })
+	case "SplitAfter":
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string { return "sn_split_after(" + s + ", " + args[0] + ", " + out + ")" })
+	case "SplitAfterN":
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string {
+			return "sn_split_after_n(" + s + ", " + args[0] + ", " + args[1] + ", " + out + ")"
+		})
+	case "ContainsAny":
+		return "(sn_string_index_any(" + s + ", " + args[0] + ") >= 0)"
+	case "IndexAny", "LastIndexAny", "IndexByte", "LastIndexByte":
+		fn := "sn_string_index_any"
+		switch sel.Sel.Name {
+		case "LastIndexAny":
+			fn = "sn_string_last_index_any"
+		case "IndexByte":
+			fn = "sn_string_index_byte"
+		case "LastIndexByte":
+			fn = "sn_string_last_index_byte"
+		}
+
+		at := e.temp()
+		e.line("int64_t " + at + " = " + fn + "(" + s + ", " + args[0] + ");")
+		return e.someIndex(at, x)
+	case "TrimLeft":
+		return "sn_trim_left(" + s + ", " + args[0] + ")"
+	case "TrimRight":
+		return "sn_trim_right(" + s + ", " + args[0] + ")"
+	case "TrimAny":
+		return "sn_trim_any(" + s + ", " + args[0] + ")"
+	case "Bytes":
+		return "sn_bytes_view(" + s + ")"
+	case "CutPrefix", "CutSuffix":
+		fn := "sn_cut_prefix"
+		if sel.Sel.Name == "CutSuffix" {
+			fn = "sn_cut_suffix"
+		}
+
+		out := e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
+		e.line(out + ".has = " + fn + "(" + s + ", " + args[0] + ", &" + out + ".val);")
+		return out
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on strings")

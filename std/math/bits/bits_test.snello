@@ -129,3 +129,130 @@ func BenchmarkOnesCount() {
 		x += u64(n)
 	}
 }
+
+// ReverseBytes swaps a value's bytes end for end, at each width, and
+// twice gives the value back.
+func TestReverseBytes() {
+	expect.Equal(ref bits.ReverseBytes(0x0102), ref uint(0x0201000000000000))
+	expect.Equal(ref bits.ReverseBytes16(0x0102), ref u16(0x0201))
+	expect.Equal(ref bits.ReverseBytes32(0x01020304), ref u32(0x04030201))
+	expect.Equal(ref bits.ReverseBytes64(0x0102030405060708), ref u64(0x0807060504030201))
+	expect.Equal(ref bits.ReverseBytes64(bits.ReverseBytes64(0xdeadbeefcafef00d)), ref u64(0xdeadbeefcafef00d))
+	expect.Equal(ref bits.ReverseBytes32(0), ref u32(0))
+	r := bits.ReverseBytes16 // as a value
+	expect.Equal(ref r(0xff00), ref u16(0x00ff))
+}
+
+// Add64 and Sub64 carry and borrow across words: the wrap and its
+// report, in both directions, and a chain adding two-word numbers.
+func TestAddSub64() {
+	sum, carry := bits.Add64(1, 2, 0)
+	expect.Equal(ref sum, ref u64(3))
+	expect.Equal(ref carry, ref u64(0))
+	sum, carry = bits.Add64(18446744073709551615, 1, 0)
+	expect.Equal(ref sum, ref u64(0))
+	expect.Equal(ref carry, ref u64(1))
+	sum, carry = bits.Add64(18446744073709551615, 18446744073709551615, 1)
+	expect.Equal(ref sum, ref u64(18446744073709551615))
+	expect.Equal(ref carry, ref u64(1))
+	sum, carry = bits.Add64(0x8000000000000000, 0x8000000000000000, 0)
+	expect.Equal(ref sum, ref u64(0))
+	expect.Equal(ref carry, ref u64(1))
+	diff, borrow := bits.Sub64(3, 2, 0)
+	expect.Equal(ref diff, ref u64(1))
+	expect.Equal(ref borrow, ref u64(0))
+	diff, borrow = bits.Sub64(0, 1, 0)
+	expect.Equal(ref diff, ref u64(18446744073709551615))
+	expect.Equal(ref borrow, ref u64(1))
+	diff, borrow = bits.Sub64(0, 0, 1)
+	expect.Equal(ref diff, ref u64(18446744073709551615))
+	expect.Equal(ref borrow, ref u64(1))
+	diff, borrow = bits.Sub64(5, 5, 0)
+	expect.Equal(ref diff, ref u64(0))
+	expect.Equal(ref borrow, ref u64(0))
+	// The same through values of the functions, which call the bodies
+	// written here, where a direct call is the instruction in place.
+	add, sub := bits.Add64, bits.Sub64
+	sum, carry = add(18446744073709551615, 1, 0)
+	expect.Equal(ref sum, ref u64(0))
+	expect.Equal(ref carry, ref u64(1))
+	sum, carry = add(18446744073709551615, 18446744073709551615, 1)
+	expect.Equal(ref sum, ref u64(18446744073709551615))
+	expect.Equal(ref carry, ref u64(1))
+	sum, carry = add(1, 2, 1)
+	expect.Equal(ref sum, ref u64(4))
+	expect.Equal(ref carry, ref u64(0))
+	diff, borrow = sub(0, 1, 0)
+	expect.Equal(ref diff, ref u64(18446744073709551615))
+	expect.Equal(ref borrow, ref u64(1))
+	diff, borrow = sub(0, 0, 1)
+	expect.Equal(ref diff, ref u64(18446744073709551615))
+	expect.Equal(ref borrow, ref u64(1))
+	diff, borrow = sub(0x8000000000000000, 1, 1)
+	expect.Equal(ref diff, ref u64(0x7ffffffffffffffe))
+	expect.Equal(ref borrow, ref u64(0))
+	// 2^64 + 5 plus 2^64 + 7, two words each: the low words carry into the high ones.
+	lo, c := bits.Add64(5, 7, 0)
+	hi, c2 := bits.Add64(1, 1, c)
+	expect.Equal(ref lo, ref u64(12))
+	expect.Equal(ref hi, ref u64(2))
+	expect.Equal(ref c2, ref u64(0))
+}
+
+// Mul64 gives the full 128-bit product, and Div64 divides it back,
+// refusing a zero divisor and a quotient that does not fit.
+func TestMulDiv64() {
+	hi, lo := bits.Mul64(1, 1)
+	expect.Equal(ref hi, ref u64(0))
+	expect.Equal(ref lo, ref u64(1))
+	hi, lo = bits.Mul64(18446744073709551615, 18446744073709551615)
+	expect.Equal(ref hi, ref u64(18446744073709551614))
+	expect.Equal(ref lo, ref u64(1))
+	hi, lo = bits.Mul64(0x100000000, 0x100000000)
+	expect.Equal(ref hi, ref u64(1))
+	expect.Equal(ref lo, ref u64(0))
+	hi, lo = bits.Mul64(0xdeadbeefcafef00d, 0x123456789abcdef1)
+	quo, rem := expect.IsSome(bits.Div64(hi, lo, 0x123456789abcdef1))
+	expect.Equal(ref quo, ref u64(0xdeadbeefcafef00d))
+	expect.Equal(ref rem, ref u64(0))
+	quo, rem = expect.IsSome(bits.Div64(hi, lo+5, 0x123456789abcdef1))
+	expect.Equal(ref quo, ref u64(0xdeadbeefcafef00d))
+	expect.Equal(ref rem, ref u64(5))
+	quo, rem = expect.IsSome(bits.Div64(0, 100, 7)) // a high half of zero: one division
+	expect.Equal(ref quo, ref u64(14))
+	expect.Equal(ref rem, ref u64(2))
+	quo, rem = expect.IsSome(bits.Div64(1, 0, 3)) // 2^64 / 3
+	expect.Equal(ref quo, ref u64(6148914691236517205))
+	expect.Equal(ref rem, ref u64(1))
+	quo, rem = expect.IsSome(bits.Div64(0x7fffffffffffffff, 18446744073709551615, 0x8000000000000000)) // the largest quotient
+	expect.Equal(ref quo, ref u64(18446744073709551615))
+	expect.Equal(ref rem, ref u64(0x7fffffffffffffff))
+	quo, rem = expect.IsSome(bits.Div64(1, 1, 18446744073709551615)) // a divisor with every bit set, so no shift
+	expect.Equal(ref quo, ref u64(1))
+	expect.Equal(ref rem, ref u64(2))
+	mul := bits.Mul64 // the body, through a value
+	hi, lo = mul(18446744073709551615, 2)
+	expect.Equal(ref hi, ref u64(1))
+	expect.Equal(ref lo, ref u64(18446744073709551614))
+	expect.IsNone(bits.Div64(1, 0, 0))  // a zero divisor
+	expect.IsNone(bits.Div64(7, 0, 7))  // the quotient would not fit
+	expect.IsNone(bits.Div64(8, 0, 7))
+}
+
+// BenchmarkMul64 measures a 128-bit product.
+func BenchmarkMul64() {
+	x := u64(0xdeadbeefcafef00d)
+	for testing.Loop() {
+		hi, lo := bits.Mul64(x, 0x123456789abcdef1)
+		x = hi ^ lo
+	}
+}
+
+// BenchmarkDiv64 measures a 128-by-64-bit division.
+func BenchmarkDiv64() {
+	x := u64(12345)
+	for testing.Loop() {
+		quo, rem := bits.Div64(x & 0xffff, 0xcafef00ddeadbeef, 0x123456789abcdef1) ?? (0, 0)
+		x = quo ^ rem
+	}
+}

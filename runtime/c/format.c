@@ -22,42 +22,70 @@ sn_string sn_int_to_string(int64_t v) {
 
 sn_string sn_uint_to_string(uint64_t v) { return sn_format_int(v, false); }
 
-// in_base writes u in a base from 2 to 36, after a minus sign when neg
-// says so: a power of two by shifts, any other base by dividing, and
-// ten by two digits a step. The digits past nine are letters, capitals
-// when upper says so.
+// digits_of writes u in a base from 2 to 36 ending at end, the end of
+// a buffer of at least 65 bytes, 64 binary digits and a sign, after a
+// minus sign when neg says so, and returns where the text begins: a
+// power of two by shifts, any other base by dividing, and ten by two
+// digits a step. The digits past nine are letters, capitals when upper
+// says so.
+static char *digits_of(uint64_t u, int64_t base, bool neg, bool upper, char *end) {
+    char *p = end;
+    if (base == 10) {
+        p = sn_format_uint(u, end);
+    } else {
+        const char *digits = upper ? "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "0123456789abcdefghijklmnopqrstuvwxyz";
+        uint64_t b = (uint64_t)base;
+        if ((b & (b - 1)) == 0) {
+            int shift = (int)sn_bits_TrailingZeros64(b);
+            for (; u >= b; u >>= shift) {
+                *--p = digits[u & (b - 1)];
+            }
+        } else {
+            while (u >= b) {
+                uint64_t q = u / b;
+                *--p = digits[u - q * b];
+                u = q;
+            }
+        }
+
+        *--p = digits[u];
+    }
+
+    if (neg) {
+        *--p = '-';
+    }
+
+    return p;
+}
+
+// in_base makes the string of u in a base from 2 to 36, after a minus
+// sign when neg says so; 0 to 99 in base ten are views of a table.
 static sn_string in_base(uint64_t u, int64_t base, bool neg, bool upper) {
     if (base == 10) {
         return sn_format_int(u, neg);
     }
 
-    const char *digits = upper ? "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "0123456789abcdefghijklmnopqrstuvwxyz";
-    char buf[65]; // 64 binary digits and a sign
-    char *end = buf + sizeof buf, *p = end;
-    uint64_t b = (uint64_t)base;
-    if ((b & (b - 1)) == 0) {
-        int shift = (int)sn_bits_TrailingZeros64(b);
-        for (; u >= b; u >>= shift) {
-            *--p = digits[u & (b - 1)];
-        }
-    } else {
-        while (u >= b) {
-            uint64_t q = u / b;
-            *--p = digits[u - q * b];
-            u = q;
-        }
-    }
-
-    *--p = digits[u];
-    if (neg) {
-        *--p = '-';
-    }
-
+    char buf[65];
+    char *end = buf + sizeof buf, *p = digits_of(u, base, neg, upper, end);
     size_t n = (size_t)(end - p);
     uint8_t *q = sn_alloc(n);
     memcpy(q, p, n);
     return SN_OWNED(q, (int64_t)n);
 }
+
+// sn_strconv_appendBits writes u in a base from 2 to 36, after a minus
+// sign when neg says so, after the bytes of b: the digits made in a
+// buffer on the stack and copied once, nothing allocated but the room
+// b may need.
+void sn_strconv_appendBits(sn_slice_u8 *b, uint64_t u, int64_t base, bool neg) {
+    char buf[65];
+    char *end = buf + sizeof buf, *p = digits_of(u, base, neg, false, end);
+    sn_strings_appendString(b, SN_STR((const uint8_t *)p, end - p));
+}
+
+// sn_strconv_appendString appends the bytes of s to b, as the builder's
+// WriteString does.
+void sn_strconv_appendString(sn_slice_u8 *b, sn_string s) { sn_strings_appendString(b, s); }
 
 // sn_int_base and sn_uint_base print an integer as %x, %X, %o and %b
 // do, in base 16, 8 or 2: a negative number as a minus sign and its
@@ -124,10 +152,24 @@ static int precision(int64_t prec) { return prec < 0 ? 0 : prec > MOST_DIGITS ? 
 // with the point at 0, 120 is "12" with the point at 3. A float prints
 // from one, laid out around its digits as %e, %f and %g lay them out.
 typedef struct {
-    char *d; // the digits, from sn_alloc
-    int nd;  // how many
-    int dp;  // the point's place
+    char *d;        // the digits: small, or a block from sn_alloc when there are more than it holds
+    int nd;         // how many
+    int dp;         // the point's place
+    char small[32]; // room for the digits of any Ryū form, which has at most eighteen, so no short form allocates
 } decimal;
+
+// decimal_digits points d at room for nd digits: its own when they fit,
+// a block otherwise, which decimal_free gives back.
+static void decimal_digits(decimal *d, int nd) {
+    d->nd = nd;
+    d->d = nd < (int)sizeof d->small ? d->small : sn_alloc((size_t)nd + 1);
+}
+
+static void decimal_free(decimal *d) {
+    if (d->d != d->small) {
+        sn_free(d->d);
+    }
+}
 
 // Shortest digits are Ryū's (Ulf Adams, 2018): the number's interval of
 // values that read back as it, scaled by a power of ten to an integer,
@@ -450,9 +492,8 @@ static void decimal_of(double v, int prec, bool f32, decimal *d) {
             ryu_shortest(&r, mant, exp - 1023 - 52, false);
         }
 
-        d->d = sn_alloc((size_t)r.nd + 1);
+        decimal_digits(d, r.nd);
         memcpy(d->d, r.d, (size_t)r.nd);
-        d->nd = r.nd;
         d->dp = r.dp;
         return;
     }
@@ -470,9 +511,8 @@ static void decimal_of(double v, int prec, bool f32, decimal *d) {
 
         ryu_dec r;
         ryu_fixed(&r, mant, exp - 1023 - 52, prec);
-        d->d = sn_alloc((size_t)r.nd + 1);
+        decimal_digits(d, r.nd);
         memcpy(d->d, r.d, (size_t)r.nd);
-        d->nd = r.nd;
         d->dp = r.dp;
         return;
     }
@@ -480,9 +520,8 @@ static void decimal_of(double v, int prec, bool f32, decimal *d) {
     sn_decimal a;
     exact_digits(&a, v);
     sn_decimal_round(&a, prec);
-    d->d = sn_alloc((size_t)a.nd + 1);
+    decimal_digits(d, a.nd);
     memcpy(d->d, a.d, (size_t)a.nd);
-    d->nd = a.nd;
     d->dp = (int)a.dp;
 }
 
@@ -553,28 +592,28 @@ static bool special(double v, sn_string *s) {
     return true;
 }
 
-// format_g writes v as %g does: shortest, the fewest digits that
-// read back as v, as a float32 when f32 says so, or with prec
-// significant digits; an exponent when the number's own is below -4 or
-// at least the precision, which is 6 for the shortest form, so a
-// million prints as 1e+06 and 123456 as 123456.
-static sn_string format_g(double v, int prec, bool f32) {
-    sn_string s;
-    if (special(v, &s)) {
-        return s;
-    }
+// SHORT_TEXT is room on the stack for a float's short texts, written
+// there and copied once: the shortest form, a sign, 17 digits, a point
+// and an exponent of four, and a fixed form of at most 17 digits, with
+// room to spare.
+enum { SHORT_TEXT = 64 };
 
+// g_text writes v, finite, as %g does into o, whose buffer holds
+// SHORT_TEXT bytes for the shortest form and prec + 340 otherwise:
+// shortest, the fewest digits that read back as v, as a float32 when
+// f32 says so, or with prec significant digits; an exponent when the
+// number's own is below -4 or at least the precision, which is 6 for
+// the shortest form, so a million prints as 1e+06 and 123456 as 123456.
+static void g_text(out_text *o, double v, int prec, bool f32) {
     bool shortest = prec < 0;
-    out_text o = { sn_alloc((size_t)(prec > 0 ? prec : 0) + 340),
-                   0 }; // a double's point is never 310 digits from its first
     if (signbit(v)) {
-        out_byte(&o, '-');
+        out_byte(o, '-');
         v = -v;
     }
 
     if (v == 0) {
-        out_byte(&o, '0');
-        return SN_OWNED(o.p, o.n);
+        out_byte(o, '0');
+        return;
     }
 
     decimal d;
@@ -596,13 +635,52 @@ static sn_string format_g(double v, int prec, bool f32) {
 
     int exp = d.dp - 1;
     if (exp < -4 || exp >= eprec) {
-        put_e(&o, &d, (prec > d.nd ? d.nd : prec) - 1);
+        put_e(o, &d, (prec > d.nd ? d.nd : prec) - 1);
     } else {
         int digits = prec > d.dp ? d.nd : prec;
-        put_f(&o, &d, digits - d.dp > 0 ? digits - d.dp : 0);
+        put_f(o, &d, digits - d.dp > 0 ? digits - d.dp : 0);
     }
 
-    sn_free(d.d);
+    decimal_free(&d);
+}
+
+// owned_text makes the string of the n bytes at p: one allocation of
+// their length.
+static sn_string owned_text(const char *p, int64_t n) {
+    uint8_t *q = sn_alloc((size_t)(n > 0 ? n : 1));
+    memcpy(q, p, (size_t)n);
+    return SN_OWNED(q, n);
+}
+
+// shortest_text writes v in its shortest form into the SHORT_TEXT bytes
+// at buf and returns how many it took, an infinity or NaN as special
+// spells it.
+static int64_t shortest_text(char *buf, double v, bool f32) {
+    sn_string s;
+    if (special(v, &s)) {
+        memcpy(buf, s.ptr, (size_t)s.len);
+        return s.len;
+    }
+
+    out_text o = { buf, 0 };
+    g_text(&o, v, -1, f32);
+    return o.n;
+}
+
+// format_g writes v as %g does, as g_text says, into a new string.
+static sn_string format_g(double v, int prec, bool f32) {
+    sn_string s;
+    if (special(v, &s)) {
+        return s;
+    }
+
+    if (prec < 0) {
+        char buf[SHORT_TEXT];
+        return owned_text(buf, shortest_text(buf, v, f32));
+    }
+
+    out_text o = { sn_alloc((size_t)prec + 340), 0 }; // a double's point is never 310 digits from its first
+    g_text(&o, v, prec, f32);
     return SN_OWNED(o.p, o.n);
 }
 
@@ -617,6 +695,15 @@ sn_string sn_f32_to_string(float v) { return format_g((double)v, -1, true); }
 // sn_f64_g prints v with prec significant digits, as %.3v and %.3g do
 // on a float.
 sn_string sn_f64_g(double v, int64_t prec) { return format_g(v, precision(prec), false); }
+
+// sn_strconv_appendFloat writes v in its shortest form, as an f32 when
+// single says so, after the bytes of b: the text made on the stack and
+// copied once, nothing allocated but the room b may need.
+void sn_strconv_appendFloat(sn_slice_u8 *b, double v, bool single) {
+    char buf[SHORT_TEXT];
+    int64_t n = shortest_text(buf, v, single);
+    sn_strings_appendString(b, SN_STR((const uint8_t *)buf, n));
+}
 
 // sn_f64_e prints v as %e does, one digit before the point and
 // prec after it, rounded to them, then the exponent in two digits at
@@ -634,16 +721,17 @@ sn_string sn_f64_e(double v, int64_t digits) {
         v = -v;
     }
 
-    char zero = '0';
-    decimal d = { &zero, 1, 1 }; // zero's digits: no power of ten scales it
+    decimal d;
     if (v != 0) {
         decimal_of(v, prec + 1, false, &d);
+    } else { // zero's one digit: no power of ten scales it
+        decimal_digits(&d, 1);
+        d.d[0] = '0';
+        d.dp = 1;
     }
 
     put_e(&o, &d, prec);
-    if (v != 0) {
-        sn_free(d.d);
-    }
+    decimal_free(&d);
 
     return SN_OWNED(o.p, o.n);
 }
@@ -794,10 +882,44 @@ static void ryu_fixed(ryu_dec *d, uint64_t mant, int exp, int prec) {
     d->dp -= q;
 }
 
+// pow10_exact holds the powers of ten a double holds exactly, 10^0 to
+// 10^22.
+static const double pow10_exact[23] = { 1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
+                                        1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22 };
+
+// below_pow10 reports whether a, positive, is below 10^k, for k from
+// -22 to 22: 1 when it is, 0 when it is not, and -1 when the answer is
+// not exact. The power itself decides k at or above zero, since a
+// double holds it; below zero a is scaled by the inverse power, 10^-k,
+// which a double holds, and since a rounding keeps the order, a product
+// on either side of one puts the exact product on the same side; a
+// product that is one itself leaves the side unknown, and the digits
+// must decide.
+static int below_pow10(double a, int k) {
+    if (k >= 0) {
+        return a < pow10_exact[k];
+    }
+
+    double scaled = a * pow10_exact[-k];
+    if (scaled == 1.0) {
+        return -1;
+    }
+
+    return scaled < 1.0;
+}
+
 // fixed_digits writes v, not zero, with prec digits after the point as
-// %f does, and reports false when the digits needed are more than
-// seventeen or none, which are written from every digit of v instead.
-static bool fixed_digits(double v, int prec, sn_string *out) {
+// %f does into the SHORT_TEXT bytes at p and returns how many it took,
+// or -1 when the digits needed are more than seventeen or none, which
+// are written from every digit of v instead. The place of the point is
+// estimated from the binary exponent and the digits made in one pass
+// of Ryū's fixed form; where the point found differs from the estimate,
+// a comparison with the power of ten tells a rounding that carried,
+// whose digits stand, from an estimate one too low, whose digits are
+// made again from the place found; where the comparison cannot decide,
+// the place after rounding to seventeen digits is found the long way
+// and the digits made again from it.
+static int64_t fixed_digits(double v, int prec, char *p) {
     bool neg = signbit(v);
     double a = neg ? -v : v;
     uint64_t bits;
@@ -811,16 +933,44 @@ static bool fixed_digits(double v, int prec, sn_string *out) {
     }
 
     exp -= 1023 + 52;
-    ryu_dec d;
-    ryu_fixed(&d, mant, exp, 17); // the exact magnitude
-    int digits = d.dp + prec;
-    if (digits < 1 || digits > 17) {
-        return false;
+    // v lies in [2^top, 2^(top+1)), less than a decade wide, so its first
+    // digit is at the place of 2^top or one above; mul_log2_log10 is
+    // floor(top * log10 2) exactly over a double's exponents, so dp is
+    // the digits before the point, or one fewer, never more.
+    int top = exp + (64 - __builtin_clzll(mant)) - 1;
+    int dp = mul_log2_log10(top) + 1;
+    int digits = dp + prec;
+    if (digits > 17) {
+        return -1;
     }
 
-    ryu_fixed(&d, mant, exp, digits);
-    int whole = d.dp > 0 ? d.dp : 1;
-    char *p = sn_alloc((size_t)(neg + whole + 1 + prec));
+    ryu_dec d;
+    ryu_fixed(&d, mant, exp, digits < 1 ? 1 : digits);
+    if (d.dp != dp) { // the rounding carried into a new digit, or the estimate was one too low: a against 10^dp tells them apart
+        int below = dp >= -22 && dp <= 22 ? below_pow10(a, dp) : -1;
+        bool remake = below == 0; // a low estimate asked for too few digits
+        if (below < 0) {
+            ryu_fixed(&d, mant, exp, 17); // the place after rounding to seventeen digits, where the first digit lands: d holds that rounding, not the answer
+            dp = d.dp;
+            remake = true;
+        } else {
+            dp += !below;
+        }
+
+        if (remake) {
+            digits = dp + prec;
+            if (digits < 1 || digits > 17) {
+                return -1;
+            }
+
+            ryu_fixed(&d, mant, exp, digits);
+        }
+    }
+
+    if (d.dp + prec < 1) {
+        return -1; // below the last digit asked for: rounded from every digit instead
+    }
+
     int64_t n = 0;
     if (neg) {
         p[n++] = '-';
@@ -842,24 +992,27 @@ static bool fixed_digits(double v, int prec, sn_string *out) {
         }
     }
 
-    *out = SN_OWNED(p, n);
-    return true;
+    return n;
 }
 
-// sn_f64_fixed prints v with prec digits after the point, as %.2f
-// does, however many that takes, and an infinity or NaN as special
-// spells it.
-sn_string sn_f64_fixed(double v, int64_t digits) {
+// fixed_text writes v with prec digits after the point into the
+// SHORT_TEXT bytes at buf, when the text is short: an infinity or NaN
+// as special spells it, and at most seventeen digits by fixed_digits;
+// it returns how many bytes, or -1 for a text made from every digit.
+static int64_t fixed_text(double v, int prec, char *buf) {
     sn_string s;
     if (special(v, &s)) {
-        return s;
+        memcpy(buf, s.ptr, (size_t)s.len);
+        return s.len;
     }
 
-    int prec = precision(digits);
-    if (v != 0 && prec <= 17 && fixed_digits(v, prec, &s)) {
-        return s;
-    }
+    return v != 0 && prec <= 17 ? fixed_digits(v, prec, buf) : -1;
+}
 
+// fixed_long writes v with prec digits after the point from every digit
+// of v, rounded to the place asked for: the text fixed_text does not
+// make.
+static sn_string fixed_long(double v, int prec) {
     bool neg = signbit(v);
     sn_decimal a = { .nd = 0, .dp = 0 }; // zero has no digits
     if (v != 0) {
@@ -887,6 +1040,16 @@ sn_string sn_f64_fixed(double v, int64_t digits) {
     }
 
     return SN_OWNED(p, n);
+}
+
+// sn_f64_fixed prints v with prec digits after the point, as %.2f
+// does, however many that takes, and an infinity or NaN as special
+// spells it.
+sn_string sn_f64_fixed(double v, int64_t digits) {
+    int prec = precision(digits);
+    char buf[SHORT_TEXT];
+    int64_t n = fixed_text(v, prec, buf);
+    return n >= 0 ? owned_text(buf, n) : fixed_long(v, prec);
 }
 
 // sn_strconv_formatFixed is strconv's FormatFloat with a precision:
@@ -918,6 +1081,22 @@ sn_string sn_strconv_formatFixed(double v, int64_t prec) {
     memset(p + s.len, '0', (size_t)(prec - LAST_DIGIT));
     sn_string_free(s);
     return SN_OWNED(p, n);
+}
+
+// sn_strconv_appendFixed writes v with prec digits after the point, as
+// sn_strconv_formatFixed writes it, after the bytes of b: on the stack
+// and copied once for the short texts, through the string for the rest.
+void sn_strconv_appendFixed(sn_slice_u8 *b, double v, int64_t prec) {
+    char buf[SHORT_TEXT];
+    int64_t n = fixed_text(v, precision(prec), buf);
+    if (n >= 0) {
+        sn_strings_appendString(b, SN_STR((const uint8_t *)buf, n));
+        return;
+    }
+
+    sn_string s = sn_strconv_formatFixed(v, prec);
+    sn_strings_appendString(b, s);
+    sn_string_free(s);
 }
 
 // sn_int_digits gives the decimal text of an integer, which it takes,

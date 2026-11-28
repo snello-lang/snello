@@ -92,7 +92,6 @@ type TempInfo struct {
 	Carried bool   // made of a value that reads a variable its statement stores: it holds what the value lends before any store
 	View    bool   // a borrow a slice expression makes, a view into the place it slices rather than the place's value
 	Slot    bool   // a mut view's header, which lives in a slot of the function as both backends store it: written each time its borrow is made, dropped where the function ends
-	Itself  bool   // a borrow of a borrow's own place, made where a borrow of the borrow is wanted, as ref r is written
 	Named   string // for a borrow made for a construct that holds it, what a message calls the holder: the arm written for each variant
 }
 

@@ -204,6 +204,59 @@ SN_ALWAYS_INLINE uint64_t sn_bits_RotateLeft64(uint64_t x, int64_t k) {
 #endif
 #endif
 
+// The bytes of a value in the opposite order, one instruction, and the
+// bits of a float as an integer of its width and back, a copy of the
+// bits that the compilers write as a move or as nothing.
+SN_ALWAYS_INLINE uint16_t sn_bits_ReverseBytes16(uint16_t x) { return __builtin_bswap16(x); }
+SN_ALWAYS_INLINE uint32_t sn_bits_ReverseBytes32(uint32_t x) { return __builtin_bswap32(x); }
+SN_ALWAYS_INLINE uint64_t sn_bits_ReverseBytes64(uint64_t x) { return __builtin_bswap64(x); }
+
+// Two words at once: the sum with its carry, the difference with its
+// borrow, and the two halves of the product, each the processor's
+// instructions through the compiler's builtins; the second word is
+// stored.
+SN_ALWAYS_INLINE uint64_t sn_bits_Add64(uint64_t x, uint64_t y, uint64_t carry, uint64_t *carryOut) {
+    uint64_t sum, c1 = __builtin_add_overflow(x, y, &sum), c2 = __builtin_add_overflow(sum, carry, &sum);
+    *carryOut = c1 | c2;
+    return sum;
+}
+
+SN_ALWAYS_INLINE uint64_t sn_bits_Sub64(uint64_t x, uint64_t y, uint64_t borrow, uint64_t *borrowOut) {
+    uint64_t diff, b1 = __builtin_sub_overflow(x, y, &diff), b2 = __builtin_sub_overflow(diff, borrow, &diff);
+    *borrowOut = b1 | b2;
+    return diff;
+}
+
+SN_ALWAYS_INLINE uint64_t sn_bits_Mul64(uint64_t x, uint64_t y, uint64_t *lo) {
+    unsigned __int128 p = (unsigned __int128)x * y;
+    *lo = (uint64_t)p;
+    return (uint64_t)(p >> 64);
+}
+
+SN_ALWAYS_INLINE uint64_t sn_f64_bits(double x) {
+    uint64_t b;
+    memcpy(&b, &x, 8);
+    return b;
+}
+
+SN_ALWAYS_INLINE double sn_f64_from_bits(uint64_t b) {
+    double x;
+    memcpy(&x, &b, 8);
+    return x;
+}
+
+SN_ALWAYS_INLINE uint32_t sn_f32_bits(float x) {
+    uint32_t b;
+    memcpy(&b, &x, 4);
+    return b;
+}
+
+SN_ALWAYS_INLINE float sn_f32_from_bits(uint32_t b) {
+    float x;
+    memcpy(&x, &b, 4);
+    return x;
+}
+
 SN_ALWAYS_INLINE uint64_t sn_bits_Reverse64(uint64_t x) {
 #ifdef SN_BITREVERSE
     return __builtin_bitreverse64(x);
@@ -249,6 +302,10 @@ SN_BITS_NAMED(16, 16, uint16_t)
 SN_BITS_NAMED(32, 32, uint32_t)
 SN_BITS_NAMED(64, 64, uint64_t)
 #undef SN_BITS_NAMED
+uint64_t sn_math__bits_ReverseBytes(uint64_t x);
+uint16_t sn_math__bits_ReverseBytes16(uint16_t x);
+uint32_t sn_math__bits_ReverseBytes32(uint32_t x);
+uint64_t sn_math__bits_ReverseBytes64(uint64_t x);
 
 // A debug build, snello build -debug, compiles the runtime with SN_DEBUG
 // and makes a mistake of the compiler a stopped program instead of a
@@ -380,6 +437,8 @@ int64_t sn_strings_copyString(sn_slice_u8 *dst, sn_string s);
 sn_string sn_strings_repeat(sn_string s, int64_t n);
 void sn_string_append(sn_string *s, const sn_string *x);
 sn_string sn_strings_ownString(sn_slice_u8 b);
+void sn_strings_mapBytes(sn_slice_u8 *b, sn_slice_u8 table);
+int64_t sn_strings_skipTo(sn_string s, int64_t from, sn_slice_u8 firsts, sn_slice_u8 starts);
 sn_string sn_encoding__json_textOf(sn_slice_u8 b);
 void sn_encoding__json_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi);
 void sn_encoding__json_grow(sn_slice_u8 *buf, int64_t n);
@@ -389,7 +448,6 @@ int64_t sn_bufio_copyString(sn_slice_u8 *dst, sn_string s);
 int64_t sn_bufio_indexByte(sn_slice_u8 p, uint8_t c);
 void sn_bufio_appendBytes(sn_slice_u8 *b, sn_slice_u8 p);
 void sn_bufio_slide(sn_slice_u8 *b, int64_t lo, int64_t hi);
-sn_slice_u8 sn_bufio_bytesOf(sn_string s);
 int64_t sn_bytes_copyBytes(sn_slice_u8 *dst, sn_slice_u8 src);
 int64_t sn_bytes_indexByte(sn_slice_u8 p, uint8_t c);
 void sn_bytes_slide(sn_slice_u8 *buf, int64_t lo, int64_t hi);
@@ -483,6 +541,14 @@ void sn_init(int argc, char **argv);
 
 void sn_slice_make(sn_slice *out, int64_t len, int64_t cap, size_t size);
 void *sn_alloc_elems(int64_t n, size_t size);
+// A block of slots may carry SN_SLOT_WORDS words of its holder's before
+// its first slot, which sn_alloc_slots makes and sn_free_slots frees by
+// the first slot's address; sn_slot_word is the i-th word's place.
+#define SN_SLOT_WORDS 4
+#define SN_SLOT_HEADER ((size_t)SN_SLOT_WORDS * sizeof(int64_t))
+void *sn_alloc_slots(int64_t n, size_t size);
+void sn_free_slots(void *p);
+static inline SN_NODEBUG int64_t *sn_slot_word(void *p, int64_t i) { return (int64_t *)p - SN_SLOT_WORDS + i; }
 // SN_PUSH_FAST and SN_POP_FAST say when the C backend's Push and Pop
 // write in place, without the runtime: a push with room, and a pop of a
 // slice that owns its elements and has one; a sub-slice's capacity,
@@ -525,6 +591,7 @@ const void *sn_map_get(const sn_map *m, const sn_map_type *t, const void *key, c
 void *sn_map_slot(sn_map *m, const sn_map_type *t, const void *key, void **added);
 void sn_map_reserve(sn_map *m, const sn_map_type *t, int64_t n);
 bool sn_map_remove(sn_map *m, const sn_map_type *t, const void *key, void *out);
+void sn_map_remove_at(sn_map *m, const sn_map_type *t, int64_t i);
 void sn_map_clone(const sn_map *m, const sn_map_type *t, sn_map *out);
 void sn_map_free(sn_map *m, const sn_map_type *t);
 int64_t sn_map_next(const sn_map *m, int64_t i);
@@ -554,6 +621,17 @@ sn_string sn_string_replace(sn_string s, sn_string old, sn_string new, int64_t n
 sn_string sn_trim_prefix(sn_string s, sn_string p);
 sn_string sn_trim_suffix(sn_string s, sn_string p);
 void sn_split_n(sn_string s, sn_string sep, int64_t n, sn_slice *out);
+int64_t sn_string_index_any(sn_string s, sn_string chars);
+int64_t sn_string_last_index_any(sn_string s, sn_string chars);
+int64_t sn_string_index_byte(sn_string s, int64_t c);
+int64_t sn_string_last_index_byte(sn_string s, int64_t c);
+sn_string sn_trim_left(sn_string s, sn_string cutset);
+sn_string sn_trim_right(sn_string s, sn_string cutset);
+sn_string sn_trim_any(sn_string s, sn_string cutset);
+bool sn_cut_prefix(sn_string s, sn_string p, sn_string *rest);
+bool sn_cut_suffix(sn_string s, sn_string p, sn_string *rest);
+void sn_split_after(sn_string s, sn_string sep, sn_slice *out);
+void sn_split_after_n(sn_string s, sn_string sep, int64_t n, sn_slice *out);
 bool sn_bytes_equal(sn_slice_u8 a, sn_slice_u8 b);
 int64_t sn_bytes_find(sn_slice_u8 a, sn_slice_u8 b);
 void sn_fields(sn_string s, sn_slice *out);
@@ -607,6 +685,22 @@ static inline SN_NODEBUG sn_slice_u8 sn_string_to_bytes(sn_string s) {
     return (sn_slice_u8){ (uint8_t *)c.ptr, c.len, c.cap };
 }
 
+// The searches, splits and trims a []byte has are the string's, run on
+// the bytes as a string view: sn_bytes_as_string views a byte slice,
+// sn_bytes_view gives a string view back as a view of the bytes, its
+// cap SN_VIEW as a sub-slice's is, and sn_bytes_owned takes a string
+// the routine made, never a view of its input, as an owned slice: the
+// empty string, which no routine allocates, becomes the empty slice,
+// and any other result is the routine's own block, handed over. A
+// slice of string views has the layout of a slice of byte views but
+// for each piece's cap, which sn_strings_to_bytes sets to SN_VIEW.
+static inline SN_NODEBUG sn_string sn_bytes_as_string(sn_slice_u8 b) { return (sn_string){ b.ptr, b.len, 0 }; }
+
+static inline SN_NODEBUG sn_slice_u8 sn_bytes_view(sn_string s) { return (sn_slice_u8){ (uint8_t *)s.ptr, s.len, SN_VIEW }; }
+
+sn_slice_u8 sn_bytes_owned(sn_string s);
+void sn_strings_to_bytes(sn_slice *pieces);
+
 // Printing: fmt.Println(a, b) builds the line, a, separator, b and
 // newline, and writes it to standard output at once.
 void sn_print_string(sn_string s);
@@ -650,8 +744,30 @@ bool sn_math_IsNaN(double x);
 bool sn_math_IsInf(double x, int64_t sign);
 bool sn_math_Signbit(double x);
 double sn_math_Copysign(double x, double sign);
+double sn_math_Ldexp(double frac, int64_t exp);
+double sn_math_Remainder(double x, double y);
+double sn_math_FMA(double x, double y, double z);
+double sn_math_Expm1(double x);
+double sn_math_Log1p(double x);
+double sn_math_Exp2(double x);
+double sn_math_Asinh(double x);
+double sn_math_Acosh(double x);
+double sn_math_Atanh(double x);
+double sn_math_Gamma(double x);
+double sn_math_Erf(double x);
+double sn_math_Erfc(double x);
+double sn_math_Nextafter(double x, double y);
+double sn_math_Pow10(int64_t n);
+double sn_math_frexp(double x, int64_t *exp);
+double sn_math_modf(double x, double *frac);
+double sn_math_lgamma(double x, int64_t *sign);
+uint64_t sn_math_Float64bits(double x);
+double sn_math_Float64frombits(uint64_t b);
+uint32_t sn_math_Float32bits(float x);
+float sn_math_Float32frombits(uint32_t b);
+uint64_t sn_math__bits_mul64(uint64_t x, uint64_t y, uint64_t *lo);
+uint64_t sn_math__bits_div64(uint64_t hi, uint64_t lo, uint64_t y, uint64_t *rem);
 uint64_t sn_math__rand_random(void);
-uint64_t sn_math__rand_mul64(uint64_t x, uint64_t y, uint64_t *lo);
 sn_string sn_io_reason(int64_t code);
 int64_t sn_io_kindOf(int64_t code);
 extern sn_slice sn_os_Args; // the command line, as a slice of sn_string
@@ -686,6 +802,8 @@ sn_string sn_expect_parts(void);
 int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n);
 int64_t sn_os_write(int64_t fd, sn_slice_u8 buf, int64_t *n);
 int64_t sn_os_writeString(int64_t fd, sn_string s, int64_t *n);
+int64_t sn_os_pread(int64_t fd, sn_slice_u8 *buf, uint64_t off, int64_t *n);
+int64_t sn_os_pwrite(int64_t fd, sn_slice_u8 buf, uint64_t off, int64_t *n);
 int64_t sn_os_syncFile(int64_t fd);
 int64_t sn_os_closeFile(int64_t fd);
 int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at);
@@ -712,6 +830,10 @@ int64_t sn_strconv_parseFloat32(sn_string s, float *out);
 sn_string sn_strconv_unquote(sn_string s, bool *ok);
 sn_string sn_strconv_formatBits(uint64_t u, int64_t base, bool neg);
 sn_string sn_strconv_formatFixed(double v, int64_t prec);
+void sn_strconv_appendBits(sn_slice_u8 *b, uint64_t u, int64_t base, bool neg);
+void sn_strconv_appendFloat(sn_slice_u8 *b, double v, bool single);
+void sn_strconv_appendFixed(sn_slice_u8 *b, double v, int64_t prec);
+void sn_strconv_appendString(sn_slice_u8 *b, sn_string s);
 int64_t sn_time_now(void);
 void sn_time_Sleep(int64_t d);
 

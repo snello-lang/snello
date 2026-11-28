@@ -80,7 +80,7 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 var mutating = map[string]bool{
 	"Push": true, "Pop": true, "Insert": true, "Remove": true, "RemoveValue": true,
 	"Clear": true, "Swap": true, "Reverse": true, "Sort": true, "SortBy": true, "GetMut": true,
-	"Extend": true, "Truncate": true, "GetOrInsert": true,
+	"Extend": true, "Truncate": true, "GetOrInsert": true, "Retain": true,
 }
 
 // receiver writes the place a predeclared method is called on, made
@@ -297,8 +297,111 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		return e.someIndex(e.rt("sn_bytes_find", "i64", e.load("%sn_slice", p), e.looked(x.Args[0], t)), x)
 	}
 
+	if v, ok := e.byteSliceMethod(x, sel, t, p); ok {
+		return v
+	}
+
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on slices")
 	return unit
+}
+
+// byteView writes a string view as a view of its bytes: the pointer and
+// the length, with the cap that marks a view, so that it is never
+// freed or grown.
+func (e *Emitter) byteView(str value) value {
+	b := e.insert(value{"%sn_slice", "zeroinitializer"}, e.extract(str, 0, "ptr"), 0)
+	return e.insert(e.insert(b, e.extract(str, 1, "i64"), 1), value{"i64", snView}, 2)
+}
+
+// byteSliceMethod writes the searches, splits, trims, cuts and case a
+// []byte has from the string's, run on the bytes as a string view: a view
+// given back is a view of the bytes, a string made is taken as an
+// owned slice, and a slice of views has each piece marked a view.
+// false for any other method, and for a slice of any other element.
+func (e *Emitter) byteSliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Slice, p string) (value, bool) {
+	if !byteEqual(t.Elem()) {
+		return unit, false
+	}
+
+	name := sel.Sel.Name
+	asString := func(b value) value { // the bytes viewed as a string: the pointer and the length, no cap
+		str := e.insert(value{"%sn_string", "zeroinitializer"}, e.extract(b, 0, "ptr"), 0)
+		return e.insert(str, e.extract(b, 1, "i64"), 1)
+	}
+
+	view := e.byteView
+	s := asString(e.load("%sn_slice", p))
+	arg := func(i int) value { return asString(e.looked(x.Args[i], t)) }
+	pieces := func(fn string, args ...value) value {
+		out := e.slot("%sn_slice")
+		e.rt(fn, "void", append(append([]value{s}, args...), value{"ptr", out})...)
+		e.rt("sn_strings_to_bytes", "void", value{"ptr", out})
+		return e.load("%sn_slice", out)
+	}
+
+	switch name {
+	case "FindLast":
+		return e.someIndex(e.rt("sn_string_last_index", "i64", s, arg(0)), x), true
+	case "Count":
+		return e.rt("sn_string_count", "i64", s, arg(0)), true
+	case "HasPrefix":
+		return e.rt("sn_has_prefix", "i1", s, arg(0)), true
+	case "HasSuffix":
+		return e.rt("sn_has_suffix", "i1", s, arg(0)), true
+	case "Trim", "TrimSpace":
+		return view(e.rt("sn_trim", "%sn_string", s)), true
+	case "TrimPrefix":
+		return view(e.rt("sn_trim_prefix", "%sn_string", s, arg(0))), true
+	case "TrimSuffix":
+		return view(e.rt("sn_trim_suffix", "%sn_string", s, arg(0))), true
+	case "ToUpper":
+		return e.rt("sn_bytes_owned", "%sn_slice", e.rt("sn_to_upper", "%sn_string", s)), true
+	case "ToLower":
+		return e.rt("sn_bytes_owned", "%sn_slice", e.rt("sn_to_lower", "%sn_string", s)), true
+	case "Fields":
+		return pieces("sn_fields"), true
+	case "Lines":
+		return pieces("sn_lines"), true
+	case "Split":
+		return pieces("sn_split", arg(0)), true
+	case "SplitN":
+		return pieces("sn_split_n", arg(0), e.valueTo(x.Args[1], types.Typ[types.Int])), true
+	case "SplitAfter":
+		return pieces("sn_split_after", arg(0)), true
+	case "SplitAfterN":
+		return pieces("sn_split_after_n", arg(0), e.valueTo(x.Args[1], types.Typ[types.Int])), true
+	case "ContainsAny":
+		return e.op("icmp sge i64 "+e.rt("sn_string_index_any", "i64", s, arg(0)).s+", 0", "i1"), true
+	case "IndexAny":
+		return e.someIndex(e.rt("sn_string_index_any", "i64", s, arg(0)), x), true
+	case "LastIndexAny":
+		return e.someIndex(e.rt("sn_string_last_index_any", "i64", s, arg(0)), x), true
+	case "TrimLeft":
+		return view(e.rt("sn_trim_left", "%sn_string", s, arg(0))), true
+	case "TrimRight":
+		return view(e.rt("sn_trim_right", "%sn_string", s, arg(0))), true
+	case "TrimAny":
+		return view(e.rt("sn_trim_any", "%sn_string", s, arg(0))), true
+	case "CutPrefix", "CutSuffix":
+		fn := "sn_cut_prefix"
+		if name == "CutSuffix" {
+			fn = "sn_cut_suffix"
+		}
+
+		rest := e.slot("%sn_string")
+		e.store(value{"%sn_string", "zeroinitializer"}, rest) // None carries a zero view, as the C backend's does
+		has := e.rt(fn, "i1", s, arg(0), value{"ptr", rest})
+		return e.optionOf(e.typeOf(x), has, view(e.load("%sn_string", rest)), x.Pos()), true
+	case "SplitOnce":
+		before, after := e.slot("%sn_string"), e.slot("%sn_string")
+		has := e.rt("sn_split_once", "i1", s, arg(0), value{"ptr", before}, value{"ptr", after})
+		pair := e.irType(lower.ValueType(e.typeOf(x)).Underlying().(*types.Option).Elem(), x.Pos())
+		tuple := e.insert(value{pair, "zeroinitializer"}, view(e.load("%sn_string", before)), 0)
+		tuple = e.insert(tuple, view(e.load("%sn_string", after)), 1)
+		return e.optionOf(e.typeOf(x), has, tuple, x.Pos()), true
+	}
+
+	return unit, false
 }
 
 // lessAdapter returns the name of the function that lets the runtime
@@ -568,10 +671,52 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 		e.store(value{"%sn_map", "zeroinitializer"}, out)
 		e.rt("sn_map_clone", "void", m, mt, value{"ptr", out})
 		return e.load("%sn_map", out)
+	case "Retain":
+		keep := e.spill(e.valueTo(x.Args[0], e.typeOf(x.Args[0])))
+		e.inst("call void @" + e.mapRetain(t, x.Pos()) + "(ptr " + p + ", ptr " + keep + ")")
+		return unit
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on maps")
 	return unit
+}
+
+// mapRetain writes the function that walks a map's live entries in
+// order, gives each to keep, the key as a ref parameter is passed and
+// the value at its address, and takes out at its place each entry keep
+// refuses: the runtime drops the key and the value and frees the slot,
+// with no key hashed or compared again.
+func (e *Emitter) mapRetain(t *types.Map, pos token.Pos) string {
+	name := "sn_mapretain_" + lower.Mangle(t)
+	if e.state[name] {
+		return name
+	}
+
+	e.state[name] = true
+	keep := types.NewSignature(nil, []*types.Var{types.NewVar(token.NoPos, "k", types.NewRef(t.Key(), false)), types.NewVar(token.NoPos, "v", types.NewRef(t.Value(), true))}, types.Typ[types.Bool])
+	pair := e.irType(keep, pos)
+	mt := e.mapType(t, pos)
+	e.helper(name, "void", []string{"ptr %m", "ptr %keep"}, func() {
+		fn := e.load("ptr", e.gep(pair, "%keep", 0))
+		box := e.gep(pair, "%keep", 1)
+		e.eachEntry("%m", t, pos, func(i, k, v string) {
+			kv := value{"ptr", k}
+			if viewed(t.Key()) { // the function takes a ref of a string or a slice as the view itself
+				kv = e.load(e.irType(t.Key(), pos), k)
+			}
+
+			kept := e.op("call i1 "+fn.s+"(ptr "+box+", "+kv.typed()+", ptr "+v+")", "i1")
+			remove, next := e.block("retain.remove"), e.block("retain.next")
+			e.branch(kept.s, next, remove)
+			e.label(remove)
+			e.rt("sn_map_remove_at", "void", value{"ptr", "%m"}, value{"ptr", mt}, value{"i64", i})
+			e.jump(next)
+			e.label(next)
+		})
+		e.inst("ret void")
+		e.fn.terminated = true
+	})
+	return name
 }
 
 // optionOf builds the option or Result-free option value of type t
@@ -622,11 +767,14 @@ func (e *Emitter) key(x ast.Expr, t types.Type) string {
 
 // lookedAt writes x, of type t, where the operation only looks at its
 // value, as a ref parameter would, and returns its address: a value
-// built here is held for the statement and dropped with it.
+// built here is held for the statement and dropped with it. A ref of t
+// is the value's words themselves, not an address, when t is a view, a
+// string or a slice, or a borrow, a ref of a borrow being a borrow of
+// its target; then a slot holds the words and the slot is the address.
 func (e *Emitter) lookedAt(x ast.Expr, t types.Type) string {
 	v := e.operands([]ast.Expr{x}, []types.Type{types.NewRef(t, false)})[0]
-	if viewed(t) {
-		return e.spill(v) // lent as a view: a slot holds it
+	if byWords(t) {
+		return e.spill(v)
 	}
 
 	return v.s
@@ -635,11 +783,18 @@ func (e *Emitter) lookedAt(x ast.Expr, t types.Type) string {
 // looked is lookedAt with the value read.
 func (e *Emitter) looked(x ast.Expr, t types.Type) value {
 	v := e.operands([]ast.Expr{x}, []types.Type{types.NewRef(t, false)})[0]
-	if viewed(t) {
+	if byWords(t) {
 		return v
 	}
 
 	return e.load(e.irType(t, x.Pos()), v.s)
+}
+
+// byWords reports whether a ref of t carries the value's own words
+// rather than its address: a view of a string or a slice, and a borrow,
+// whose ref is the borrow itself.
+func byWords(t types.Type) bool {
+	return depth(types.NewRef(t, false)) == depth(t)
 }
 
 // mapSlotter returns the name of the function giving the address of
@@ -791,9 +946,9 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 }
 
 // eachEntry writes a loop over the live entries of the map at the
-// address m, in insertion order, calling body with the addresses of
-// each key and value.
-func (e *Emitter) eachEntry(m string, t *types.Map, pos token.Pos, body func(k, v string)) {
+// address m, in insertion order, calling body with each entry's place
+// and the addresses of its key and value.
+func (e *Emitter) eachEntry(m string, t *types.Map, pos token.Pos, body func(i, k, v string)) {
 	e.declare("sn_map_next", "declare i64 @sn_map_next(ptr, i64)")
 	i := e.slot("i64")
 	e.store(e.op("call i64 @sn_map_next(ptr "+m+", i64 0)", "i64"), i)
@@ -806,7 +961,7 @@ func (e *Emitter) eachEntry(m string, t *types.Map, pos token.Pos, body func(k, 
 	e.label(loop)
 	keys := e.load("ptr", e.gep("%sn_map", m, 0))
 	vals := e.load("ptr", e.gep("%sn_map", m, 1))
-	body(e.elem(e.irType(t.Key(), pos), keys.s, cur.s), e.elem(e.irType(t.Value(), pos), vals.s, cur.s))
+	body(cur.s, e.elem(e.irType(t.Key(), pos), keys.s, cur.s), e.elem(e.irType(t.Value(), pos), vals.s, cur.s))
 	next := e.op("add i64 "+cur.s+", 1", "i64")
 	e.store(e.op("call i64 @sn_map_next(ptr "+m+", i64 "+next.s+")", "i64"), i)
 	e.jump(cond)
@@ -949,6 +1104,43 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 		tuple := e.insert(value{pair, "zeroinitializer"}, e.load("%sn_string", before), 0)
 		tuple = e.insert(tuple, e.load("%sn_string", after), 1)
 		return e.optionOf(e.typeOf(x), has, tuple, x.Pos())
+	case "SplitAfter", "SplitAfterN":
+		out := e.slot("%sn_slice")
+		name := "sn_split_after"
+		if sel.Sel.Name == "SplitAfterN" {
+			name = "sn_split_after_n"
+		}
+
+		e.rt(name, "void", append(append([]value{s}, args...), value{"ptr", out})...)
+		return e.load("%sn_slice", out)
+	case "ContainsAny":
+		return e.op("icmp sge i64 "+e.rt("sn_string_index_any", "i64", s, args[0]).s+", 0", "i1")
+	case "IndexAny":
+		return e.someIndex(e.rt("sn_string_index_any", "i64", s, args[0]), x)
+	case "LastIndexAny":
+		return e.someIndex(e.rt("sn_string_last_index_any", "i64", s, args[0]), x)
+	case "IndexByte":
+		return e.someIndex(e.rt("sn_string_index_byte", "i64", s, args[0]), x)
+	case "LastIndexByte":
+		return e.someIndex(e.rt("sn_string_last_index_byte", "i64", s, args[0]), x)
+	case "TrimLeft":
+		return e.rt("sn_trim_left", "%sn_string", s, args[0])
+	case "TrimRight":
+		return e.rt("sn_trim_right", "%sn_string", s, args[0])
+	case "TrimAny":
+		return e.rt("sn_trim_any", "%sn_string", s, args[0])
+	case "Bytes":
+		return e.byteView(s)
+	case "CutPrefix", "CutSuffix":
+		name := "sn_cut_prefix"
+		if sel.Sel.Name == "CutSuffix" {
+			name = "sn_cut_suffix"
+		}
+
+		rest := e.slot("%sn_string")
+		e.store(value{"%sn_string", "zeroinitializer"}, rest) // None carries a zero view, as the C backend's does
+		has := e.rt(name, "i1", s, args[0], value{"ptr", rest})
+		return e.optionOf(e.typeOf(x), has, e.load("%sn_string", rest), x.Pos())
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on strings")

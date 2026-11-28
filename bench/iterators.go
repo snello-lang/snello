@@ -51,11 +51,59 @@ func fold[T, A any](seq iter.Seq[T], init A, f func(A, T) A) A {
 	return acc
 }
 
+// backward gives the elements of xs from the last to the first, as
+// slices.Backward does without the index.
+func backward(xs []int) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for _, x := range slices.Backward(xs) {
+			if !yield(x) {
+				return
+			}
+		}
+	}
+}
+
 // count gives the numbers from 0 up to end.
 func count(end int) iter.Seq[int] {
 	return func(yield func(int) bool) {
 		for i := 0; i < end; i++ {
 			if !yield(i) {
+				return
+			}
+		}
+	}
+}
+
+// A ring is a double-ended queue over one buffer, as deque's Deque is: an
+// element is found from its index with one mask, and the buffer is
+// reserved once, so that the Go program does the deque's passes the
+// Snello program does.
+type ring struct {
+	buf  []int
+	head int
+	n    int
+}
+
+func newRing(capacity int) *ring {
+	size := 1
+	for size < capacity {
+		size *= 2
+	}
+
+	return &ring{buf: make([]int, size)}
+}
+
+func (r *ring) pushBack(x int) {
+	r.buf[(r.head+r.n)&(len(r.buf)-1)] = x
+	r.n++
+}
+
+// all gives the elements from front to back, as deque's Iter does.
+func (r *ring) all() iter.Seq[int] {
+	return func(yield func(int) bool) {
+		mask := len(r.buf) - 1
+		for i := 0; i < r.n; i++ {
+			if !yield(r.buf[(r.head+i)&mask]) {
 				return
 			}
 		}
@@ -74,6 +122,9 @@ func main() {
 		xs = append(xs, i)
 	}
 
+	// A round discarded, so that the first section timed does not pay for
+	// the cold cache and the clock's ramp.
+	warm := fold(mapped(filter(slices.Values(xs), even), square), 0, add)
 	chain := 0
 	start := time.Now()
 	for r := 0; r < rounds; r++ {
@@ -92,15 +143,48 @@ func main() {
 	}
 
 	loopTime := time.Since(start)
+	rev := 0
+	start = time.Now()
+	for r := 0; r < rounds; r++ {
+		rev += fold(mapped(filter(backward(xs), even), square), 0, add)
+	}
+
+	revTime := time.Since(start)
+	// The slice's passes done, the deque is built in its place: one
+	// collection at a time, as the Snello program holds them.
+	end := len(xs)
+	xs = nil
+	d := newRing(items)
+	for i := 0; i < items; i++ {
+		d.pushBack(i)
+	}
+
+	dequeChain := 0
+	start = time.Now()
+	for r := 0; r < rounds; r++ {
+		dequeChain += fold(mapped(filter(d.all(), even), square), 0, add)
+	}
+
+	dequeChainTime := time.Since(start)
+	dequeLoop := 0
+	start = time.Now()
+	for r := 0; r < rounds; r++ {
+		for x := range d.all() {
+			if x%2 == 0 {
+				dequeLoop += x * x
+			}
+		}
+	}
+
+	dequeLoopTime := time.Since(start)
 	counted := 0
 	start = time.Now()
 	for r := 0; r < rounds; r++ {
-		counted += fold(mapped(filter(count(len(xs)), even), square), 0, add)
+		counted += fold(mapped(filter(count(end), even), square), 0, add)
 	}
 
 	countedTime := time.Since(start)
 	plain := 0
-	end := len(xs)
 	start = time.Now()
 	for r := 0; r < rounds; r++ {
 		for i := 0; i < end; i++ {
@@ -112,6 +196,10 @@ func main() {
 
 	plainTime := time.Since(start)
 	n := int64(items * rounds)
-	fmt.Println(chain, loop, counted, plain)
-	fmt.Println("slice chain", chainTime.Nanoseconds()*tenthsPerNanosecond/n, "slice loop", loopTime.Nanoseconds()*tenthsPerNanosecond/n, "count chain", countedTime.Nanoseconds()*tenthsPerNanosecond/n, "count loop", plainTime.Nanoseconds()*tenthsPerNanosecond/n)
+	if dequeChain != chain || dequeLoop != loop {
+		fmt.Println("the deque's totals differ from the slice's", dequeChain, dequeLoop)
+	}
+
+	fmt.Println(warm, chain, loop, rev, counted, plain)
+	fmt.Println("slice chain", chainTime.Nanoseconds()*tenthsPerNanosecond/n, "slice loop", loopTime.Nanoseconds()*tenthsPerNanosecond/n, "rev chain", revTime.Nanoseconds()*tenthsPerNanosecond/n, "deque chain", dequeChainTime.Nanoseconds()*tenthsPerNanosecond/n, "deque loop", dequeLoopTime.Nanoseconds()*tenthsPerNanosecond/n, "count chain", countedTime.Nanoseconds()*tenthsPerNanosecond/n, "count loop", plainTime.Nanoseconds()*tenthsPerNanosecond/n)
 }

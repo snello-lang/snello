@@ -309,11 +309,6 @@ func (m *formBorrows) returned(in *Instr) {
 			kind = placeBorrowed // a field's borrow on the way, rb.b.s with b a borrow: what it points at, not the local
 		}
 
-		if lp.itself && c.isParam(p.v) {
-			c.errorf(pos, "cannot return a borrow of local "+p.v.name) // a borrow parameter lent itself: the variable, which dies at return, not what it points at
-			continue
-		}
-
 		c.sourcePlace(p, kind, lp.lent, pos)
 	}
 }
@@ -998,18 +993,12 @@ func bindsInto(t, part Type) bool {
 }
 
 // holdLent records that the part path of v, of type t, holds one thing
-// a value lends: a temporary, held until its statement drops it; a borrow
-// variable's own slot; a place lent, borrowed; or a place read, what it
-// holds.
+// a value lends: a temporary, held until its statement drops it; a place
+// lent, borrowed; or a place read, what it holds.
 func (m *formBorrows) holdLent(v *Var, path string, t Type, lp lentPlace, pos token.Pos) {
 	switch {
 	case lp.place.IsTemp():
 		m.checker.flowLoan(borrow{holder: v, place: place{m.temporaryHolder(lp.place.Temp, pos), ""}, pos: pos, hpath: path})
-	case lp.itself: // a borrow variable's own slot: given another value, or dropped, while v holds it, collides, and v holds what it points at as well
-		mut, _ := borrowIn(t)
-		if p, kind, _ := m.placeOf(lp.place); kind != notPlace {
-			m.checker.flowLoan(borrow{holder: v, place: p, mut: mut, pos: pos, hpath: path, variable: true})
-		}
 	case lp.lent:
 		mut, ok := borrowIn(t)
 		if p, kind, _ := m.placeOf(lp.place); ok && kind != notPlace {

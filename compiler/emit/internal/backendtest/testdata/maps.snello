@@ -6,8 +6,8 @@
 // key as the zero value, += and ++ on an entry, a write through an entry
 // into the map, array or struct it holds, making the entry when its key
 // is new, Get, GetMut, Contains, Remove,
-// Clone, range in insertion order, a tuple as a key, a map declared
-// without a value, and growth with removals.
+// Clone, Retain, range in insertion order, a tuple as a key, a map
+// declared without a value, and growth with removals.
 
 package main
 
@@ -102,6 +102,30 @@ func main() {
 	holders["h"].xs[0] = 4
 	holders["h"].m["z"]++
 	fmt.Println(holders["h"].xs, holders["h"].m)
+	// Retain: the entries kept keep their order and may be changed, the
+	// rest are dropped at their places; an emptied map takes new entries.
+	ages := map[string]int{"ann": 31, "bob": 17, "cid": 45, "dee": 12}
+	ages.Retain(func(name ref string, age mut int) bool {
+		*age += 1
+		return *age >= 18
+	})
+	fmt.Println(ages, len(ages))
+	ages.Insert("eve", 22)
+	ages.Retain(func(name ref string, age mut int) bool { return name.HasPrefix("e") })
+	fmt.Println(ages)
+	ages.Retain(func(name ref string, age mut int) bool { return false })
+	fmt.Println(ages, len(ages), ages.Contains("eve"))
+	ages["fay"] = 1
+	fmt.Println(ages)
+	owned := map[string][]string{"a": []string{"x"}, "b": []string{"y", "z"}, "c": []string{}}
+	owned.Retain(func(k ref string, v mut []string) bool { return len(v) == 1 })
+	fmt.Println(owned)
+	tags := map[int](){}
+	tags.Insert(1, ())
+	tags.Insert(2, ())
+	tags.Insert(3, ())
+	tags.Retain(func(k ref int, _ mut ()) bool { return *k != 2 })
+	fmt.Println(len(tags), tags.Contains(2), tags.Contains(3))
 }
 
 struct Holder { xs [2]int; m map[string]int }

@@ -62,6 +62,12 @@ const carriageReturn byte = '\r'
 // put back.
 const nothingToUnread = -1
 
+// The Scanner's modes: lines and words by its own searches, which
+// resume where they stopped, or any token a split function cuts.
+const scanLines int = 0
+const scanWords int = 1
+const scanSplit int = 2
+
 // The operations an error of this package names, and the reasons it
 // gives: the errors read "bufio: negative count" and
 // "bufio.Scanner: token too long".
@@ -70,6 +76,7 @@ const scannerOp = "bufio.Scanner"
 const negativeCount = "negative count"
 const bufferFull = "buffer full"
 const tokenTooLong = "token too long"
+const badSplit = "bad split"
 
 // A Writer collects what is written to it and writes it to the writer
 // under it in blocks, when its buffer is full and on Flush. It is made
@@ -102,11 +109,12 @@ struct Reader<R: io.Reader> impl io.Reader {
 	lastByte      int // the last byte read, which UnreadByte puts back, or nothingToUnread
 }
 
-// A Scanner reads a reader line by line, or word by word: Scan reads
-// the next line or word, and Bytes or Text give it, a line without its
-// line ending. It is made with NewScanner for lines and with Words for
-// words, and holds a mut borrow of the reader under it for as long as
-// it lives.
+// A Scanner reads a reader line by line, word by word, or token by
+// token as a split function cuts them: Scan reads the next, and Bytes
+// or Text give it, a line without its line ending. It is made with
+// NewScanner for lines, with Words for words and with NewScannerSplit
+// for a split function's tokens, and holds a mut borrow of the reader
+// under it for as long as it lives.
 //
 //	s := bufio.NewScanner(mut f)
 //	for s.Scan() {
@@ -118,12 +126,49 @@ struct Scanner<R: io.Reader> {
 	start        int
 	end          int
 	searched     int // from start up to here holds no newline, or for words no white space
-	tokenStart   int // the line or word Scan gave last is buf[tokenStart:tokenEnd]
+	tokenStart   int // the line, word or token Scan gave last is buf[tokenStart:tokenEnd]
 	tokenEnd     int
 	done         bool
 	err          io.Error?
-	maxTokenSize int  // the longest line, its ending included, or the longest word
-	words        bool // Scan reads words, not lines
+	maxTokenSize int // the longest line, its ending included, the longest word, or the longest token
+	mode         int  // scanLines, scanWords or scanSplit
+	badSplit     bool // the split function gave a Split outside its data: the scan ends with the error, which refill builds
+	split        func(data ref []byte, atEOF bool) Split? // the split function of scanSplit
+}
+
+// A Split is what a split function cuts from the data a Scanner gives
+// it: the token, data[Start:End], and how many bytes of data Scan moves
+// past, Advance, at least End and often more, the separator after the
+// token among them. A split function is a func(data ref []byte, atEOF
+// bool) Split?, called with the bytes read and not scanned and whether
+// the input has ended; it returns None when the token is not whole yet
+// and more input is needed, or at the end when nothing is left, and
+// scanning ends. A split function is given empty data only once the
+// input has ended, since before that it has nothing to cut; so empty
+// data means the end, where a last unfinished token may still be
+// answered. A Split must lie within data: Start at most End, End
+// at most Advance, so that tokens never overlap, and Advance from one
+// to len(data); a Split of three zeros before the end asks for more
+// input as None does, and any other outside those bounds ends the scan
+// with the error "bufio.Scanner: bad split", since a splitter cannot be
+// let to scan forever or past the data. ScanLines, ScanWords, ScanRunes
+// and ScanBytes are provided; a program writes its own for its records:
+//
+//	func commaSeparated(data ref []byte, atEOF bool) bufio.Split? {
+//		if i := data.Index(ref ','); i {
+//			return Some(bufio.Split{Start: 0, End: i, Advance: i + 1})
+//		}
+//
+//		if atEOF && len(data) > 0 {
+//			return Some(bufio.Split{Start: 0, End: len(data), Advance: len(data)})
+//		}
+//
+//		return None
+//	}
+struct Split impl Copy {
+	Start   int
+	End     int
+	Advance int
 }
 
 // NewWriter returns a Writer that writes to w, borrowed mut for as long
@@ -193,7 +238,7 @@ func (b mut Writer<W>) WriteString(s ref string) Result<int, io.Error> {
 	nn := 0
 	for s.Len()-nn > len(b.buf)-b.buffered {
 		if b.buffered == 0 { // straight to the writer under it, with no copy into the buffer
-			nn += b.writeAll(bytesOf(s[nn:]))?
+			nn += b.writeAll(s[nn:].Bytes())?
 			return Ok(nn)
 		}
 
@@ -223,6 +268,29 @@ func (b mut Writer<W>) WriteByte(c byte) Result<(), io.Error> {
 	b.buf[b.buffered] = c
 	b.buffered++
 	return Ok(())
+}
+
+// WriteRune writes the UTF-8 bytes of r, as a string literal holds
+// them, into the buffer, and returns how many, one to four; a value
+// that is no code point writes utf8.RuneError. Nothing is allocated;
+// it fails as Write fails.
+func (b mut Writer<W>) WriteRune(r rune) Result<int, io.Error> {
+	if e := b.err {
+		return Err(e.Clone())
+	}
+
+	if r >= 0 && r < utf8.RuneSelf {
+		b.WriteByte(byte(r))?
+		return Ok(1)
+	}
+
+	if b.Available() < utf8.UTFMax { // room for any rune first, so it is written in one piece
+		b.Flush()?
+	}
+
+	n := utf8.EncodeRune(mut b.buf[b.buffered:], r)
+	b.buffered += n
+	return Ok(n)
 }
 
 // Flush writes what the buffer holds to the writer under it, asking
@@ -272,6 +340,20 @@ func (b ref Writer<W>) Buffered() int {
 // write fills it.
 func (b ref Writer<W>) Available() int {
 	return len(b.buf) - b.buffered
+}
+
+// Size returns the size of the buffer: 4096 bytes, or what
+// NewWriterSize was given.
+func (b ref Writer<W>) Size() int {
+	return len(b.buf)
+}
+
+// Reset drops the bytes buffered and not written, and the error that
+// stopped the Writer, so it writes again; the Writer keeps the writer it
+// was made with, since it holds the borrow for its life.
+func (b mut Writer<W>) Reset() {
+	b.buffered = 0
+	b.err = None
 }
 
 // Get lends the writer under the Writer, mut, for as long as the Writer
@@ -457,9 +539,90 @@ func (r mut Reader<R>) Peek(n int) Result<ref []byte, io.Error> {
 	return Ok(r.buf[r.start:min(r.start+n, r.end)])
 }
 
+// ReadSlice lends the next line, up to and including the first delim,
+// from the buffer, with no copy: the borrow lasts until the Reader is
+// next asked anything. At the end of the input the rest is the last
+// line, and None once nothing is left. A line longer than the buffer
+// holds cannot be lent whole: ReadSlice then fails with "bufio: buffer
+// full" and leaves the bytes unread, for ReadBytes or ReadString, which
+// gather a long line into a slice of their own.
+//
+//	line := r.ReadSlice('\n')? ?? return
+func (r mut Reader<R>) ReadSlice(delim byte) Result<(ref []byte)?, io.Error> {
+	r.lastRuneWidth = nothingToUnread
+	for {
+		i := indexByte(r.buf[r.start:r.end], delim)
+		if i >= 0 {
+			from := r.start
+			r.start += i + 1
+			r.lastByte = int(delim)
+			return Ok(Some(r.buf[from:r.start]))
+		}
+
+		if r.end-r.start == len(r.buf) {
+			return Err(io.NewError(readerOp, "", bufferFull, io.Other))
+		}
+
+		if !r.fill()? { // the end of the input: what is left is the last line
+			from := r.start
+			r.start = r.end
+			if from == r.end {
+				return Ok(None)
+			}
+
+			r.lastByte = int(r.buf[r.end-1])
+			return Ok(Some(r.buf[from:r.end]))
+		}
+	}
+}
+
+// Discard moves past the next n bytes of the input, reading as it must,
+// and returns how many it moved past: fewer than n at the end of the
+// input, none for an n of zero or less. A failure of the reader under
+// it ends the move with its Error, the bytes before it discarded.
+//
+//	r.Discard(headerSize)?
+func (r mut Reader<R>) Discard(n int) Result<int, io.Error> {
+	r.lastRuneWidth = nothingToUnread
+	r.lastByte = nothingToUnread
+	skipped := 0
+	for skipped < n {
+		if r.start == r.end && !r.fill()? {
+			break
+		}
+
+		step := min(n-skipped, r.end-r.start)
+		r.start += step
+		skipped += step
+	}
+
+	return Ok(skipped)
+}
+
+// Buffered returns how many bytes are read from the reader under it and
+// not handed out yet: what Read gives at once without asking it.
+func (r ref Reader<R>) Buffered() int {
+	return r.end - r.start
+}
+
+// Size returns the size of the buffer, 4096 bytes.
+func (r ref Reader<R>) Size() int {
+	return len(r.buf)
+}
+
+// Reset drops what the buffer holds and forgets what could be unread,
+// so the next read asks the reader under it afresh; the Reader keeps
+// the reader it was made with, since it holds the borrow for its life.
+func (r mut Reader<R>) Reset() {
+	r.start = 0
+	r.end = 0
+	r.lastRuneWidth = nothingToUnread
+	r.lastByte = nothingToUnread
+}
+
 // UnreadByte puts back the last byte read, so the next read gives it
 // again, and reports true: the last byte Read, ReadByte, ReadRune,
-// ReadString or ReadBytes returned, a read that returned nothing at the
+// ReadString, ReadBytes or ReadSlice returned, a read that returned nothing at the
 // end of the input leaving it the last. Before any byte was read, and
 // after Peek, UnreadRune or another UnreadByte, it returns false and
 // changes nothing.
@@ -498,7 +661,7 @@ func (r mut Reader<R>) Get() mut R {
 //
 //	s := bufio.NewScanner(mut f)
 func NewScanner<R: io.Reader>(r mut R) Scanner<R> {
-	return Scanner<R>{reader: r, buf: []byte{}, start: 0, end: 0, searched: 0, tokenStart: 0, tokenEnd: 0, done: false, err: None, maxTokenSize: MaxScanTokenSize, words: false}
+	return newScanner(r, scanLines, ScanLines)
 }
 
 // Words returns a Scanner over r, borrowed mut for as long as the
@@ -515,11 +678,109 @@ func NewScanner<R: io.Reader>(r mut R) Scanner<R> {
 //		count += 1
 //	}
 func Words<R: io.Reader>(r mut R) Scanner<R> {
-	return Scanner<R>{reader: r, buf: []byte{}, start: 0, end: 0, searched: 0, tokenStart: 0, tokenEnd: 0, done: false, err: None, maxTokenSize: MaxScanTokenSize, words: true}
+	return newScanner(r, scanWords, ScanWords)
+}
+
+// NewScannerSplit returns a Scanner over r, borrowed mut for as long as
+// the Scanner lives, that reads the tokens the split function cuts, as
+// Split describes it: ScanRunes, ScanBytes, or a program's own. A token
+// is at most MaxScanTokenSize bytes long, or what Buffer sets. Lines
+// and words are read faster by NewScanner and Words, whose searches
+// resume where they stopped, where a split function is given the whole
+// of what was read and not scanned every time.
+//
+//	s := bufio.NewScannerSplit(mut f, bufio.ScanRunes)
+func NewScannerSplit<R: io.Reader>(r mut R, split func(data ref []byte, atEOF bool) Split?) Scanner<R> {
+	return newScanner(r, scanSplit, split)
+}
+
+// ScanLines is the split function of lines: the token is the next line
+// without its newline and a carriage return before it, Advance past the
+// newline; at the end of the input a last line without a newline is a
+// line. NewScanner reads the same lines, by a search that resumes where
+// it stopped, so a Scanner of lines is faster than one of ScanLines.
+func ScanLines(data ref []byte, atEOF bool) Split? {
+	i := indexByte(data, newline)
+	if i >= 0 {
+		return Some(Split{Start: 0, End: withoutCarriageReturn(data, i), Advance: i + 1})
+	}
+
+	if atEOF && len(data) > 0 {
+		return Some(Split{Start: 0, End: withoutCarriageReturn(data, len(data)), Advance: len(data)})
+	}
+
+	return None
+}
+
+// ScanWords is the split function of words: the token is the next run
+// of runes between white space, what unicode.IsSpace says, a byte that
+// starts no rune counting as part of a word, Advance past the white
+// space that ends it. Words reads the same words, by a search that
+// resumes where it stopped.
+func ScanWords(data ref []byte, atEOF bool) Split? {
+	start := 0
+	for start < len(data) {
+		c, w := utf8.DecodeRune(data[start:])
+		if !unicode.IsSpace(c) {
+			break
+		}
+
+		start += w
+	}
+
+	for i := start; i < len(data); {
+		if !atEOF && !utf8.FullRune(data[i:]) {
+			return None // the rune is cut: more input decides it
+		}
+
+		c, w := utf8.DecodeRune(data[i:])
+		if unicode.IsSpace(c) {
+			return Some(Split{Start: start, End: i, Advance: i + w})
+		}
+
+		i += w
+	}
+
+	if atEOF && start < len(data) {
+		return Some(Split{Start: start, End: len(data), Advance: len(data)})
+	}
+
+	return None
+}
+
+// ScanRunes is the split function of runes: each token is one UTF-8
+// sequence, a byte that starts no rune a token of its own, as a range
+// over a string reads one; a rune cut short by what was read waits for
+// the rest, and at the end of the input is given as the bytes it has.
+func ScanRunes(data ref []byte, atEOF bool) Split? {
+	if len(data) == 0 {
+		return None
+	}
+
+	if rune(data[0]) < utf8.RuneSelf { // one byte, as a range over a string reads it
+		return Some(Split{Start: 0, End: 1, Advance: 1})
+	}
+
+	if !atEOF && !utf8.FullRune(data) {
+		return None
+	}
+
+	_, w := utf8.DecodeRune(data)
+	return Some(Split{Start: 0, End: w, Advance: w})
+}
+
+// ScanBytes is the split function of bytes: each token is one byte.
+func ScanBytes(data ref []byte, atEOF bool) Split? {
+	if len(data) == 0 {
+		return None
+	}
+
+	return Some(Split{Start: 0, End: 1, Advance: 1})
 }
 
 // Buffer sets the longest line the Scanner reads, its ending included,
-// or the longest word, to size bytes, in place of MaxScanTokenSize; a
+// the longest word or the longest token, to size bytes, in place of
+// MaxScanTokenSize; a
 // size below one is one. The Scanner allocates its buffer itself,
 // doubling it as lines need, up to this size.
 //
@@ -528,16 +789,27 @@ func (s mut Scanner<R>) Buffer(size int) {
 	s.maxTokenSize = max(size, 1)
 }
 
-// Scan reads the next line, or the next word, and reports whether there
-// was one; false at the end of the input, or when a read failed or a
-// line or word was longer than the limit, which Err then says; what was
-// read before a failure is given as the last line or word first. A line
+// Scan reads the next line, word or token and reports whether there
+// was one; false at the end of the input, or when a read failed, a
+// line, word or token was longer than the limit, or a split function
+// gave a Split outside its data, which Err then says; what was read
+// before a failure is given as the last line or word first. A line
 // is read without its ending, a newline or a carriage return and a
 // newline; a last line without one is a line too. It blocks while the
 // reader under it does, and may grow the buffer, doubling it.
 func (s mut Scanner<R>) Scan() bool {
 	for {
-		if s.words {
+		if s.mode == scanSplit {
+			if (s.start != s.end || s.done) && s.cut() { // the split function sees empty data only once the input ended
+				return true
+			}
+
+			if s.done { // the end: no token, and Bytes is empty
+				s.tokenStart = s.start
+				s.tokenEnd = s.start
+				return false
+			}
+		} else if s.mode == scanWords {
 			if s.scanWord() {
 				return true
 			}
@@ -558,73 +830,44 @@ func (s mut Scanner<R>) Scan() bool {
 			return s.tokenStart < s.tokenEnd
 		}
 
-		// Room for more: what is held moves to the start, and a buffer
-		// full of one line doubles, up to the limit.
-		if s.start > 0 {
-			slide(mut s.buf, s.start, s.end)
-			s.end -= s.start
-			s.searched -= s.start
-			s.start = 0
+		if !s.refill() {
+			return false
 		}
-
-		if s.end == len(s.buf) {
-			if len(s.buf) >= s.maxTokenSize {
-				s.err = Some(io.NewError(scannerOp, "", tokenTooLong, io.Other))
-				s.done = true
-				s.tokenStart = s.start // no line: the long one is not given in part
-				s.tokenEnd = s.start
-				s.start = s.end
-				return false
-			}
-
-			bigger := make([]byte, min(max(2*len(s.buf), blockSize), s.maxTokenSize))
-			copyBytes(mut bigger, s.buf[0:s.end])
-			s.buf = bigger
-		}
-
-		n := match s.reader.Read(mut s.buf[s.end:]) {
-			Ok(n) => n,
-			Err(e) => {
-				s.err = Some(e)
-				0
-			},
-		}
-
-		if n == 0 {
-			s.done = true
-		}
-
-		s.end += n
 	}
 }
 
-// Bytes lends the last line Scan read, without its line ending, or the
+// Bytes lends the last line Scan read, without its line ending, the
 // last word, which ends in neither a newline nor a carriage return,
-// both being white space; the bytes are the Scanner's buffer, with no
-// copy, and the borrow lasts as long as the Scanner's, until the next
-// Scan. Before Scan, or after it returned false, it is empty.
+// both being white space, or the last token as the split function cut
+// it; the bytes are the Scanner's buffer, with no copy, and the borrow
+// lasts as long as the Scanner's, until the next Scan. Before Scan, or
+// after it returned false, it is empty.
 func (s ref Scanner<R>) Bytes() ref []byte {
 	end := s.tokenEnd
-	if end > s.tokenStart && s.buf[end-1] == newline {
-		end--
-	}
+	if s.mode == scanLines {
+		if end > s.tokenStart && s.buf[end-1] == newline {
+			end--
+		}
 
-	if end > s.tokenStart && s.buf[end-1] == carriageReturn {
-		end--
+		if end > s.tokenStart && s.buf[end-1] == carriageReturn {
+			end--
+		}
 	}
 
 	return s.buf[s.tokenStart:end]
 }
 
-// Text returns the last line Scan read, without its line ending, or
-// the last word, as a new string the caller owns: a copy of Bytes.
+// Text returns the last line Scan read, without its line ending, the
+// last word or the last token, as a new string the caller owns: a copy
+// of Bytes.
 func (s ref Scanner<R>) Text() string {
 	return string(s.Bytes())
 }
 
 // Err returns the error that ended scanning, lent for as long as the
-// Scanner is: the one the reader under it returned, or
-// "bufio.Scanner: token too long" for a line or word past the limit.
+// Scanner is: the one the reader under it returned, "bufio.Scanner:
+// token too long" for a line, word or token past the limit, or
+// "bufio.Scanner: bad split" for a Split outside its data.
 // It returns None when the input ended or scanning goes on.
 //
 //	if e := s.Err() {
@@ -735,6 +978,106 @@ func (r mut Reader<R>) fill() Result<bool, io.Error> {
 	return Ok(n > 0)
 }
 
+// newScanner makes the Scanner of the three constructors: nothing read
+// yet, the mode and its split function, the buffer allocated on the
+// first Scan.
+func newScanner<R: io.Reader>(r mut R, mode int, split func(data ref []byte, atEOF bool) Split?) Scanner<R> {
+	return Scanner<R>{reader: r, buf: []byte{}, start: 0, end: 0, searched: 0, tokenStart: 0, tokenEnd: 0, done: false, err: None, maxTokenSize: MaxScanTokenSize, mode: mode, badSplit: false, split: split}
+}
+
+// cut asks the split function for the next token in what was read and
+// not scanned and reports whether it gave one: the token's range is
+// kept and scanning moves past Advance. None, or a Split of three
+// zeros, asks for more input, which at the end of the input ends the
+// scan in Scan; a Split outside the bounds the type states, the token
+// past Advance among them, ends it with the bad split error, since a
+// split function cannot be let to scan forever or past the data.
+func (s mut Scanner<R>) cut() bool {
+	piece := s.split(s.buf[s.start:s.end], s.done) ?? return false
+	held := uint(s.end - s.start)
+	// Three compares for the five bounds: as unsigned numbers, a negative
+	// is huge, so Advance-1 below held says 1 <= Advance <= held, and the
+	// chain Start <= End <= Advance holds the rest.
+	if uint(piece.Advance)-1 < held && uint(piece.Start) <= uint(piece.End) && uint(piece.End) <= uint(piece.Advance) {
+		s.tokenStart = s.start + piece.Start
+		s.tokenEnd = s.start + piece.End
+		s.start += piece.Advance
+		s.searched = s.start
+		return true
+	}
+
+	if piece.Advance != 0 || piece.Start != 0 || piece.End != 0 { // outside the data: refill ends the scan with the error
+		s.badSplit = true
+	}
+
+	return false
+}
+
+// withoutCarriageReturn returns end, or one less when the byte before
+// it in data is a carriage return: where a line ends before its ending.
+func withoutCarriageReturn(data ref []byte, end int) int {
+	if end > 0 && data[end-1] == carriageReturn {
+		return end - 1
+	}
+
+	return end
+}
+
+// refill makes room and reads more: what is held moves to the start of
+// the buffer, a buffer full of one line, word or token doubles, up to
+// the limit, and the reader under the Scanner fills the room after. It
+// reports false when the limit is reached, which ends the scan with the
+// token too long error; a read that gives nothing or fails marks the
+// input done, for Scan to give what is left. It is apart from Scan so
+// that the loop a token takes stays small.
+func (s mut Scanner<R>) refill() bool {
+	if s.badSplit { // the split function gave a Split outside its data: the scan ends with the error, nothing more read
+		s.err = Some(io.NewError(scannerOp, "", badSplit, io.Other))
+		s.done = true
+		s.tokenStart = s.start
+		s.tokenEnd = s.start
+		s.start = s.end
+		return false
+	}
+
+	if s.start > 0 {
+		slide(mut s.buf, s.start, s.end)
+		s.end -= s.start
+		s.searched -= s.start
+		s.start = 0
+	}
+
+	if s.end == len(s.buf) {
+		if len(s.buf) >= s.maxTokenSize {
+			s.err = Some(io.NewError(scannerOp, "", tokenTooLong, io.Other))
+			s.done = true
+			s.tokenStart = s.start // no line or token: the long one is not given in part
+			s.tokenEnd = s.start
+			s.start = s.end
+			return false
+		}
+
+		bigger := make([]byte, min(max(2*len(s.buf), blockSize), s.maxTokenSize))
+		copyBytes(mut bigger, s.buf[0:s.end])
+		s.buf = bigger
+	}
+
+	n := match s.reader.Read(mut s.buf[s.end:]) {
+		Ok(n) => n,
+		Err(e) => {
+			s.err = Some(e)
+			0
+		},
+	}
+
+	if n == 0 {
+		s.done = true
+	}
+
+	s.end += n
+	return true
+}
+
 // scanWord finds the next word in what was read and not scanned, a run
 // of runes between white space, and reports whether there is one: the
 // white space before it is passed over whether or not a word follows,
@@ -816,6 +1159,3 @@ func appendBytes(b mut []byte, p ref []byte)
 // slide moves the bytes of b from lo up to hi to its start, where a
 // buffer keeps what it has not handed out.
 func slide(b mut []byte, lo int, hi int)
-
-// bytesOf lends the bytes of s as a slice of them, with no copy.
-func bytesOf(s ref string) ref []byte

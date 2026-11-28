@@ -228,6 +228,39 @@ func FormatUint(n uint, base int) string? {
 	return Some(formatBits(u64(n), base, false))
 }
 
+// AppendInt writes n after the bytes of b, in the base given, from 2 to
+// 36, as FormatInt writes it, and reports whether it did: for a base
+// outside that range it writes nothing and returns false. The digits
+// are made on the stack and copied once, so a line of numbers is built
+// with no string between.
+//
+//	strconv.AppendInt(mut line, n, 10)
+func AppendInt(b mut []byte, n int, base int) bool {
+	if base < minBase || base > maxBase {
+		return false
+	}
+
+	if n < 0 {
+		appendBits(mut b, 0-u64(n), base, true)
+	} else {
+		appendBits(mut b, u64(n), base, false)
+	}
+
+	return true
+}
+
+// AppendUint writes n after the bytes of b, in the base given, from 2
+// to 36, as FormatUint writes it, and reports whether it did: for a
+// base outside that range it writes nothing and returns false.
+func AppendUint(b mut []byte, n uint, base int) bool {
+	if base < minBase || base > maxBase {
+		return false
+	}
+
+	appendBits(mut b, u64(n), base, false)
+	return true
+}
+
 // ParseBool reads a bool from s, which it only borrows: 1, t, T, true,
 // TRUE and True are true; 0, f, F, false, FALSE and False are false.
 // It returns an Error saying invalid syntax for any other text.
@@ -254,6 +287,11 @@ func FormatBool(b bool) string {
 	return "false"
 }
 
+// AppendBool writes true or false after the bytes of b.
+func AppendBool(b mut []byte, v bool) {
+	appendString(mut b, ref FormatBool(v))
+}
+
 // Quote returns s, which it only borrows, as a string literal in
 // double quotes, as fmt's %q writes one: a quote and a backslash
 // escaped, a character that does not print as its escape, \n, \x00 or
@@ -263,6 +301,12 @@ func FormatBool(b bool) string {
 //	strconv.Quote("tab\there")   // "tab\there", its quotes included
 func Quote(s ref string) string {
 	return fmt.Sprintf("%q", s)
+}
+
+// AppendQuote writes s as a literal in double quotes, as Quote writes
+// it, after the bytes of b.
+func AppendQuote(b mut []byte, s ref string) {
+	appendString(mut b, ref Quote(s))
 }
 
 // Unquote reads the literal s, which it only borrows, and returns the
@@ -357,6 +401,27 @@ func FormatFloat32(f f32, prec int) string {
 	}
 
 	return formatFixed(f64(f), prec)
+}
+
+// AppendFloat writes f after the bytes of b, as FormatFloat writes it:
+// prec digits after the point, or the shortest text that reads back
+// as f for a negative prec.
+func AppendFloat(b mut []byte, f f64, prec int) {
+	if prec < 0 {
+		appendFloat(mut b, f, false)
+	} else {
+		appendFixed(mut b, f, prec)
+	}
+}
+
+// AppendFloat32 writes f after the bytes of b, as FormatFloat32 writes
+// it.
+func AppendFloat32(b mut []byte, f f32, prec int) {
+	if prec < 0 {
+		appendFloat(mut b, f64(f), true)
+	} else {
+		appendFixed(mut b, f64(f), prec)
+	}
 }
 
 // parseError returns the Error of the function named fn on the text
@@ -561,3 +626,19 @@ func formatBits(u u64, base int, neg bool) string
 // formatFixed writes f with prec digits after the point, prec not
 // negative. The runtime provides it.
 func formatFixed(f f64, prec int) string
+
+// appendBits writes u in the base given after a minus sign when neg
+// says so, after the bytes of b. The runtime provides it.
+func appendBits(b mut []byte, u u64, base int, neg bool)
+
+// appendString appends the bytes of s to b in one copy, growing b once.
+// The runtime provides it.
+func appendString(b mut []byte, s ref string)
+
+// appendFloat writes f in its shortest form, as an f32 when single says
+// so, after the bytes of b. The runtime provides it.
+func appendFloat(b mut []byte, f f64, single bool)
+
+// appendFixed writes f with prec digits after the point, prec not
+// negative, after the bytes of b. The runtime provides it.
+func appendFixed(b mut []byte, f f64, prec int)

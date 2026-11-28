@@ -4,7 +4,7 @@
 
 package io_test
 
-import ("expect"; "fmt"; "io"; "os"; "strings"; "testing")
+import ("bytes"; "expect"; "fmt"; "io"; "os"; "strings"; "testing")
 
 // enoent is the error number of a missing file, the same on every
 // system Snello runs on.
@@ -127,4 +127,112 @@ func counting(n int) []byte {
 	}
 
 	return b
+}
+
+// A LimitedReader ends after its count, however the reader under it
+// goes on, and lends the reader, which reads on from there after.
+func TestLimitReader() {
+	src := strings.NewReader("hello, world")
+	limited := io.LimitReader(mut src, 5)
+	expect.Equal(ref limited.Remaining(), ref i64(5))
+	head := expect.IsOk(io.ReadAll(mut limited))
+	expect.Equal(ref string(head), "hello")
+	expect.Equal(ref limited.Remaining(), ref i64(0))
+	buf := make([]byte, 4)
+	expect.Equal(ref expect.IsOk(limited.Read(mut buf)), ref 0) // the limit holds
+	rest := expect.IsOk(io.ReadAll(mut src))                  // the reader goes on from the limit
+	expect.Equal(ref string(rest), ", world")
+	none := strings.NewReader("x")
+	empty := io.LimitReader(mut none, 0)
+	expect.Equal(ref expect.IsOk(empty.Read(mut buf)), ref 0)
+	negative := io.LimitReader(mut none, -3)
+	expect.Equal(ref expect.IsOk(negative.Read(mut buf)), ref 0)
+	short := strings.NewReader("ab")
+	wide := io.LimitReader(mut short, 100) // a limit past the end: the end comes first
+	expect.Equal(ref string(expect.IsOk(io.ReadAll(mut wide))), "ab")
+	expect.Equal(ref wide.Remaining(), ref i64(98))
+}
+
+// A ChainReader reads its first reader to the end, then its second, a
+// read never spanning the two, and an empty buffer asks it nothing; one
+// of a chain reads three.
+func TestChainReader() {
+	both := io.ChainReader(strings.NewReader("head|"), strings.NewReader("body"))
+	none := make([]byte, 0)
+	expect.Equal(ref expect.IsOk(both.Read(mut none)), ref 0) // an empty buffer: nothing read, nothing lost
+	expect.Equal(ref string(expect.IsOk(io.ReadAll(mut both))), "head|body")
+	buf := make([]byte, 4)
+	expect.Equal(ref expect.IsOk(both.Read(mut buf)), ref 0)
+	cut := io.ChainReader(strings.NewReader("ab"), strings.NewReader("cd"))
+	expect.Equal(ref expect.IsOk(cut.Read(mut buf)), ref 2) // not spanning the two
+	expect.Equal(ref expect.IsOk(cut.Read(mut buf)), ref 2)
+	expect.Equal(ref expect.IsOk(cut.Read(mut buf)), ref 0)
+	three := io.ChainReader(io.ChainReader(strings.NewReader("1"), strings.NewReader("2")), strings.NewReader("3"))
+	expect.Equal(ref string(expect.IsOk(io.ReadAll(mut three))), "123")
+	empty := io.ChainReader(strings.NewReader(""), strings.NewReader("x"))
+	expect.Equal(ref string(expect.IsOk(io.ReadAll(mut empty))), "x")
+	src := strings.NewReader("abcdef")
+	limited := io.ChainReader(io.LimitReader(mut src, 3), strings.NewReader("|")) // a reader holding a borrow, chained
+	expect.Equal(ref string(expect.IsOk(io.ReadAll(mut limited))), "abc|")
+}
+
+// CopyN copies the count asked for and no more, and reports a source
+// that ends first with the count it managed.
+func TestCopyN() {
+	src := strings.NewReader("hello, world")
+	var dst bytes.Buffer
+	expect.Equal(ref expect.IsOk(io.CopyN(mut dst, mut src, 5)), ref i64(5))
+	expect.Equal(ref dst.String(), "hello")
+	expect.Equal(ref string(expect.IsOk(io.ReadAll(mut src))), ", world") // the source goes on from there
+	short := strings.NewReader("ab")
+	var sink io.Discard
+	e := expect.IsErr(io.CopyN(mut sink, mut short, 5))
+	expect.True(e.Kind() == io.UnexpectedEOF)
+	expect.Equal(ref e.Written(), ref 2)
+	expect.Equal(ref expect.IsOk(io.CopyN(mut sink, mut short, 0)), ref i64(0))
+	expect.Equal(ref expect.IsOk(io.CopyN(mut sink, mut short, -4)), ref i64(0)) // zero or less copies nothing
+}
+
+// WriteString hands a writer the string's bytes with no copy.
+func TestWriteString() {
+	var b bytes.Buffer
+	expect.Equal(ref expect.IsOk(io.WriteString(mut b, "héllo")), ref 6)
+	expect.Equal(ref expect.IsOk(io.WriteString(mut b, "")), ref 0)
+	expect.Equal(ref b.String(), "héllo")
+	var sink io.Discard
+	expect.Equal(ref expect.IsOk(io.WriteString(mut sink, "gone")), ref 4)
+	view := "bytes".Bytes()
+	expect.Equal(ref len(view), ref 5)
+	expect.Equal(ref view[0], ref byte('b'))
+	expect.True(view.Equal(ref []byte("bytes")))
+}
+
+// BenchmarkCopyN measures a copy of 32 MB from a string into Discard,
+// 32 KiB a step.
+func BenchmarkCopyN() {
+	var b strings.Builder
+	b.Grow(32 * 1024 * 1024)
+	for i := 0; i < 32*1024*1024/64; i++ {
+		b.WriteString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	}
+
+	text := b.String()
+	var sink io.Discard
+	for testing.Loop() {
+		src := strings.NewReader(text.Clone())
+		_ = io.CopyN(mut sink, mut src, 32*1024*1024)
+	}
+}
+
+// BenchmarkWriteString measures a line written into a buffer with no
+// copy of the string.
+func BenchmarkWriteString() {
+	var buf bytes.Buffer
+	for testing.Loop() {
+		if buf.Len() > 1<<20 {
+			buf.Reset()
+		}
+
+		_ = io.WriteString(mut buf, "GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	}
 }

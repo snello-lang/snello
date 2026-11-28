@@ -55,7 +55,7 @@ func consume(s string) {}
 // iter adapters.
 const iterPrelude = `package p
 import ("deque"; "fmt"; "iter")
-func even(x ref ref int) bool { return **x % 2 == 0 }
+func even(x ref int) bool { return *x % 2 == 0 }
 func twice(x ref int) int { return *x * 2 }
 func ints() deque.Deque<int> { d := deque.New<int>(); d.PushBack(1); return d }
 struct Holder { it iter.Map<deque.Iter<int>, ref int, int> }
@@ -176,7 +176,7 @@ func TestIterRefusals(t *testing.T) {
 		refusal{"func f() { var xs []ref int; { d := ints(); xs = d.Iter().Collect() }; fmt.Println(xs) }", "a slice cannot hold a borrow"},
 		refusal{"func f() { d := ints(); xs := d.Iter().Collect(); d.PushBack(3); fmt.Println(xs) }", "cannot borrow d as mut: d is borrowed as ref by xs"},
 		refusal{"func f() { d := ints(); n := 0; fmt.Println(d.Iter().Map(func(x ref int) int { n += *x; return n }).Count()) }", "closure captures n by borrow and cannot be passed to Map, which keeps f"},
-		refusal{"func f() { d := ints(); fmt.Println(d.Iter().Filter(func(x ref ref int) bool { d.PushBack(1); return true }).Count()) }", "cannot borrow d as mut: d is borrowed as ref"}, // the iterator borrows d for the call, which the closure would change; the closure is refused as a kept borrow too
+		refusal{"func f() { d := ints(); fmt.Println(d.Iter().Filter(func(x ref int) bool { d.PushBack(1); return true }).Count()) }", "cannot borrow d as mut: d is borrowed as ref"}, // the iterator borrows d for the call, which the closure would change; the closure is refused as a kept borrow too
 		refusal{"func f() { d := ints(); it := d.Iter().Filter(even); if v := d.GetMut(0) { *v = 2 }; fmt.Println(it.Count()) }", "cannot borrow d as mut: d is borrowed as ref by it"},
 		refusal{"struct Keyed<T> { m map[int]T }\nfunc keep<T>(v T) Keyed<T> { return Keyed<T>{m: map[int]T{}} }\nfunc f() { d := ints(); fmt.Println(keep(d.Iter())) }", "a map cannot hold deque.Iter<int>: it holds a borrow"},
 	)

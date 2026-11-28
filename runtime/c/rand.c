@@ -255,14 +255,6 @@ SN_HELD uint64_t sn_math__rand_random(void) {
     return s->buf[s->i++ & (chunk - 1)];
 }
 
-// sn_math__rand_mul64 is the 128-bit product of x and y: the high half
-// returned and the low half stored, one multiply instruction.
-SN_HELD uint64_t sn_math__rand_mul64(uint64_t x, uint64_t y, uint64_t *lo) {
-    unsigned __int128 p = (unsigned __int128)x * y;
-    *lo = (uint64_t)p;
-    return (uint64_t)(p >> 64);
-}
-
 #ifdef SN_DEBUG
 // sn_rand_key keys the calling thread's generator with seed, eight
 // bytes a word, the low byte first, for the test that holds what the

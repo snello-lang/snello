@@ -5,9 +5,12 @@
 // Package set holds each value once. Insert adds a value and reports
 // whether it was new, Contains asks after one, Remove takes one out,
 // and a range over Iter gives each value once, in the order they were
-// inserted, as a range over a map does. A Set is a map of its values to
-// nothing, map[T](): it costs what the map costs, a hash and a look-up
-// per operation, and hashes with the map's seed.
+// inserted, as a range over a map does. Union, Intersection, Difference
+// and SymmetricDifference change a set in place by another, which they
+// take and use up, moving its values rather than copying them; IsSubset,
+// IsSuperset and IsDisjoint compare two sets. A Set is a map of its
+// values to nothing, map[T](): it costs what the map costs, a hash and a
+// look-up per operation, and hashes with the map's seed.
 package set
 
 import ("fmt"; "iter")
@@ -36,6 +39,7 @@ struct Iter<T: Eq + Hash> impl iter.Iterator<ref T> {
 	at int
 }
 
+
 // New returns an empty set of values of type T, the same set as the
 // zero value.
 func New<T: Eq + Hash>() Set<T> {
@@ -55,6 +59,27 @@ func From<T: Eq + Hash>(xs []T) Set<T> {
 	}
 
 	return s
+}
+
+// FromIter returns a set of the items of it, an iterator of owned
+// values, which it pulls to the end: each item is moved into the set,
+// and one that comes again is dropped. The iterator is lent mut.
+//
+//	odd := set.FromIter(mut d.Iter().Map(clone).Filter(isOdd))
+func FromIter<I: iter.Iterator<T>, T: Eq + Hash>(it mut I) Set<T> {
+	var s Set<T>
+	s.Extend(it)
+	return s
+}
+
+// Clone returns a new set holding a clone of each value of s, in the
+// same order, which the caller owns. It is a function, since it asks T
+// to be Clone, which a method of Set cannot. It costs one allocation
+// and a clone per value.
+//
+//	a.Union(set.Clone(ref b)) // b stays
+func Clone<T: Eq + Hash + Clone>(s ref Set<T>) Set<T> {
+	return Set<T>{m: s.m.Clone()}
 }
 
 // Insert adds v, which the set takes and owns from then on, and reports
@@ -80,6 +105,114 @@ func (s mut Set<T>) Remove(v ref T) bool {
 	return s.m.Remove(v).IsSome()
 }
 
+// Extend adds every item of it, an iterator of owned values, which it
+// pulls to the end: each item is moved into the set, and one the set
+// holds already is dropped. The iterator is lent mut. It costs an
+// Insert per item.
+//
+//	seen.Extend(mut names.Iter().Map(clone))
+func (s mut Set<T>) Extend<I: iter.Iterator<T>>(it mut I) {
+	for {
+		s.Insert(it.Next() ?? break)
+	}
+}
+
+// Union adds every value of o to s, which takes o and uses it up: a
+// value s does not hold is moved into s, one it holds is dropped, and
+// o's table is freed. Nothing is copied; to keep o, give its Clone. It
+// costs a hash and a look-up for each value of o, and s may grow.
+//
+//	a.Union(b)                // b is gone
+//	a.Union(set.Clone(ref b)) // b stays
+func (s mut Set<T>) Union(o Set<T>) {
+	for v, _ := range o.m {
+		s.Insert(v)
+	}
+}
+
+// Intersection keeps in s the values o holds too, dropping the rest,
+// and takes o and uses it up. The values kept stay in their order. It
+// costs a look-up in o for each value of s.
+//
+//	a.Intersection(b) // a holds what both held
+func (s mut Set<T>) Intersection(o Set<T>) {
+	s.Retain(func(v ref T) bool { return o.Contains(v) })
+}
+
+// Difference removes from s every value o holds, and takes o and uses
+// it up. It costs a look-up in s for each value of o.
+//
+//	a.Difference(b) // a holds what b did not
+func (s mut Set<T>) Difference(o Set<T>) {
+	for v, _ := range o.m {
+		s.Remove(ref v)
+	}
+}
+
+// SymmetricDifference leaves in s the values held by exactly one of s
+// and o, and takes o and uses it up: a value of o that s holds is
+// removed from s, one it does not hold is moved into s. It costs a
+// hash and a look-up for each value of o.
+//
+//	a.SymmetricDifference(b) // a holds what one of them held, not both
+func (s mut Set<T>) SymmetricDifference(o Set<T>) {
+	for v, _ := range o.m {
+		if !s.Remove(ref v) {
+			s.Insert(v)
+		}
+	}
+}
+
+// Retain calls keep once for each value, in insertion order, and drops
+// every value for which keep returns false; the values that stay keep
+// their order. keep is given the value lent, and held for the call
+// alone.
+//
+//	s.Retain(func(v ref int) bool { return *v > 0 })
+func (s mut Set<T>) Retain(keep func(ref T) bool) {
+	s.m.Retain(func(v ref T, _ mut ()) bool { return keep(v) })
+}
+
+// IsSubset reports whether o holds every value of s; an empty set is a
+// subset of every set. It answers false at once when s is the larger,
+// and otherwise costs a look-up in o for each value of s, up to the
+// first o lacks.
+func (s ref Set<T>) IsSubset(o ref Set<T>) bool {
+	if s.Len() > o.Len() {
+		return false
+	}
+
+	for v := range s {
+		if !o.Contains(v) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// IsSuperset reports whether s holds every value of o: o.IsSubset(s).
+func (s ref Set<T>) IsSuperset(o ref Set<T>) bool {
+	return o.IsSubset(s)
+}
+
+// IsDisjoint reports whether s and o hold no value in common; an empty
+// set is disjoint from every set. It costs a look-up in the larger set
+// for each value of the smaller, up to the first shared.
+func (s ref Set<T>) IsDisjoint(o ref Set<T>) bool {
+	if s.Len() > o.Len() {
+		return o.IsDisjoint(s)
+	}
+
+	for v := range s {
+		if o.Contains(v) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // Len returns how many values the set holds.
 func (s ref Set<T>) Len() int {
 	return len(s.m)
@@ -97,9 +230,11 @@ func (s mut Set<T>) Clear() {
 }
 
 // Iter returns a walk over the values in the order they were inserted,
-// lending each for as long as the set is lent; nothing is copied.
+// lending each for as long as the set is lent; nothing is copied. A
+// range over the set lent walks through it: for v := range ref s.
 //
-//	for v := range s.Iter() { ... }
+//	for v := range ref s { ... }
+//	odd := s.Iter().Filter(isOdd).Count()
 func (s ref Set<T>) Iter() Iter<T> {
 	return Iter<T>{s: s, at: 0}
 }
@@ -110,7 +245,7 @@ func (s ref Set<T>) Iter() Iter<T> {
 func (s ref Set<T>) String() string {
 	out := "set["
 	sep := ""
-	for v := range s.Iter() {
+	for v := range s {
 		out = out + sep + fmt.Sprint(v)
 		sep = " "
 	}

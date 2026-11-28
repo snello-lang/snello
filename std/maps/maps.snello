@@ -1,0 +1,93 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package maps walks and fills a map: Keys and Values walk a map's keys
+// or its values alone, lending each in insertion order, Extend adds the
+// pairs an iterator gives, and FromIter makes a map of them. A map's own
+// methods, Get, Insert, Remove, Retain and the rest, are the language's,
+// documented in builtin.
+package maps
+
+import "iter"
+
+// A KeysIter walks a map's keys in the order they were inserted,
+// lending each; it lends the map for as long as it lives, so the map
+// cannot change during the walk. Keys makes one, and the adapters of
+// iter.Iterator wrap it.
+struct KeysIter<K: Eq + Hash, V> impl iter.Iterator<ref K> {
+	m  ref map[K]V
+	at int
+}
+
+// A ValuesIter walks a map's values in the order their keys were
+// inserted, lending each; it lends the map for as long as it lives.
+// Values makes one, and the adapters of iter.Iterator wrap it.
+struct ValuesIter<K: Eq + Hash, V> impl iter.Iterator<ref V> {
+	m  ref map[K]V
+	at int
+}
+
+// Keys returns a walk over the keys of m, in insertion order, lending
+// each for as long as the map is lent; nothing is copied.
+//
+//	names := maps.Keys(ref ages).Map(clone).Collect()
+func Keys<K: Eq + Hash, V>(m ref map[K]V) KeysIter<K, V> {
+	return KeysIter<K, V>{m: m, at: 0}
+}
+
+// Values returns a walk over the values of m, in the order their keys
+// were inserted, lending each for as long as the map is lent; nothing
+// is copied.
+//
+//	total := maps.Values(ref ages).Fold(0, add)
+func Values<K: Eq + Hash, V>(m ref map[K]V) ValuesIter<K, V> {
+	return ValuesIter<K, V>{m: m, at: 0}
+}
+
+// Extend adds every pair of it, an iterator of owned keys and values,
+// to m, which it pulls to the end: each pair is moved into the map, and
+// a key already present takes the new value, dropping the old, as
+// Insert does. The iterator is lent mut.
+//
+//	maps.Extend(mut ages, mut more.Iter().Map(pair))
+func Extend<K: Eq + Hash, V, I: iter.Iterator<(K, V)>>(m mut map[K]V, it mut I) {
+	for {
+		k, v := it.Next() ?? break
+		m.Insert(k, v)
+	}
+}
+
+// FromIter returns a map of the pairs of it, an iterator of owned keys
+// and values, which it pulls to the end; a key that comes again takes
+// the later value.
+//
+//	ages := maps.FromIter(mut people.Iter().Map(nameAndAge))
+func FromIter<K: Eq + Hash, V, I: iter.Iterator<(K, V)>>(it mut I) map[K]V {
+	m := map[K]V{}
+	Extend(mut m, it)
+	return m
+}
+
+// Next lends the next key of the walk, or None once every key has been
+// given. The key is lent from the map, not from the KeysIter, so it stays
+// good while the walk goes on and for as long as the map is lent.
+func (it mut KeysIter<K, V>) Next() ref K? {
+	if (i, k, _) := it.m.Entry(it.at) {
+		it.at = i + 1
+		return Some(k)
+	}
+
+	return None
+}
+
+// Next lends the next value of the walk, or None once every value has
+// been given. The value is lent from the map, not from the ValuesIter.
+func (it mut ValuesIter<K, V>) Next() ref V? {
+	if (i, _, v) := it.m.Entry(it.at) {
+		it.at = i + 1
+		return Some(v)
+	}
+
+	return None
+}

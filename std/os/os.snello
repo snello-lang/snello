@@ -113,8 +113,9 @@ var Args []string
 
 // A File is an open file, or one of the standard streams. It
 // implements io.Reader and io.Writer, so it is what io.Copy and
-// fmt.Fprintln write to, and io.Seeker, so a program reading a format
-// of its own moves about in it.
+// fmt.Fprintln write to, io.Seeker, so a program reading a format of
+// its own moves about in it, and io.ReaderAt and io.WriterAt, so it is
+// read and written at an offset with the position left alone.
 //
 // A File implements Drop: when it goes out of scope, on every path out
 // of its function, its descriptor is closed. Close consumes the File
@@ -126,10 +127,11 @@ var Args []string
 // memory: each call is one system call, or as many as a write of all
 // of its bytes takes, so a program that reads or writes in small
 // pieces wraps the File in a bufio.Reader or a bufio.Writer.
-struct File impl Drop, io.Reader, io.Writer, io.Seeker {
-	fd     int
-	name   string
-	stream bool // one of the three standard streams, which stay open for the program's life
+struct File impl Drop, io.Reader, io.Writer, io.Seeker, io.ReaderAt, io.WriterAt {
+	fd        int
+	name      string
+	stream    bool // one of the three standard streams, which stay open for the program's life
+	appending bool // opened with O_APPEND: every write goes to the end, so no write takes an offset
 }
 
 // A FileMode is a file's kind and its permissions: the permissions in
@@ -225,7 +227,7 @@ func Cores() int
 // through two handles share no memory, which is what the descriptor
 // already guarantees.
 func Stdin() File {
-	return File{fd: stdinFD, name: stdinName, stream: true}
+	return File{fd: stdinFD, name: stdinName, stream: true, appending: false}
 }
 
 // Stdout returns a handle on the standard output, open for writing, a
@@ -239,7 +241,7 @@ func Stdin() File {
 // reads its answer. A program that writes much in small pieces wraps
 // it in a bufio.Writer.
 func Stdout() File {
-	return File{fd: stdoutFD, name: stdoutName, stream: true}
+	return File{fd: stdoutFD, name: stdoutName, stream: true, appending: false}
 }
 
 // Stderr returns a handle on the standard error output, open for
@@ -248,7 +250,7 @@ func Stdout() File {
 //
 //	fmt.Fprintln(mut os.Stderr(), "grep:", e)
 func Stderr() File {
-	return File{fd: stderrFD, name: stderrName, stream: true}
+	return File{fd: stderrFD, name: stderrName, stream: true, appending: false}
 }
 
 // Open opens the file path names for reading and returns it, a File
@@ -267,7 +269,7 @@ func Open(path ref string) Result<File, io.Error> {
 		return Err(io.Errno("open", path, code))
 	}
 
-	return Ok(File{fd: fd, name: path.Clone(), stream: false})
+	return Ok(File{fd: fd, name: path.Clone(), stream: false, appending: false})
 }
 
 // Create opens the file path names for writing and returns it, a File
@@ -288,7 +290,7 @@ func Create(path ref string) Result<File, io.Error> {
 		return Err(io.Errno("open", path, code))
 	}
 
-	return Ok(File{fd: fd, name: path.Clone(), stream: false})
+	return Ok(File{fd: fd, name: path.Clone(), stream: false, appending: false})
 }
 
 // OpenFile opens the file path names as flag says and returns it, a
@@ -313,7 +315,7 @@ func OpenFile(path ref string, flag int, perm FileMode) Result<File, io.Error> {
 		return Err(io.Errno("open", path, code))
 	}
 
-	return Ok(File{fd: fd, name: path.Clone(), stream: false})
+	return Ok(File{fd: fd, name: path.Clone(), stream: false, appending: flag&O_APPEND != 0})
 }
 
 // ReadToString reads the whole of the file path names into one string
@@ -836,6 +838,46 @@ func (f mut File) WriteString(s ref string) Result<int, io.Error> {
 	return Ok(n)
 }
 
+// ReadAt reads into buf from the file at the offset off, counted in
+// bytes from the start, and returns how many bytes it read, asking the
+// system as often as it takes to fill buf: fewer than buf holds only at
+// the end of the file, and none at or past it, however far past. The
+// file's position, where Read and Write go on, stays where it was, so
+// several readers read one file at once. It is io.ReaderAt's method.
+//
+//	n := f.ReadAt(mut record, 64 * i)?
+func (f ref File) ReadAt(buf mut []byte, off u64) Result<int, io.Error> {
+	n := 0
+	code := pread(f.fd, buf, off, mut n)
+	if code != 0 {
+		return Err(io.Errno("read", ref f.name, code))
+	}
+
+	return Ok(n)
+}
+
+// WriteAt writes all of buf to the file at the offset off, counted in
+// bytes from the start, and returns how many bytes it wrote, the length
+// of buf; a write past the end leaves a gap of zero bytes. The file's
+// position stays where it was. It is io.WriterAt's method, and fails as
+// Write fails, with the Error's Written() bytes written. A file opened
+// with O_APPEND takes no offset, since every write of it goes to the
+// end, and the systems disagree on which wins: WriteAt fails on it with
+// "invalid use of WriteAt on file opened with O_APPEND".
+func (f mut File) WriteAt(buf ref []byte, off u64) Result<int, io.Error> {
+	if f.appending {
+		return Err(io.NewError("write", f.name.Clone(), "invalid use of WriteAt on file opened with O_APPEND", io.Other))
+	}
+
+	n := 0
+	code := pwrite(f.fd, buf, off, mut n)
+	if code != 0 {
+		return Err(io.Errno("write", ref f.name, code).WithWritten(n))
+	}
+
+	return Ok(n)
+}
+
 // Seek moves the file's position, where the next Read and Write begin,
 // to where pos says, and returns the new position, counted in bytes
 // from the start. It is io.Seeker's method:
@@ -1135,6 +1177,15 @@ func write(fd int, buf ref []byte, n mut int) int
 
 // writeString writes all of s to the descriptor fd, as write does.
 func writeString(fd int, s ref string, n mut int) int
+
+// pread reads from the descriptor fd at the offset off into buf, leaving
+// the position where it was, and stores how many bytes in n.
+func pread(fd int, buf mut []byte, off u64, n mut int) int
+
+// pwrite writes all of buf to the descriptor fd at the offset off,
+// leaving the position where it was, and stores in n how many bytes it
+// wrote, all of them or those before a failure.
+func pwrite(fd int, buf ref []byte, off u64, n mut int) int
 
 // syncFile waits until the device holds what was written to fd.
 func syncFile(fd int) int

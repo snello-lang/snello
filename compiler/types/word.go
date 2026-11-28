@@ -110,6 +110,20 @@ func (c *Checker) noteWord(have *Func, owner *Trait, want *Func) {
 	}
 
 	c.words[have] = w
+	have.word = true
+}
+
+// wordKept reports whether f, or the declaration f is an instance of,
+// keeps its trait's word: a call of it gives a result that holds what
+// the receiver and the arguments hold, read out of them, and lends the
+// receiver nothing of its own, so the next item may be pulled while one
+// is held.
+func (f *Func) wordKept() bool {
+	if f.origin != nil {
+		return f.origin.word
+	}
+
+	return f.word
 }
 
 // keepsWord reports whether the body being checked is that of an

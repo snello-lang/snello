@@ -314,6 +314,29 @@ void sn_map_reserve(sn_map *m, const sn_map_type *t, int64_t n) {
     }
 }
 
+// unlink_entry takes the live entry e, held in the slot s, out of the map:
+// its value has been moved out or dropped already; the key is dropped
+// here, and the entry's hash zeroed so that ranges skip it until the
+// next rebuild drops it.
+static void unlink_entry(sn_map *m, const sn_map_type *t, int64_t s, uint32_t e) {
+    if (t->kdrop != NULL) {
+        t->kdrop(key_at(m, t, e));
+    }
+
+    m->hashes[e] = 0;
+    m->count--;
+    if (m->count == 0) { // nothing live: the entries and the index start again
+        m->len = 0;
+        memset(m->ctrl, ctrl_empty, (size_t)m->slots);
+        return;
+    }
+
+    // A slot in a group with an empty slot becomes empty itself: a probe
+    // reaching the group stops there whatever this slot holds. Elsewhere
+    // it is marked deleted, so that probes go on past it.
+    m->ctrl[s] = match_empty(group_at(m, (uint64_t)s / 8)) != 0 ? ctrl_empty : ctrl_deleted;
+}
+
 bool sn_map_remove(sn_map *m, const sn_map_type *t, const void *key, void *out) {
     sn_check_map(m);
     if (m->count == 0) {
@@ -328,23 +351,40 @@ bool sn_map_remove(sn_map *m, const sn_map_type *t, const void *key, void *out) 
     uint32_t e = slot_entries(m)[s];
     memcpy(out, val_at(m, t, e), t->vsize);
     memset(val_at(m, t, e), 0, t->vsize); // the value moved out
-    if (t->kdrop != NULL) {
-        t->kdrop(key_at(m, t, e));
-    }
-
-    m->hashes[e] = 0; // emptied: skipped by ranges until the next rebuild drops it
-    m->count--;
-    if (m->count == 0) { // nothing live: the entries and the index start again
-        m->len = 0;
-        memset(m->ctrl, ctrl_empty, (size_t)m->slots);
-        return true;
-    }
-
-    // A slot in a group with an empty slot becomes empty itself: a probe
-    // reaching the group stops there whatever this slot holds. Elsewhere
-    // it is marked deleted, so that probes go on past it.
-    m->ctrl[s] = match_empty(group_at(m, (uint64_t)s / 8)) != 0 ? ctrl_empty : ctrl_deleted;
+    unlink_entry(m, t, s, e);
     return true;
+}
+
+// sn_map_remove_at takes the live entry at the place i out of the map,
+// dropping its key and its value: Retain removes the entries a walk
+// refuses, so that no key is hashed or compared again. The slot is
+// found on the probe path of the entry's stored hash, by its entry
+// number.
+void sn_map_remove_at(sn_map *m, const sn_map_type *t, int64_t i) {
+    sn_check_map(m);
+    uint64_t h = m->hashes[i];
+    uint64_t gmask = ((uint64_t)m->slots >> 3) - 1;
+    uint64_t g = h & gmask;
+    const uint32_t *entries = slot_entries(m);
+    int64_t s = -1;
+    for (uint64_t step = 1; s < 0; step++) {
+        uint64_t w = group_at(m, g);
+        for (uint64_t bits = match_byte(w, tag(h)); bits != 0; bits &= bits - 1) {
+            uint64_t c = g * 8 + (uint64_t)__builtin_ctzll(bits) / 8;
+            if (entries[c] == (uint32_t)i) {
+                s = (int64_t)c;
+                break;
+            }
+        }
+
+        g = (g + step) & gmask;
+    }
+
+    if (t->vdrop != NULL) {
+        t->vdrop(val_at(m, t, i));
+    }
+
+    unlink_entry(m, t, s, (uint32_t)i);
 }
 
 void sn_map_free(sn_map *m, const sn_map_type *t) {

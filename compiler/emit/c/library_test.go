@@ -24,12 +24,20 @@ func TestVerbPlus(t *testing.T) {
 // bitCalls calls a function of math/bits of each kind and keeps one as
 // a value.
 const bitCalls = `package main
-import ("fmt"; "math/bits")
+import ("fmt"; "math"; "math/bits")
 func main() {
 	var a u8 = 1
+	var c u32 = 1
 	var d u64 = 1
 	f := bits.OnesCount64
+	g := math.Float64bits
 	fmt.Println(bits.LeadingZeros8(a), bits.TrailingZeros64(d), bits.OnesCount64(d), bits.Len8(a), bits.RotateLeft8(a, -1), bits.Reverse64(d), f(d))
+	fmt.Println(bits.ReverseBytes32(c), math.Float64bits(1.5), math.Float32frombits(c), g(2.5))
+	sum, carry := bits.Add64(d, d, 0)
+	hi, lo := bits.Mul64(d, d)
+	diff, borrow := bits.Sub64(d, d, 0)
+	add := bits.Add64
+	fmt.Println(sum, carry, hi, lo, diff, borrow, add(d, d, 1))
 }
 `
 
@@ -38,14 +46,18 @@ func main() {
 // the library's; a value of one is the library's function.
 func TestBitOps(t *testing.T) {
 	body := cFunction(t, emitSource(t, bitCalls), "static SN_UNUSED void sn_main(void)")
-	for _, want := range []string{"sn_bits_LeadingZeros8(", "sn_bits_TrailingZeros64(", "sn_bits_OnesCount64(", "sn_bits_Len8(", "sn_bits_RotateLeft8(", "sn_bits_Reverse64("} {
+	for _, want := range []string{"sn_bits_LeadingZeros8(", "sn_bits_TrailingZeros64(", "sn_bits_OnesCount64(", "sn_bits_Len8(", "sn_bits_RotateLeft8(", "sn_bits_Reverse64(", "sn_bits_ReverseBytes32(", "sn_f64_bits(", "sn_f32_from_bits(", "sn_bits_Add64(", "sn_bits_Mul64(", "sn_bits_Sub64("} {
 		if !strings.Contains(body, want) {
 			t.Errorf("main lacks %s:\n%s", want, body)
 		}
 	}
 
-	if n := strings.Count(body, "sn_math__bits_"); n != 1 || !strings.Contains(body, "sn_math__bits_OnesCount64") {
-		t.Errorf("main names the library's functions %d times, want once, for the value of OnesCount64:\n%s", n, body)
+	if n := strings.Count(body, "sn_math__bits_"); n != 2 || !strings.Contains(body, "sn_math__bits_OnesCount64") || !strings.Contains(body, "sn_math__bits_Add64") {
+		t.Errorf("main names the library's functions %d times, want twice, for the values of OnesCount64 and Add64:\n%s", n, body)
+	}
+
+	if n := strings.Count(body, "sn_math_Float"); n != 1 || !strings.Contains(body, "sn_math_Float64bits") {
+		t.Errorf("main names the library's float bits %d times, want once, for the value of Float64bits:\n%s", n, body)
 	}
 }
 

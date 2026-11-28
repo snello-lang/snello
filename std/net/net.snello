@@ -413,11 +413,12 @@ func (c mut Conn) SetWriteDeadline(t time.Time) Result<(), io.Error> {
 
 // WriteString writes all of s to the connection, as Write writes a
 // slice of bytes, and returns how many bytes it wrote, the length of
-// s; it fails as Write fails. It copies s into a slice of bytes first.
+// s; it fails as Write fails. Nothing is copied: the connection is
+// handed a view of the string's bytes.
 //
 //	c.WriteString("HELLO\n")?
 func (c mut Conn) WriteString(s ref string) Result<int, io.Error> {
-	return c.Write(ref []byte(s))
+	return c.Write(s.Bytes())
 }
 
 // Close takes the connection and closes it now, so that the other side

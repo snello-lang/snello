@@ -11,10 +11,12 @@
 // its own, so math.Min(2, 7) needs no 2.0.
 //
 // The functions without a body here are the system's math library's,
-// called by their names. Sqrt, Floor, Ceil, Trunc, Round, Mod, Abs and
-// Copysign are exact, the same on every system; the others are within
-// a few units in the last place of the true result, so their last
-// digits may differ from one system to another. The special cases, an
+// called by their names, but for Erf, Erfc, Asinh, Atanh, Gamma and
+// Lgamma, which the runtime computes itself from the reference
+// algorithms, since the system's are slower. Sqrt, Floor, Ceil, Trunc,
+// Round, Mod, Abs and Copysign are exact, the same on every system;
+// the others are within a few units in the last place of the true
+// result, so their last digits may differ from one system to another. The special cases, an
 // infinity, a NaN or a zero as an argument, are those IEEE 754 sets
 // and the C standard lists for each function. No function panics: a
 // result that has no number is NaN, and one too large for an f64 is
@@ -220,6 +222,139 @@ func Signbit(x f64) bool
 // a -0 or a NaN with its sign bit set counts as negative.
 func Copysign(x, sign f64) f64
 
+// Float64bits returns the bits of x as a u64, the IEEE 754 encoding:
+// the sign, the exponent and the fraction as the memory holds them,
+// which a binary format writes and a hash reads. It is a copy of the
+// bits, no conversion.
+//
+//	math.Float64bits(1.0) // 0x3ff0000000000000
+func Float64bits(x f64) u64
+
+// Float64frombits returns the f64 whose bits are b, the inverse of
+// Float64bits.
+func Float64frombits(b u64) f64
+
+// Float32bits returns the bits of x as a u32, the IEEE 754 encoding of
+// a single-precision float.
+func Float32bits(x f32) u32
+
+// Float32frombits returns the f32 whose bits are b.
+func Float32frombits(b u32) f32
+
+// Frexp breaks x into a fraction and a power of two, x == frac * 2^exp,
+// the fraction's magnitude in [0.5, 1); a zero, an infinity and NaN
+// come back as they are, with an exponent of zero.
+//
+//	frac, exp := math.Frexp(8) // 0.5, 4
+func Frexp(x f64) (f64, int) {
+	exp := 0
+	frac := frexp(x, mut exp)
+	return (frac, exp)
+}
+
+// Ldexp returns frac * 2^exp, the inverse of Frexp: +Inf or -Inf when
+// the result is too large, zero when too small, the sign kept.
+func Ldexp(frac f64, exp int) f64
+
+// Modf breaks x into its whole part and its fraction, which sum to x
+// and both have its sign: Modf(-2.5) is -2, -0.5. An infinity's whole
+// part is itself and its fraction NaN; NaN gives NaN twice.
+func Modf(x f64) (f64, f64) {
+	frac := 0.0
+	whole := modf(x, mut frac)
+	return (whole, frac)
+}
+
+// Remainder returns the IEEE 754 remainder of x divided by y: x less
+// the multiple of y nearest to x, a tie going to the even multiple, so
+// its magnitude is at most half of y, where Mod's has the sign of x.
+// It is NaN when x is an infinity or y is zero, and x when y is an
+// infinity.
+func Remainder(x, y f64) f64
+
+// FMA returns x*y + z rounded once, as the fused multiply-add
+// instruction computes it, where x*y + z written out rounds twice.
+func FMA(x, y, z f64) f64
+
+// Expm1 returns e^x - 1, exact for an x near zero, where Exp(x) - 1
+// loses its digits to cancellation.
+func Expm1(x f64) f64
+
+// Log1p returns the natural logarithm of 1 + x, exact for an x near
+// zero, where Log(1 + x) loses its digits to the rounding of the sum.
+func Log1p(x f64) f64
+
+// Exp2 returns 2^x.
+func Exp2(x f64) f64
+
+// Asinh returns the inverse hyperbolic sine of x.
+func Asinh(x f64) f64
+
+// Acosh returns the inverse hyperbolic cosine of x, defined for x at
+// least 1; below it NaN.
+func Acosh(x f64) f64
+
+// Atanh returns the inverse hyperbolic tangent of x, defined for x
+// between -1 and 1; at them an infinity of the sign, beyond them NaN.
+func Atanh(x f64) f64
+
+// Gamma returns the gamma function of x, (x-1)! for a positive whole x:
+// +Inf for +0 and -Inf for -0, the poles, NaN for a negative whole
+// number and for -Inf, +Inf for +Inf.
+//
+//	math.Gamma(5) // 24
+func Gamma(x f64) f64
+
+// Lgamma returns the natural logarithm of the magnitude of the gamma
+// function of x, and the sign of the gamma function, -1 or 1: the
+// gamma function is negative on (-1, 0), (-3, -2), (-5, -4) and so on,
+// between an even whole number that is not positive and the odd one
+// below it, and positive elsewhere. At a
+// pole, zero or a negative whole number, and at either infinity the
+// logarithm is +Inf, as the C standard has it, with the sign 1.
+//
+//	lg, sign := math.Lgamma(-0.5) // 1.2655..., -1
+func Lgamma(x f64) (f64, int) {
+	sign := 1
+	lg := lgamma(x, mut sign)
+	return (lg, sign)
+}
+
+// Erf returns the error function of x, the probability that a normal
+// deviate lies within x standard deviations times the square root of
+// two: -1 at -Inf, 0 at 0, 1 at +Inf.
+func Erf(x f64) f64
+
+// Erfc returns the complementary error function, 1 - Erf(x), exact
+// where 1 - Erf(x) would lose its digits for a large x.
+func Erfc(x f64) f64
+
+// Nextafter returns the f64 next to x in the direction of y: x itself
+// when the two are equal, NaN when either is NaN.
+//
+//	math.Nextafter(1, 2) // 1.0000000000000002
+func Nextafter(x, y f64) f64
+
+// Pow10 returns 10^n within one unit in the last place over the whole
+// range of a double, 10^-323 to 10^308, and exact for n from 0 to 22,
+// where a double holds the power: zero below the range and +Inf above
+// it.
+//
+//	math.Pow10(3) // 1000
+func Pow10(n int) f64
+
+// Dim returns x - y when that is positive, and 0 otherwise: the
+// positive difference. It is NaN when either is NaN or both are the
+// same infinity.
+func Dim(x, y f64) f64 {
+	v := x - y
+	if v <= 0 {
+		return 0
+	}
+
+	return v // positive, or NaN, which no comparison holds
+}
+
 // Abs returns the absolute value of x, exact: x without its sign, so
 // +0 for -0, +Inf for -Inf, and NaN for NaN.
 //
@@ -307,3 +442,16 @@ func Max(x, y f64) f64 {
 
 	return y
 }
+
+// frexp breaks x into a fraction in [0.5, 1), returned, and a power of
+// two, stored. The runtime provides it.
+func frexp(x f64, exp mut int) f64
+
+// modf breaks x into its whole part, returned, and its fraction,
+// stored. The runtime provides it.
+func modf(x f64, frac mut f64) f64
+
+// lgamma returns the natural logarithm of the magnitude of the gamma
+// function of x and stores the gamma function's sign, -1 or 1. The
+// runtime provides it.
+func lgamma(x f64, sign mut int) f64

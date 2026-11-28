@@ -1,0 +1,35 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A task calling a map's Retain. In a release build the function
+// Retain is given is called directly where it is known, on both
+// backends, so the task keeps the bound of its stack; in a debug build
+// the call stays one through a pointer, as every call of a function
+// value does, and the task runs on a guarded stack. The program holds
+// no map whose elements hold a map, which the analysis reads as a
+// possible recursion of the drops.
+
+package main
+
+import "fmt"
+
+func main() {
+	out := make(chan int, 1)
+	spawn keepOdd(out.Clone())
+	var in <-chan int = out
+	for n := range in {
+		fmt.Println("odd keys", n)
+	}
+}
+
+// keepOdd fills a map and keeps its odd keys, in a task.
+func keepOdd(out chan<- int) {
+	m := map[int]int{}
+	for i := 0; i < 20; i++ {
+		m.Insert(i, i)
+	}
+
+	m.Retain(func(k ref int, v mut int) bool { return *k%2 == 1 })
+	out <- len(m)
+}

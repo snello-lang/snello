@@ -248,6 +248,44 @@ func TestFormatFloatPrecision() {
 	expect.Equal(ref strconv.FormatFloat(1.5, 100000).Len(), ref 100002)
 }
 
+// The fixed form around a power of ten, where the rounding carries into
+// a new digit or the number of digits before the point is one more than
+// the binary exponent suggests: the answers checked against the
+// reference implementation.
+func TestFormatFloatCarries() {
+	expect.Equal(ref strconv.FormatFloat(9.5e-6, 6), "0.000010")
+	expect.Equal(ref strconv.FormatFloat(9.5e-6, 5), "0.00001")
+	expect.Equal(ref strconv.FormatFloat(999.996, 2), "1000.00")
+	expect.Equal(ref strconv.FormatFloat(0.096, 2), "0.10")
+	expect.Equal(ref strconv.FormatFloat(0.0096, 2), "0.01")
+	expect.Equal(ref strconv.FormatFloat(0.006, 2), "0.01")
+	expect.Equal(ref strconv.FormatFloat(0.0051, 2), "0.01")
+	expect.Equal(ref strconv.FormatFloat(1000.004, 2), "1000.00")
+	expect.Equal(ref strconv.FormatFloat(15.0, 1), "15.0")
+	expect.Equal(ref strconv.FormatFloat(0.00123456, 4), "0.0012")
+	expect.Equal(ref strconv.FormatFloat(99.995, 2), "100.00")
+	expect.Equal(ref strconv.FormatFloat(9.9999, 3), "10.000")
+	expect.Equal(ref strconv.FormatFloat(1e22, 1), "10000000000000000000000.0")
+	expect.Equal(ref strconv.FormatFloat(1e23, 0), "99999999999999991611392")
+	expect.Equal(ref strconv.FormatFloat(123456789012345.678, 2), "123456789012345.67")
+	expect.Equal(ref strconv.FormatFloat(0.1, 20), "0.10000000000000000555")
+	expect.Equal(ref strconv.FormatFloat(5e-324, 3), "0.000")
+	expect.Equal(ref strconv.FormatFloat(1.0, 0), "1")
+	expect.Equal(ref strconv.FormatFloat(0.5, 0), "0")
+	expect.Equal(ref strconv.FormatFloat(1.5, 0), "2")
+	expect.Equal(ref strconv.FormatFloat(0.95, 1), "0.9")
+	expect.Equal(ref strconv.FormatFloat(12345678901234567.0, 1), "12345678901234568.0")
+	expect.Equal(ref strconv.FormatFloat(4.5e-7, 6), "0.000000")
+	expect.Equal(ref strconv.FormatFloat(2.5e-7, 6), "0.000000")
+	expect.Equal(ref strconv.FormatFloat(1e-7, 8), "0.00000010") // the double below the power, which the comparison cannot place: the exact magnitude decides, and the digits are made again
+	expect.Equal(ref strconv.FormatFloat(1e-6, 7), "0.0000010")
+	expect.Equal(ref strconv.FormatFloat(1e-12, 13), "0.0000000000010")
+	expect.Equal(ref strconv.FormatFloat(-1e-7, 8), "-0.00000010")
+	b := []byte{}
+	strconv.AppendFloat(mut b, 999.996, 2) // the same path, into a slice
+	expect.Equal(ref string(b), "1000.00")
+}
+
 // TestFormatFloatLong checks that FormatFloat writes as long a fraction
 // as is asked for: all of it a float has, to the 1074th place, and
 // zeros after.
@@ -273,6 +311,46 @@ func TestFormatFloat32() {
 	expect.Equal(ref expect.IsOk(strconv.ParseFloat32(ref strconv.FormatFloat32(f, -1))), ref f)
 }
 
+// BenchmarkAppendInt measures writing a decimal integer after a slice's
+// bytes.
+func BenchmarkAppendInt() {
+	b := make([]byte, 0, 32)
+	for testing.Loop() {
+		b.Clear()
+		strconv.AppendInt(mut b, -123456789, 10)
+	}
+}
+
+// BenchmarkAppendFloat measures writing a float in its shortest form
+// after a slice's bytes.
+func BenchmarkAppendFloat() {
+	b := make([]byte, 0, 32)
+	for testing.Loop() {
+		b.Clear()
+		strconv.AppendFloat(mut b, 123456.789, -1)
+	}
+}
+
+// BenchmarkAppendFixed measures writing a float with three decimals
+// after a slice's bytes.
+func BenchmarkAppendFixed() {
+	b := make([]byte, 0, 32)
+	for testing.Loop() {
+		b.Clear()
+		strconv.AppendFloat(mut b, 123456.789, 3)
+	}
+}
+
+// BenchmarkAppendQuote measures writing a quoted string with an escape
+// after a slice's bytes.
+func BenchmarkAppendQuote() {
+	b := make([]byte, 0, 64)
+	for testing.Loop() {
+		b.Clear()
+		strconv.AppendQuote(mut b, "a quoted\tline")
+	}
+}
+
 // BenchmarkAtoi measures reading a short decimal integer.
 func BenchmarkAtoi() {
 	for testing.Loop() { _ = strconv.Atoi("123456") }
@@ -291,4 +369,64 @@ func BenchmarkParseFloat() {
 // BenchmarkUnquote measures reading a literal with an escape.
 func BenchmarkUnquote() {
 	for testing.Loop() { _ = strconv.Unquote("\"a quoted\\tline\"") }
+}
+
+// The Append functions write after the bytes they are given what the
+// Format functions return, and AppendInt and AppendUint refuse a base
+// outside 2 to 36 without writing.
+func TestAppend() {
+	b := []byte("n=")
+	expect.True(strconv.AppendInt(mut b, -255, 10))
+	b.Push(' ')
+	expect.True(strconv.AppendInt(mut b, 255, 16))
+	b.Push(' ')
+	expect.True(strconv.AppendUint(mut b, 255, 2))
+	b.Push(' ')
+	expect.True(strconv.AppendInt(mut b, 0, 10))
+	b.Push(' ')
+	expect.True(strconv.AppendInt(mut b, -9223372036854775808, 10))
+	b.Push(' ')
+	expect.True(strconv.AppendUint(mut b, 18446744073709551615, 36))
+	expect.Equal(ref string(b), "n=-255 ff 11111111 0 -9223372036854775808 3w5e11264sgsf")
+	expect.False(strconv.AppendInt(mut b, 1, 1))
+	expect.False(strconv.AppendUint(mut b, 1, 37))
+	expect.Equal(ref len(b), ref 55) // nothing written for a bad base
+	f := []byte{}
+	strconv.AppendFloat(mut f, 2.5, 2)
+	f.Push(' ')
+	strconv.AppendFloat(mut f, 1e21, -1)
+	f.Push(' ')
+	strconv.AppendFloat32(mut f, f32(0.1), -1)
+	f.Push(' ')
+	strconv.AppendBool(mut f, true)
+	f.Push(' ')
+	strconv.AppendBool(mut f, false)
+	f.Push(' ')
+	strconv.AppendQuote(mut f, "a\tb")
+	expect.Equal(ref string(f), "2.50 1e+21 0.1 true false \"a\\tb\"")
+	zero := 0.0
+	special := []byte{}
+	strconv.AppendFloat(mut special, zero/zero, 2)
+	special.Push(' ')
+	strconv.AppendFloat(mut special, 1/zero, 2)
+	special.Push(' ')
+	strconv.AppendFloat(mut special, -1/zero, -1)
+	special.Push(' ')
+	strconv.AppendFloat(mut special, 0.0, 3)
+	special.Push(' ')
+	strconv.AppendFloat(mut special, -2.5, 1)
+	special.Push(' ')
+	strconv.AppendFloat32(mut special, f32(2.5), 2)
+	special.Push(' ')
+	strconv.AppendQuote(mut special, "")
+	expect.Equal(ref string(special), "NaN +Inf -Inf 0.000 -2.5 2.50 \"\"")
+	long := []byte{}
+	strconv.AppendFloat(mut long, 0.1, 20) // more than seventeen digits: made from every digit of the float
+	expect.Equal(ref string(long), "0.10000000000000000555")
+	var grown []byte
+	for i := 0; i < 1000; i++ {
+		strconv.AppendInt(mut grown, i, 10)
+	}
+
+	expect.Equal(ref len(grown), ref 2890) // 10 one-digit, 90 two-digit and 900 three-digit numbers
 }

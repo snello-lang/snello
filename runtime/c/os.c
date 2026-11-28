@@ -1237,4 +1237,66 @@ SN_HELD int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
     *n = got;
     return 0;
 }
+
+// sn_os_pread fills buf from the file at the offset off, leaving the
+// file's position where it was, and stores how many bytes it read: the
+// system is asked as often as it takes to fill buf, each call for at
+// most SN_IO_MAX bytes, so the count is short only at the end of the
+// file and zero at or past it; a read a signal interrupted is asked
+// again.
+SN_HELD int64_t sn_os_pread(int64_t fd, sn_slice_u8 *buf, uint64_t off, int64_t *n) {
+    sn_check_slice((sn_slice *)buf);
+    *n = 0;
+    if (off > (uint64_t)INT64_MAX) {
+        return 0; // past the end of any file: nothing to read
+    }
+
+    while (*n < buf->len) {
+        size_t want = (size_t)(buf->len - *n);
+        ssize_t got = pread((int)fd, buf->ptr + *n, want < SN_IO_MAX ? want : SN_IO_MAX, (off_t)(off + (uint64_t)*n));
+        if (got < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            return errno;
+        }
+
+        if (got == 0) {
+            break; // the end of the file
+        }
+
+        *n += got;
+    }
+
+    return 0;
+}
+
+// sn_os_pwrite writes all of buf to the file at the offset off, leaving
+// the file's position where it was, asking the system as often as it
+// takes, and stores how many bytes it wrote, all of them or those
+// before a failure.
+SN_HELD int64_t sn_os_pwrite(int64_t fd, sn_slice_u8 buf, uint64_t off, int64_t *n) {
+    sn_check_slice((sn_slice *)&buf);
+    if (off > (uint64_t)INT64_MAX) {
+        return EINVAL;
+    }
+
+    *n = 0;
+    while (*n < buf.len) {
+        size_t want = (size_t)(buf.len - *n);
+        ssize_t wrote = pwrite((int)fd, buf.ptr + *n, want < SN_IO_MAX ? want : SN_IO_MAX, (off_t)(off + (uint64_t)*n));
+        if (wrote < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            return errno;
+        }
+
+        *n += wrote;
+    }
+
+    return 0;
+}
 #endif

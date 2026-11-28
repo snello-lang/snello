@@ -997,7 +997,7 @@ func (e *Emitter) call(x *ast.CallExpr) string {
 		return "0"
 	}
 
-	return name + "(" + e.args(sel.X, x.Args, x.Ellipsis.IsValid(), sig) + ")"
+	return e.valued(x, name+"("+e.args(sel.X, x.Args, x.Ellipsis.IsValid(), sig)+")", sig)
 }
 
 // staticCall writes T.F(args), a function of a type: the function of
@@ -1009,7 +1009,7 @@ func (e *Emitter) staticCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 		return "0"
 	}
 
-	return name + "(" + e.args(nil, x.Args, x.Ellipsis.IsValid(), sig) + ")"
+	return e.valued(x, name+"("+e.args(nil, x.Args, x.Ellipsis.IsValid(), sig)+")", sig)
 }
 
 // staticCallee names the function T.F a call or a spawn of sel runs,
@@ -1409,10 +1409,24 @@ func isByteSlice(t types.Type) bool {
 func (e *Emitter) funcCall(x *ast.CallExpr, id *ast.Ident, fn *types.Func) string {
 	if e.generics[fn] != nil {
 		name, sig := e.callInstance(id, fn, nil)
-		return name + "(" + e.args(nil, x.Args, x.Ellipsis.IsValid(), sig) + ")"
+		return e.valued(x, name+"("+e.args(nil, x.Args, x.Ellipsis.IsValid(), sig)+")", sig)
 	}
 
-	return lower.FuncName(fn) + "(" + e.args(nil, x.Args, x.Ellipsis.IsValid(), fn.Type().(*types.Signature)) + ")"
+	sig := fn.Type().(*types.Signature)
+	return e.valued(x, lower.FuncName(fn)+"("+e.args(nil, x.Args, x.Ellipsis.IsValid(), sig)+")", sig)
+}
+
+// valued returns the call x, written as call, with the value the caller
+// may keep: a function returning the unit returns void in C, so a call
+// of it kept as a value is followed by the unit, as a closure's is; a
+// call that is a statement of its own, and any other call, is written
+// as it is.
+func (e *Emitter) valued(x *ast.CallExpr, call string, sig *types.Signature) string {
+	if sig.Results() == types.Unit && x != e.statement {
+		return "(" + call + ", SN_UNIT)"
+	}
+
+	return call
 }
 
 // packageOf returns the package an identifier names, or nil.

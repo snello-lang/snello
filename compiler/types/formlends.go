@@ -36,11 +36,10 @@ const noLend = -1
 // (r, 1) or a borrow variable lent again. A temporary lent, ref f(),
 // is a place too, a temporary operand.
 type lentPlace struct {
-	place  Operand
-	lent   bool
-	itself bool      // the place is a borrow lent itself, where a borrow of it is wanted: its own slot, not what it points at
-	expr   ast.Expr  // for a place a borrow is made of, the expression the borrow is made of, and where
-	at     token.Pos // NoPos for a place read
+	place Operand
+	lent  bool
+	expr  ast.Expr  // for a place a borrow is made of, the expression the borrow is made of, and where
+	at    token.Pos // NoPos for a place read
 }
 
 // defsOf indexes where each temporary of the form is made, in the
@@ -164,7 +163,7 @@ func (m *formBorrows) holds(o Operand) bool {
 func (m *formBorrows) madeBy(in *Instr) int {
 	switch in.Op {
 	case OpBorrow:
-		tmp := m.borrowOf(in.Place, m.written(in.To), m.form.Temps[in.To.Temp].Itself)
+		tmp := m.borrowOf(in.Place, m.written(in.To), false)
 		if n := len(m.lent); n > 0 && m.lent[n-1].place == in.Place && !in.Place.IsTemp() {
 			m.lent[n-1].expr, m.lent[n-1].at = in.Expr, in.Pos // where the place is lent, which a call's result lending it accesses
 		}
@@ -182,15 +181,10 @@ func (m *formBorrows) madeBy(in *Instr) int {
 }
 
 // written reports whether the borrow made into t is of the place
-// itself: written in the program, ref x or mut x, or made of a borrow
-// given where a borrow of it is wanted; rather than one the lowering
-// makes of an owned value given where a borrow is wanted, a borrow
-// variable passed on, or a place sliced.
+// itself, written in the program, ref x or mut x, rather than one the
+// lowering makes of an owned value given where a borrow is wanted, a
+// borrow variable passed on, or a place sliced.
 func (m *formBorrows) written(t Operand) bool {
-	if m.form.Temps[t.Temp].Itself {
-		return true // the lowering's borrow of a borrow's own place, as ref r is
-	}
-
 	u, ok := unparen(m.form.Temps[t.Temp].Expr).(*ast.UnaryExpr)
 	return ok && (u.Op == token.REF || u.Op == token.MUT)
 }
@@ -200,12 +194,12 @@ func (m *formBorrows) written(t Operand) bool {
 // wrote no ref, passes that borrow on; a part of a value made here
 // reached through a borrow it is or holds lends what that borrow lends;
 // any other part of it is the temporary, unless it is data that lives
-// for the whole program. itself says a borrow is lent itself, where a
-// borrow of it is wanted: its own slot.
+// for the whole program. itself says a borrow made here is lent itself,
+// its own slot the temporary, as a mut view's header is by mut xs[1:].
 func (m *formBorrows) borrowOf(o Operand, written, itself bool) int {
 	if !o.IsTemp() {
 		_, _, t := m.placeOf(o)
-		m.lent = append(m.lent, lentPlace{place: o, lent: itself || !isBorrow(t), itself: itself}) // ref x of a borrow variable is x's own borrow, as the typing reads it, passed on; a borrow of its slot is the lowering's, lent itself
+		m.lent = append(m.lent, lentPlace{place: o, lent: !isBorrow(t)}) // ref x of a borrow variable is x's own borrow passed on, a borrow of a borrow being a borrow of its target
 		return NoTemp
 	}
 
@@ -320,6 +314,13 @@ func (m *formBorrows) called(in *Instr) int {
 	if !generic || !passed.only {
 		if recv && k.obj == nil { // a method the language declares: its result borrows its receiver
 			tmp = m.follow(in.Args[0])
+		} else if f, ok := k.obj.(*Func); recv && ok && f.wordKept() {
+			tmp = m.followHeld(in.Args[0])  // a method keeping its trait's word: its result holds what the receiver holds, never the receiver
+			for _, a := range in.Args[1:] { // and what each argument holds, a lent value's by what it holds, as a generic call's result does
+				if found := m.followHeld(a); tmp == NoTemp {
+					tmp = found
+				}
+			}
 		} else if src := callSourceIndex(k.sig, recv); src >= 0 && src < len(in.Args) {
 			tmp = m.followSource(in.Args[src], m.form.Temps[in.To.Temp].Type)
 		}
@@ -350,14 +351,8 @@ func (m *formBorrows) called(in *Instr) int {
 }
 
 // followSource follows the operand o a call's result of type result
-// borrows from: a borrow's own slot given where a borrow of it is
-// wanted gives a result of another type only what the slot holds, as
-// *x is all a ref string can be of an x of type ref ref string.
+// borrows from.
 func (m *formBorrows) followSource(o Operand, result Type) int {
-	if o.IsValue() && o.Path == "" && m.form.Temps[o.Temp].Itself && !Identical(m.form.Temps[o.Temp].Type, result) {
-		return m.followHeld(o)
-	}
-
 	if view, ok := m.headerOf(o); ok && !m.canHold(result, m.form.Temps[o.Temp].Type) {
 		return m.follow(view) // a result that cannot hold the header, a mut int of firstOf(mut s[1:]), points into what the view does
 	}

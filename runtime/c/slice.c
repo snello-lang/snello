@@ -70,6 +70,30 @@ void *sn_alloc_elems(int64_t n, size_t size) {
     return sn_alloc((size_t)n * size);
 }
 
+// sn_alloc_slots is a block of n slots of size bytes with SN_SLOT_WORDS
+// words of the holder's own before them, zero at first, which a btree's
+// node keeps its count and its other blocks in: the address returned is
+// the first slot's, and the words lie before it, sn_slot_word(p, i) the
+// i-th; sn_free_slots frees the block by that address. The header keeps
+// the slots aligned as the allocator aligns a block.
+void *sn_alloc_slots(int64_t n, size_t size) {
+    if (n < 0 || (size != 0 && (uint64_t)n > ((uint64_t)PTRDIFF_MAX - SN_SLOT_HEADER) / size)) {
+        sn_panic(SN_STR("out of memory: no buffer holds that many elements", 49));
+    }
+
+    char *block = sn_alloc(SN_SLOT_HEADER + (size_t)n * size);
+    memset(block, 0, SN_SLOT_HEADER);
+    return block + SN_SLOT_HEADER;
+}
+
+void sn_free_slots(void *p) {
+    if (p == NULL) {
+        return; // no block, as sn_free takes none
+    }
+
+    sn_free((char *)p - SN_SLOT_HEADER);
+}
+
 void sn_slice_make(sn_slice *out, int64_t len, int64_t cap, size_t size) {
     if (len < 0) {
         sn_panic(SN_STR("makeslice: len out of range", 27));

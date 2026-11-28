@@ -139,7 +139,7 @@ func main() {
 	fmt.Println(*(xs.First() ?? return))
 	it := d.Iter()
 	fmt.Println(*(it.Next() ?? return), *(it.Next() ?? return), it.Next().IsNone())
-	fmt.Println(*(d.Iter().Find(func(v ref ref int) bool { return **v > 15 }) ?? return))
+	fmt.Println(*(d.Iter().Find(func(v ref int) bool { return *v > 15 }) ?? return))
 	total := 0
 	for v := range d.Iter() { total += *v }
 	fmt.Println(total)

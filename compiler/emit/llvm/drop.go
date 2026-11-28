@@ -688,7 +688,7 @@ func (e *Emitter) cloner(t types.Type, pos token.Pos) string {
 				e.store(e.cloneAt(e.gep(ir, "%v", int(i)), u.Elem(), pos), e.gep(ir, out, int(i)))
 			}
 		case *types.Map:
-			e.eachEntry("%v", u, pos, func(k, v string) {
+			e.eachEntry("%v", u, pos, func(_, k, v string) {
 				e.mapSet(out, u, e.cloneAt(k, u.Key(), pos), e.cloneAt(v, u.Value(), pos), pos)
 			})
 		default:
