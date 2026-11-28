@@ -1069,6 +1069,9 @@ void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every);
 // sending end and offers it each signal of mask, the bit of each
 // Signal's value, as it comes.
 void sn_os__signal_notify(sn_chan *ch, int64_t mask);
+void sn_os__signal_ignore(int64_t mask);
+void sn_os__signal_reset(int64_t mask);
+void sn_os__signal_stop(sn_chan *ch);
 
 // Package exec's runtime calls, process.c's: a child started, waited
 // for, signalled, let go and freed, and its pipes read, written and

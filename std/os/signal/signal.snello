@@ -61,14 +61,55 @@ func (s ref Signal) String() string {
 //	<-stop
 //	fmt.Println("stopping")
 func Notify(first Signal, rest ...Signal) <-chan Signal {
-	mask := bit(first)
+	ch := make(chan Signal, 1)
+	notify(ch.Clone(), mask(first, ref rest))
+	return ch
+}
+
+// Ignore has the program ignore the signals named from now on: one that
+// arrives is dropped, cancelling nothing and reaching no channel, those
+// Notify gave it before included, so a program that must not be
+// interrupted while it writes ignores the interrupt for that time.
+// Reset ends it.
+//
+//	signal.Ignore(signal.Interrupt)
+func Ignore(first Signal, rest ...Signal) {
+	ignore(mask(first, ref rest))
+}
+
+// Reset gives the signals named back their first meaning: not ignored,
+// and given to no channel, so one that arrives stops the program as
+// the package's comment says. It undoes Ignore and Notify for them.
+//
+//	signal.Reset(signal.Interrupt, signal.Terminate)
+func Reset(first Signal, rest ...Signal) {
+	reset(mask(first, ref rest))
+}
+
+// Stop ends the delivery of signals to the channel c, which Notify
+// returned: the runtime lets go of its sending end, so a receive gives
+// the one signal the channel may still hold and None after, as from any
+// channel whose senders are gone, where dropping the channel ends the
+// delivery too. The signals it was given are then no channel's, unless
+// another asked for them, and stop the program as the package's comment
+// says.
+//
+//	stop := signal.Notify(signal.Interrupt)
+//	...
+//	signal.Stop(ref stop) // <-stop is None from here
+func Stop(c ref <-chan Signal) {
+	stop(c)
+}
+
+// mask is the bits of the signals named, 1 shifted by each one's
+// value.
+func mask(first Signal, rest ref []Signal) int {
+	m := bit(first)
 	for _, s := range rest {
-		mask |= bit(s)
+		m |= bit(s)
 	}
 
-	ch := make(chan Signal, 1)
-	notify(ch.Clone(), mask)
-	return ch
+	return m
 }
 
 // bit is the signal's bit in the mask notify is given, 1 shifted by
@@ -83,3 +124,13 @@ func bit(s Signal) int {
 // notify has the runtime hold ch's sending end and offer it each
 // signal of mask as it arrives. The runtime provides it.
 func notify(ch chan<- Signal, mask int)
+
+// ignore has the runtime drop each signal of mask from now on, and
+// reset has it drop none of them and offer them to no channel; stop
+// has it let go of ch's sending end, which Notify gave it. The runtime
+// provides them.
+func ignore(mask int)
+
+func reset(mask int)
+
+func stop(ch ref <-chan Signal)
