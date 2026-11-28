@@ -36,3 +36,6 @@ Thumbs.db
 *.iml
 .claude/
 .ideas/
+
+# differential harness output, never part of the repository
+*_mismatch.txt

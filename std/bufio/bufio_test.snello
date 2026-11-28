@@ -414,6 +414,30 @@ func TestSplitFunctions() {
 		None => expect.Fail("a split past the data ended the scan with no error"),
 	}
 
+	expect.False(cut.Scan()) // and stays ended, the error kept
+	expect.True(cut.Err().IsSome())
+	expect.Equal(ref len(cut.Bytes()), ref 0)
+	atEnd := func(data ref []byte, atEOF bool) bufio.Split? { // right before the end, one past the data at it: the slip a hand-written splitter makes
+		if i := data.Index(ref ',') {
+			return Some(bufio.Split{Start: 0, End: i, Advance: i + 1})
+		}
+
+		if atEOF && len(data) > 0 {
+			return Some(bufio.Split{Start: 0, End: len(data), Advance: len(data) + 1})
+		}
+
+		return None
+	}
+	last := strings.NewReader("a,bc".Clone())
+	slipped := bufio.NewScannerSplit(mut last, atEnd)
+	expect.True(slipped.Scan())
+	expect.Equal(ref slipped.Text(), "a")
+	expect.False(slipped.Scan())
+	match slipped.Err() {
+		Some(e) => expect.Equal(ref e.Error(), "bufio.Scanner: bad split"),
+		None => expect.Fail("a bad split at the end of the input ended the scan with no error"),
+	}
+
 	overlap := func(data ref []byte, atEOF bool) bufio.Split? { return Some(bufio.Split{Start: 0, End: 2, Advance: 1}) } // a token past the move: tokens would overlap
 	lapped := strings.NewReader("abc".Clone())
 	twice := bufio.NewScannerSplit(mut lapped, overlap)
