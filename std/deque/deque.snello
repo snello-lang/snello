@@ -10,7 +10,10 @@
 // one mask and no element moves on a push or a pop; when the buffer is
 // full it doubles, and the elements are laid out straight again in the
 // new one with two block moves. A slice used as a queue would move
-// every element left down on each Remove(0).
+// every element left down on each Remove(0). Insert and Remove in the
+// middle move the shorter side, Rotate turns the ring by moving the
+// fewer elements, each as block moves round the ring, and Retain and
+// Truncate drop elements in place.
 //
 // The buffer's length is a power of two, so that the mask is the length
 // less one. Its slots hold an element or nothing, which no value of the
@@ -61,6 +64,16 @@ struct Iter<T> impl iter.Iterator<ref T>, iter.DoubleEnded<ref T> {
 	end int // one past the element from the front NextBack gives
 }
 
+// An IterMut walks a deque from front to back, lending each element
+// for changing; it lends the deque mut for as long as it lives. A range
+// over the deque lent mut makes one, for v := range mut d, as
+// Deque.IterMut does. It lists no trait, since an item it gives ties to
+// the walk, where the trait's items are free of it.
+struct IterMut<T> {
+	d mut Deque<T>
+	i int // the element from the front Next gives
+}
+
 // New returns an empty deque of elements of type T. It allocates
 // nothing: the first push allocates a buffer of four elements.
 func New<T>() Deque<T> {
@@ -81,6 +94,31 @@ func WithCapacity<T>(n int) Deque<T> {
 	}
 
 	return d
+}
+
+// Contains reports whether an element of d is Eq to v, both lent; it
+// reads the elements from the front up to the first that is. It is a
+// function, since it asks T to be Eq, which a method of Deque cannot.
+//
+//	if deque.Contains(ref d, ref name) { ... }
+func Contains<T: Eq>(d ref Deque<T>, v ref T) bool {
+	return Index(d, v).IsSome()
+}
+
+// Index returns the place from the front of the first element of d that
+// is Eq to v, both lent, or None when there is none; it reads the
+// elements from the front up to that one. It is a function, since it
+// asks T to be Eq, which a method of Deque cannot.
+//
+//	if i := deque.Index(ref d, ref name) { d.Remove(i) }
+func Index<T: Eq>(d ref Deque<T>, v ref T) int? {
+	for i, x := range d.Iter().Enumerate() {
+		if x.Eq(v) {
+			return Some(i)
+		}
+	}
+
+	return None
 }
 
 // Len returns how many elements the deque holds.
@@ -190,6 +228,152 @@ func (d mut Deque<T>) GetMut(i int) mut T? {
 	return Some(rawMut<T>(d.buf, d.slotIndex(i), d))
 }
 
+// Insert adds v as the element i from the front, which the deque takes
+// and owns from then on, moving the elements from i on one place
+// toward the back, or those before i one place toward the front,
+// whichever are fewer. An i of Len() or more adds v at the back, and
+// one below 0 at the front. It costs a move of at most half the
+// elements, in block moves round the ring, and the growth of a full
+// buffer, as a push does.
+//
+//	d.Insert(2, v)
+func (d mut Deque<T>) Insert(i int, v T) {
+	if i < 0 {
+		i = 0
+	}
+
+	if i > d.len {
+		i = d.len
+	}
+
+	if d.len == d.cap {
+		d.grow()
+	}
+
+	if i < d.len-i {
+		d.moveRun(-1, 0, i)
+		d.head = (d.head - 1) & (d.cap - 1)
+	} else {
+		d.moveRun(i+1, i, d.len-i)
+	}
+
+	rawPut<T>(d.buf, d.slotIndex(i), v)
+	d.len++
+}
+
+// Remove takes the element i from the front out and returns it, which
+// the caller owns from then on, or None when i is below 0 or Len() or
+// more, closing the gap by moving the elements after it one place
+// toward the front, or those before it one place toward the back,
+// whichever are fewer. It costs a move of at most half the elements, in
+// block moves round the ring, and never shrinks the buffer.
+//
+//	third := d.Remove(2) ?? return
+func (d mut Deque<T>) Remove(i int) T? {
+	if i < 0 || i >= d.len {
+		return None
+	}
+
+	v := rawTake<T>(d.buf, d.slotIndex(i))
+	if i < d.len-1-i {
+		d.moveRun(1, 0, i)
+		d.head = (d.head + 1) & (d.cap - 1)
+	} else {
+		d.moveRun(i, i+1, d.len-1-i)
+	}
+
+	d.len--
+	return Some(v)
+}
+
+// Rotate turns the deque n places toward the back: the last n elements
+// come round to the front, so that deque[a b c d] rotated by 1 is
+// deque[d a b c]. A negative n turns the other way, the first -n
+// elements going to the back, and n is taken modulo Len(), so any n is
+// in range. It costs a block move of the fewer elements, the n or the
+// Len()-n, round the ring; a full ring moves none, since turning it is
+// moving its head.
+//
+//	d.Rotate(1)  // the back element to the front
+//	d.Rotate(-1) // the front element to the back
+func (d mut Deque<T>) Rotate(n int) {
+	if d.len == 0 {
+		return
+	}
+
+	n %= d.len
+	if n < 0 {
+		n += d.len
+	}
+
+	if n == 0 {
+		return
+	}
+
+	if n <= d.len-n { // the last n elements to the slots before the head
+		d.moveRun(-n, d.len-n, n)
+		d.head = (d.head - n) & (d.cap - 1)
+	} else { // the first Len()-n elements to the slots after the back
+		m := d.len - n
+		d.moveRun(d.len, 0, m)
+		d.head = (d.head + m) & (d.cap - 1)
+	}
+}
+
+// Truncate drops the elements from n on, from the back, and keeps the
+// first n and the buffer; an n of Len() or more drops none, and one of
+// 0 or less drops every element. It costs one drop for each element
+// dropped.
+func (d mut Deque<T>) Truncate(n int) {
+	if n < 0 {
+		n = 0
+	}
+
+	for d.len > n {
+		_ = d.PopBack()
+	}
+}
+
+// Extend adds every item of it, an iterator of owned elements, at the
+// back, in order; the iterator is lent mut and pulled to the end. It
+// costs a PushBack per item.
+//
+//	d.Extend(mut names.Iter().Map(clone))
+func (d mut Deque<T>) Extend<I: iter.Iterator<T>>(it mut I) {
+	for {
+		d.PushBack(it.Next() ?? break)
+	}
+}
+
+// Retain calls keep once for each element, from the front, and drops
+// every element for which keep returns false; the elements that stay
+// keep their order. keep is given the element lent, and held for the
+// call alone. Up to the first element dropped nothing moves; after it,
+// each element kept moves once, into the gap. The buffer is kept.
+//
+//	d.Retain(func(v ref int) bool { return *v > 0 })
+func (d mut Deque<T>) Retain(keep func(ref T) bool) {
+	w := 0
+	for w < d.len && keep(rawRef<T>(d.buf, d.slotIndex(w), d)) {
+		w++
+	}
+
+	if w == d.len {
+		return
+	}
+
+	_ = rawTake<T>(d.buf, d.slotIndex(w)) // the first element refused, dropped; its slot is the gap
+	for i := w + 1; i < d.len; i++ {
+		v := rawTake<T>(d.buf, d.slotIndex(i))
+		if keep(ref v) {
+			rawPut<T>(d.buf, d.slotIndex(w), v)
+			w++
+		}
+	}
+
+	d.len = w
+}
+
 // Clear drops every element, from the back, and keeps the buffer for
 // the next push. It costs one drop for each element.
 func (d mut Deque<T>) Clear() {
@@ -219,6 +403,15 @@ func (d mut Deque<T>) Drop() {
 //	evens := d.Iter().Filter(isEven).Count()
 func (d ref Deque<T>) Iter() Iter<T> {
 	return Iter<T>{d: d, i: 0, end: d.len}
+}
+
+// IterMut returns a walk over the elements from front to back, lending
+// each for changing, for as long as the deque is lent mut. A range over
+// the deque lent mut walks through it: for v := range mut d.
+//
+//	for v := range mut d { *v *= 2 }
+func (d mut Deque<T>) IterMut() IterMut<T> {
+	return IterMut<T>{d: d, i: 0}
 }
 
 // String returns the elements from front to back as a new string,
@@ -259,6 +452,74 @@ func (it mut Iter<T>) NextBack() ref T? {
 
 	it.end--
 	return it.d.Get(it.end)
+}
+
+// Next lends the next element of the walk for changing, from front to
+// back, or None once every element has been given.
+func (it mut IterMut<T>) Next() mut T? {
+	if it.i >= it.d.len {
+		return None
+	}
+
+	it.i++
+	return it.d.GetMut(it.i - 1)
+}
+
+// moveRun moves the n elements at the places src on to the places dst
+// on, places counted from the head, which may be before it: the slots
+// they come to hold nothing beforehand, or hold elements of the run
+// itself, and n is at most half the buffer, which every caller keeps,
+// moving the shorter side or the fewer elements. The runs are moved as
+// blocks, each as long as both lie straight in the buffer, in the order
+// that reads an element before its slot is written: from the back when
+// the move toward the back is shorter than the run, else from the
+// front; with a run over half the buffer a move could be unsafe both
+// ways. A move by a whole turn of the ring, a full ring rotated, moves
+// nothing.
+func (d mut Deque<T>) moveRun(dst int, src int, n int) {
+	if n == 0 {
+		return
+	}
+
+	mask := d.cap - 1
+	shift := (dst - src) & mask
+	if shift == 0 {
+		return
+	}
+
+	if shift < n { // toward the back, overlapping: the last element first
+		for k := n; k > 0; {
+			s, t := (d.head+src+k-1)&mask, (d.head+dst+k-1)&mask
+			c := k
+			if s+1 < c {
+				c = s + 1
+			}
+
+			if t+1 < c {
+				c = t + 1
+			}
+
+			rawMove<T>(d.buf, t-c+1, d.buf, s-c+1, c)
+			k -= c
+		}
+
+		return
+	}
+
+	for k := 0; k < n; {
+		s, t := (d.head+src+k)&mask, (d.head+dst+k)&mask
+		c := n - k
+		if d.cap-s < c {
+			c = d.cap - s
+		}
+
+		if d.cap-t < c {
+			c = d.cap - t
+		}
+
+		rawMove<T>(d.buf, t, d.buf, s, c)
+		k += c
+	}
 }
 
 // slotIndex returns the slot of the buffer that holds the element i

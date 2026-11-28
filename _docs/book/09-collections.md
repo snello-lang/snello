@@ -136,6 +136,8 @@ Two maps do not compare with `==`, for the same reason two slices do not.
 
 Two collections of the standard library stand beside the slice and the map. A `deque.Deque<T>` is a queue with two ends: `PushBack` and `PopFront` make a queue, `PushBack` and `PopBack` a stack, and `Front`, `Back` and `Get` read without removing. Each takes constant time, a push amortized over the doubling of the buffer, since the elements lie in a ring over one buffer, where a slice used as a queue moves every remaining element down on each `Remove(0)`. A deque has no zero value, since it frees its buffer when it goes: one comes from `deque.New<T>()` or `deque.WithCapacity<T>(n)`. A deque prints as `deque[a b c]` and a set as `set[a b c]`.
 
+The middle is reached too: `d.Insert(i, v)` and `d.Remove(i)` move the shorter side of the ring, at most half the elements, where a slice moves everything after `i`; an `i` past either end clamps for `Insert` and gives `None` for `Remove`. `d.Rotate(n)` turns the deque `n` places toward the back, the last `n` elements coming round to the front, a negative `n` the other way, by moving the fewer elements; a full ring moves none. `d.Truncate(n)` keeps the first `n`, `d.Retain(keep)` drops the elements `keep` refuses in one pass, `d.Extend(mut it)` adds an iterator's items at the back, and `deque.Contains(ref d, ref v)` and `deque.Index(ref d, ref v)` find an element by `Eq`, functions since they ask more of `T` than the type does. A range over the deque lent `mut` changes the elements in place: `for v := range mut d { *v *= 2 }`.
+
 ```go
 queue := deque.New<NodeID>()
 queue.PushBack(start)

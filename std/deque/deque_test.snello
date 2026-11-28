@@ -4,7 +4,7 @@
 
 package deque_test
 
-import ("deque"; "expect"; "fmt"; "testing")
+import ("deque"; "expect"; "fmt"; "iter"; "testing")
 
 // A deque pushed at the back and popped at the front is a queue, and an
 // empty one gives None at both ends.
@@ -140,4 +140,182 @@ func TestOwnership() {
 	xs := expect.IsSome(d.PopFront())
 	expect.Equal(ref len(xs), ref 1)
 	expect.Equal(ref d.Len(), ref 1)
+}
+
+// Insert and Remove in the middle move the shorter side and keep the
+// order, wherever the head is and whichever side is shorter, as a
+// slice's Insert and Remove do; an index past the ends clamps for
+// Insert and gives None for Remove.
+func TestInsertRemove() {
+	for _, head := range []int{0, 2, 5, 7} {
+		for n := 0; n <= 7; n++ {
+			for i := 0; i <= n; i++ {
+				d := withHead(head, n)
+				model := counting(n)
+				d.Insert(i, 100)
+				model.Insert(i, 100)
+				expect.Equal(ref fmt.Sprint(d), ref "deque"+fmt.Sprint(model))
+				expect.Equal(ref expect.IsSome(d.Remove(i)), ref 100)
+				model.Remove(i)
+				expect.Equal(ref fmt.Sprint(d), ref "deque"+fmt.Sprint(model))
+				if i < n {
+					expect.Equal(ref expect.IsSome(d.Remove(i)), ref model.Remove(i))
+					expect.Equal(ref fmt.Sprint(d), ref "deque"+fmt.Sprint(model))
+				}
+			}
+		}
+	}
+
+	d := deque.New<string>()
+	d.Insert(5, "b".Clone()) // past the back: at the back
+	d.Insert(-5, "a".Clone()) // before the front: at the front
+	d.Insert(1, "x".Clone())
+	expect.Equal(ref fmt.Sprint(d), "deque[a x b]")
+	expect.IsNone(d.Remove(3))
+	expect.IsNone(d.Remove(-1))
+	expect.Equal(ref expect.IsSome(d.Remove(1)), "x")
+	expect.Equal(ref fmt.Sprint(d), "deque[a b]")
+	full := deque.WithCapacity<int>(4)
+	for i := 0; i < 4; i++ {
+		full.PushBack(i)
+	}
+
+	full.Insert(2, 9) // full: it grows first
+	expect.Equal(ref fmt.Sprint(full), "deque[0 1 9 2 3]")
+	expect.Equal(ref full.Cap(), ref 8)
+}
+
+// Rotate turns the ring by moving the fewer elements, any n in or out
+// of range, wherever the head is, a full ring included.
+func TestRotate() {
+	for _, head := range []int{0, 3, 6} {
+		for n := 0; n <= 8; n++ { // 8 fills the buffer of eight
+			for by := -9; by <= 17; by++ {
+				d := withHead(head, n)
+				d.Rotate(by)
+				expect.Equal(ref fmt.Sprint(d), ref "deque"+fmt.Sprint(rotated(counting(n), by)))
+				expect.Equal(ref d.Cap(), ref 8)
+			}
+		}
+	}
+
+	d := deque.New<string>()
+	for _, s := range []string{"a", "b", "c", "d"} {
+		d.PushBack(s.Clone())
+	}
+
+	d.Rotate(1)
+	expect.Equal(ref fmt.Sprint(d), "deque[d a b c]")
+	d.Rotate(-2)
+	expect.Equal(ref fmt.Sprint(d), "deque[b c d a]")
+	expect.Equal(ref expect.IsSome(d.PopFront()), "b")
+}
+
+// Truncate drops from the back, Retain drops in place keeping the order,
+// and Extend adds an iterator's items at the back.
+func TestTruncateRetainExtend() {
+	d := deque.New<string>()
+	for i := 0; i < 6; i++ {
+		d.PushBack(fmt.Sprint(i))
+	}
+
+	d.Truncate(10)
+	expect.Equal(ref d.Len(), ref 6)
+	d.Truncate(4)
+	expect.Equal(ref fmt.Sprint(d), "deque[0 1 2 3]")
+	d.Retain(func(s ref string) bool { return s != "1" && s != "3" })
+	expect.Equal(ref fmt.Sprint(d), "deque[0 2]")
+	d.Retain(func(s ref string) bool { return true })
+	expect.Equal(ref fmt.Sprint(d), "deque[0 2]")
+	more := []string{"x".Clone(), "y".Clone()}
+	d.Extend(mut iter.Over(ref more).Map(func(s ref string) string { return s.Clone() }))
+	expect.Equal(ref fmt.Sprint(d), "deque[0 2 x y]")
+	d.Retain(func(s ref string) bool { return false })
+	expect.True(d.IsEmpty())
+	d.PushFront("z".Clone())
+	expect.Equal(ref fmt.Sprint(d), "deque[z]")
+	d.Truncate(-1)
+	expect.True(d.IsEmpty())
+	for _, head := range []int{0, 5} { // a wrapped ring: the gap closes round the end
+		w := withHead(head, 7)
+		w.Retain(func(v ref int) bool { return *v%3 != 1 })
+		expect.Equal(ref fmt.Sprint(w), "deque[0 2 3 5 6]")
+	}
+}
+
+// A range over the deque lent mut changes the elements in place, and
+// Contains and Index find an element by Eq.
+func TestIterMutContains() {
+	d := withHead(3, 5)
+	for v := range mut d {
+		*v *= 10
+	}
+
+	expect.Equal(ref fmt.Sprint(d), "deque[0 10 20 30 40]")
+	it := d.IterMut()
+	if v := it.Next() { *v = 7 } else { expect.Fail("no first element") }
+	expect.Equal(ref expect.IsSome(d.PopFront()), ref 7)
+	expect.True(deque.Contains(ref d, ref 30))
+	expect.False(deque.Contains(ref d, ref 7))
+	names := deque.New<string>()
+	names.PushBack("ann".Clone())
+	names.PushBack("bob".Clone())
+	names.PushBack("ann".Clone())
+	expect.True(deque.Contains(ref names, "ann"))
+	expect.False(deque.Contains(ref names, "cid"))
+	expect.Equal(ref expect.IsSome(deque.Index(ref names, "bob")), ref 1)
+	expect.Equal(ref expect.IsSome(deque.Index(ref names, "ann")), ref 0) // the first of two
+	expect.IsNone(deque.Index(ref names, "cid"))
+	if i := deque.Index(ref names, "bob") {
+		expect.Equal(ref expect.IsSome(names.Remove(i)), "bob")
+	}
+
+	expect.Equal(ref fmt.Sprint(names), "deque[ann ann]")
+}
+
+// withHead returns a deque of a buffer of eight holding 0 to n-1, its
+// head at the slot head.
+func withHead(head int, n int) deque.Deque<int> {
+	d := deque.WithCapacity<int>(8)
+	for i := 0; i < head; i++ {
+		d.PushBack(0)
+		_ = d.PopFront()
+	}
+
+	for i := 0; i < n; i++ {
+		d.PushBack(i)
+	}
+
+	return d
+}
+
+// counting returns the slice 0 to n-1.
+func counting(n int) []int {
+	xs := []int{}
+	for i := 0; i < n; i++ {
+		xs.Push(i)
+	}
+
+	return xs
+}
+
+// rotated returns xs turned by places toward the back, the model of
+// Deque.Rotate.
+func rotated(xs []int, by int) []int {
+	n := len(xs)
+	if n == 0 {
+		return xs
+	}
+
+	k := by % n
+	if k < 0 {
+		k += n
+	}
+
+	out := []int{}
+	for i := 0; i < n; i++ {
+		out.Push(xs[(i+n-k)%n])
+	}
+
+	return out
 }
