@@ -5,10 +5,10 @@
 // Package sort orders slices and searches them.
 //
 // Sort and Search work on a slice of any type implementing Ord, through
-// the type's Cmp; SortBy takes the order from a function instead, for a
-// type that is not Ord or an order that is not its own. A slice is
-// sorted in place: it is lent mut, sort.Sort(mut xs), and its elements
-// are moved within it, never copied.
+// the type's Cmp; SortBy and SearchBy take the order from a function
+// instead, for a type that is not Ord or an order that is not its own.
+// A slice is sorted in place: it is lent mut, sort.Sort(mut xs), and
+// its elements are moved within it, never copied.
 package sort
 
 // Sort orders xs in place, least first, by the Cmp of its element type.
@@ -51,6 +51,28 @@ func Search<T: Ord>(xs ref []T, x ref T) int {
 	for lo < hi {
 		mid := lo + (hi-lo)/2
 		if xs[mid].Cmp(x) == Less {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+
+	return lo
+}
+
+// SearchBy finds the place in xs of the first element cmp says is not
+// Less than the key cmp compares with, or len(xs) when every element
+// is Less: the index of a key that is there, or where it would be
+// inserted to keep the order. xs must be ordered as cmp orders it; cmp
+// is given each element lent, about log2(len(xs)) of them, and returns
+// how the element stands to the key, as Search compares by Cmp.
+//
+//	at := sort.SearchBy(ref people, func(p ref Person) Ordering { return p.Age.Cmp(ref 30) })
+func SearchBy<T>(xs ref []T, cmp func(ref T) Ordering) int {
+	lo, hi := 0, len(xs)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if cmp(ref xs[mid]) == Less {
 			lo = mid + 1
 		} else {
 			hi = mid

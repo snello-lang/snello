@@ -1,0 +1,293 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Package slices works on a slice of any element type: searches by a
+// test, the least and the greatest element, equality, removal in place
+// by a test or of neighbouring duplicates, filling, joining and
+// repeating, and walks over a slice in pieces, Chunks and Windows, with
+// EachChunk giving each piece for changing. A slice's own methods,
+// Push, Insert, Remove, Sort, Contains, Index and the rest, are the
+// language's, documented in builtin; sort orders and searches a sorted
+// slice.
+package slices
+
+import "iter"
+
+// maxInt is the largest int, past which a count of elements wraps.
+const maxInt = 9223372036854775807
+
+// A ChunksIter walks a slice in pieces of n elements, the last shorter
+// when the length is not a multiple of n, lending each as a slice of
+// the elements; it lends the slice for as long as it lives. Chunks
+// makes one, and the adapters of iter.Iterator wrap it.
+struct ChunksIter<T> impl iter.Iterator<ref []T> {
+	xs ref []T
+	n  int
+	at int
+}
+
+// A WindowsIter walks a slice in every run of n neighbouring elements,
+// the first from the first element, the next one element on, lending
+// each as a slice of the elements; it lends the slice for as long as it
+// lives. Windows makes one, and the adapters of iter.Iterator wrap it.
+struct WindowsIter<T> impl iter.Iterator<ref []T> {
+	xs ref []T
+	n  int
+	at int
+}
+
+// IndexBy returns the index of the first element f says yes to, or None
+// when none does; f is given each element lent, from the first, up to
+// that one.
+//
+//	if i := slices.IndexBy(ref xs, isNegative) { ... }
+func IndexBy<T>(xs ref []T, f func(ref T) bool) int? {
+	for i, x := range xs {
+		if f(x) {
+			return Some(i)
+		}
+	}
+
+	return None
+}
+
+// ContainsBy reports whether some element of xs is one f says yes to.
+func ContainsBy<T>(xs ref []T, f func(ref T) bool) bool {
+	return IndexBy(xs, f).IsSome()
+}
+
+// Min lends the least element by Cmp, the first of several that compare
+// Equal, or returns None when xs is empty. It reads the elements in
+// order, one comparison each.
+//
+//	if least := slices.Min(ref xs) { ... }
+func Min<T: Ord>(xs ref []T) ref T? {
+	if len(xs) == 0 {
+		return None
+	}
+
+	best := 0
+	for i := 1; i < len(xs); i++ {
+		if xs[i].Cmp(xs[best]) == Less {
+			best = i
+		}
+	}
+
+	return Some(ref xs[best])
+}
+
+// Max lends the greatest element by Cmp, the first of several that
+// compare Equal, or returns None when xs is empty. It reads the
+// elements in order, one comparison each.
+func Max<T: Ord>(xs ref []T) ref T? {
+	if len(xs) == 0 {
+		return None
+	}
+
+	best := 0
+	for i := 1; i < len(xs); i++ {
+		if xs[i].Cmp(xs[best]) == Greater {
+			best = i
+		}
+	}
+
+	return Some(ref xs[best])
+}
+
+// Equal reports whether xs and ys hold the same elements in the same
+// order, by Eq: the lengths first, then each pair up to the first that
+// differs.
+//
+//	slices.Equal(ref got, ref want)
+func Equal<T: Eq>(xs ref []T, ys ref []T) bool {
+	if len(xs) != len(ys) {
+		return false
+	}
+
+	for i, x := range xs {
+		if !x.Eq(ref ys[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// Retain calls keep once for each element, in order, and drops every
+// element for which keep returns false; the elements that stay keep
+// their order and the slice its memory. keep is given the element lent,
+// and held for the call alone. Up to the first element dropped nothing
+// moves; after it, each element kept moves once.
+//
+//	slices.Retain(mut xs, func(x ref int) bool { return *x > 0 })
+func Retain<T>(xs mut []T, keep func(ref T) bool) {
+	w := 0
+	for i := 0; i < len(xs); i++ {
+		if keep(ref xs[i]) {
+			if w != i {
+				xs.Swap(w, i)
+			}
+
+			w++
+		}
+	}
+
+	xs.Truncate(w)
+}
+
+// Dedup drops every element that is Eq to the one before it, so that a
+// sorted slice holds each value once; the first of each run stays, in
+// order, and the slice keeps its memory. It compares each element with
+// the last kept, and moves each kept element at most once.
+//
+//	sort.Sort(mut xs)
+//	slices.Dedup(mut xs)
+func Dedup<T: Eq>(xs mut []T) {
+	if len(xs) < 2 {
+		return
+	}
+
+	w := 1
+	for i := 1; i < len(xs); i++ {
+		if !xs[i].Eq(ref xs[w-1]) {
+			if w != i {
+				xs.Swap(w, i)
+			}
+
+			w++
+		}
+	}
+
+	xs.Truncate(w)
+}
+
+// Fill sets every element of xs to a clone of v, dropping what was
+// there.
+//
+//	slices.Fill(mut row, ref 0)
+func Fill<T: Clone>(xs mut []T, v ref T) {
+	for i := 0; i < len(xs); i++ {
+		xs[i] = v.Clone()
+	}
+}
+
+// Concat returns a new slice holding a clone of every element of each
+// slice given, in order, with room for them all allocated once.
+//
+//	all := slices.Concat(ref first, ref second)
+func Concat<T: Clone>(parts ...ref []T) []T {
+	n := 0
+	for _, p := range parts {
+		n += len(p)
+	}
+
+	out := make([]T, 0, n)
+	for _, p := range parts {
+		out.Extend(p)
+	}
+
+	return out
+}
+
+// Repeat returns a new slice holding a clone of every element of xs,
+// n times over in order, empty for an n of 0 or less, with room for
+// them all allocated once; an n whose elements no memory can hold is
+// out of memory, as any allocation that fails is.
+//
+//	border := slices.Repeat(ref []byte{'-'}, 20)
+func Repeat<T: Clone>(xs ref []T, n int) []T {
+	if n <= 0 || len(xs) == 0 {
+		return []T{}
+	}
+
+	if n > maxInt/len(xs) {
+		panic("out of memory: no slice holds that many elements")
+	}
+
+	out := make([]T, 0, len(xs)*n)
+	for i := 0; i < n; i++ {
+		out.Extend(xs)
+	}
+
+	return out
+}
+
+// Chunks returns a walk over xs in pieces of n elements, from the first,
+// the last piece shorter when len(xs) is not a multiple of n, each lent
+// for as long as the slice is lent; an n below 1 is taken as 1, and an
+// empty slice gives no piece.
+//
+//	for row := range slices.Chunks(ref cells, width) { ... }
+func Chunks<T>(xs ref []T, n int) ChunksIter<T> {
+	if n < 1 {
+		n = 1
+	}
+
+	return ChunksIter<T>{xs: xs, n: n, at: 0}
+}
+
+// Windows returns a walk over every run of n neighbouring elements of
+// xs, the first from the first element and each next one element on,
+// each lent for as long as the slice is lent; an n below 1 is taken as
+// 1, and a slice shorter than n gives no run.
+//
+//	for pair := range slices.Windows(ref xs, 2) { ... }
+func Windows<T>(xs ref []T, n int) WindowsIter<T> {
+	if n < 1 {
+		n = 1
+	}
+
+	return WindowsIter<T>{xs: xs, n: n, at: 0}
+}
+
+// EachChunk gives f each piece of n elements of xs in turn, lent for
+// changing, the last piece shorter when len(xs) is not a multiple of n;
+// an n below 1 is taken as 1. A walk cannot lend its pieces for
+// changing, so this is how a slice is changed piece by piece: the
+// elements of a piece, not its length, which is the slice's, as any
+// sub-slice's is.
+//
+//	slices.EachChunk(mut cells, width, func(row mut []int) { row.Reverse() })
+func EachChunk<T>(xs mut []T, n int, f func(mut []T)) {
+	if n < 1 {
+		n = 1
+	}
+
+	for at := 0; at < len(xs); at += n {
+		end := at + n
+		if end > len(xs) {
+			end = len(xs)
+		}
+
+		f(mut xs[at:end])
+	}
+}
+
+// Next lends the next piece, or None once the slice is walked.
+func (it mut ChunksIter<T>) Next() (ref []T)? {
+	if it.at >= len(it.xs) {
+		return None
+	}
+
+	end := it.at + it.n
+	if end > len(it.xs) {
+		end = len(it.xs)
+	}
+
+	start := it.at
+	it.at = end
+	return Some(it.xs[start:end])
+}
+
+// Next lends the next run, or None once the last run of n elements has
+// been given.
+func (it mut WindowsIter<T>) Next() (ref []T)? {
+	if it.at+it.n > len(it.xs) {
+		return None
+	}
+
+	start := it.at
+	it.at++
+	return Some(it.xs[start : start+it.n])
+}

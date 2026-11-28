@@ -42,3 +42,23 @@ func BenchmarkSort() {
 		sort.Sort(mut xs)
 	}
 }
+
+// SearchBy finds a place by a function's order, as Search finds it by
+// Cmp: a key that is there, one between two elements, and one past
+// every element.
+func TestSearchBy() {
+	ages := []int{18, 21, 30, 30, 45}
+	byAge := func(key int) func(ref int) Ordering {
+		return func(a ref int) Ordering { return a.Cmp(ref key) }
+	}
+
+	expect.Equal(ref sort.SearchBy(ref ages, byAge(30)), ref 2)
+	expect.Equal(ref sort.SearchBy(ref ages, byAge(25)), ref 2)
+	expect.Equal(ref sort.SearchBy(ref ages, byAge(10)), ref 0)
+	expect.Equal(ref sort.SearchBy(ref ages, byAge(50)), ref 5)
+	empty := []int{}
+	expect.Equal(ref sort.SearchBy(ref empty, byAge(1)), ref 0)
+	words := []string{"apple".Clone(), "fig".Clone(), "pear".Clone()}
+	expect.Equal(ref sort.SearchBy(ref words, func(w ref string) Ordering { return w.Cmp("fig") }), ref 1)
+	expect.Equal(ref sort.SearchBy(ref words, func(w ref string) Ordering { return w.Cmp("grape") }), ref 2)
+}

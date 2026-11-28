@@ -1,0 +1,112 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package slices_test
+
+import ("expect"; "fmt"; "slices"; "testing")
+
+// IndexBy and ContainsBy find an element by a test, Min and Max the
+// least and the greatest, the first of equals, and Equal compares two
+// slices element by element.
+func TestSearches() {
+	xs := []int{4, -1, 7, -3, 7}
+	expect.Equal(ref expect.IsSome(slices.IndexBy(ref xs, func(x ref int) bool { return *x < 0 })), ref 1)
+	expect.IsNone(slices.IndexBy(ref xs, func(x ref int) bool { return *x > 10 }))
+	expect.True(slices.ContainsBy(ref xs, func(x ref int) bool { return *x == 7 }))
+	expect.False(slices.ContainsBy(ref xs, func(x ref int) bool { return *x == 0 }))
+	expect.Equal(ref expect.IsSome(slices.Min(ref xs)), ref -3)
+	expect.Equal(ref expect.IsSome(slices.Max(ref xs)), ref 7)
+	empty := []int{}
+	expect.IsNone(slices.Min(ref empty))
+	expect.IsNone(slices.Max(ref empty))
+	words := []string{"pear".Clone(), "fig".Clone(), "apple".Clone()}
+	expect.Equal(ref expect.IsSome(slices.Min(ref words)), "apple")
+	expect.Equal(ref expect.IsSome(slices.Max(ref words)), "pear")
+	expect.True(slices.Equal(ref xs, ref []int{4, -1, 7, -3, 7}))
+	expect.False(slices.Equal(ref xs, ref []int{4, -1, 7, -3}))
+	expect.False(slices.Equal(ref xs, ref []int{4, -1, 7, -3, 8}))
+	expect.True(slices.Equal(ref empty, ref []int{}))
+	expect.True(slices.Equal(ref words, ref []string{"pear".Clone(), "fig".Clone(), "apple".Clone()}))
+}
+
+// Retain drops the elements a test refuses in place, Dedup the
+// neighbours that repeat, each keeping the order and the memory.
+func TestRetainDedup() {
+	xs := []int{1, 2, 3, 4, 5, 6}
+	slices.Retain(mut xs, func(x ref int) bool { return *x%2 == 0 })
+	expect.Equal(ref fmt.Sprint(xs), "[2 4 6]")
+	slices.Retain(mut xs, func(x ref int) bool { return true })
+	expect.Equal(ref fmt.Sprint(xs), "[2 4 6]")
+	slices.Retain(mut xs, func(x ref int) bool { return false })
+	expect.Equal(ref len(xs), ref 0)
+	ys := []int{1, 1, 2, 2, 2, 3, 1, 1}
+	slices.Dedup(mut ys)
+	expect.Equal(ref fmt.Sprint(ys), "[1 2 3 1]")
+	one := []int{5}
+	slices.Dedup(mut one)
+	expect.Equal(ref fmt.Sprint(one), "[5]")
+	words := []string{"a".Clone(), "a".Clone(), "b".Clone(), "b".Clone(), "a".Clone()}
+	slices.Dedup(mut words)
+	expect.Equal(ref fmt.Sprint(words), "[a b a]")
+	slices.Retain(mut words, func(w ref string) bool { return w != "b" })
+	expect.Equal(ref fmt.Sprint(words), "[a a]")
+}
+
+// Fill, Concat and Repeat copy elements: a fill in place, a join and a
+// repetition into a new slice.
+func TestFillConcatRepeat() {
+	row := []int{1, 2, 3}
+	slices.Fill(mut row, ref 0)
+	expect.Equal(ref fmt.Sprint(row), "[0 0 0]")
+	names := []string{"x".Clone()}
+	slices.Fill(mut names, "y")
+	expect.Equal(ref fmt.Sprint(names), "[y]")
+	a := []int{1, 2}
+	b := []int{}
+	c := []int{3}
+	all := slices.Concat(ref a, ref b, ref c)
+	expect.Equal(ref fmt.Sprint(all), "[1 2 3]")
+	expect.Equal(ref fmt.Sprint(a), "[1 2]")
+	expect.Equal(ref len(slices.Concat<int>()), ref 0)
+	expect.Equal(ref fmt.Sprint(slices.Repeat(ref []byte{'-', '='}, 3)), "[45 61 45 61 45 61]")
+	expect.Equal(ref len(slices.Repeat(ref a, 0)), ref 0)
+	expect.Equal(ref len(slices.Repeat(ref a, -1)), ref 0)
+	texts := slices.Repeat(ref []string{"ab".Clone()}, 2)
+	expect.Equal(ref fmt.Sprint(texts), "[ab ab]")
+	expect.Equal(ref len(slices.Repeat(ref []int{}, 5)), ref 0)
+	expect.PanicsWith(func() { _ = slices.Repeat(ref []int{1, 2, 3}, 4611686018427387904) }, "out of memory: no slice holds that many elements")
+}
+
+// Chunks and Windows walk a slice in pieces, lent, and EachChunk gives
+// each piece for changing.
+func TestChunksWindows() {
+	xs := []int{1, 2, 3, 4, 5, 6, 7}
+	pieces := []string{}
+	for p := range slices.Chunks(ref xs, 3) {
+		pieces.Push(fmt.Sprint(p))
+	}
+
+	expect.Equal(ref fmt.Sprint(pieces), "[[1 2 3] [4 5 6] [7]]")
+	expect.Equal(ref slices.Chunks(ref xs, 7).Count(), ref 1)
+	expect.Equal(ref slices.Chunks(ref xs, 10).Count(), ref 1)
+	expect.Equal(ref slices.Chunks(ref xs, 0).Count(), ref 7) // n below 1 is 1
+	empty := []int{}
+	expect.Equal(ref slices.Chunks(ref empty, 3).Count(), ref 0)
+	runs := []string{}
+	for w := range slices.Windows(ref xs, 3) {
+		runs.Push(fmt.Sprint(w))
+	}
+
+	expect.Equal(ref fmt.Sprint(runs), "[[1 2 3] [2 3 4] [3 4 5] [4 5 6] [5 6 7]]")
+	expect.Equal(ref slices.Windows(ref xs, 7).Count(), ref 1)
+	expect.Equal(ref slices.Windows(ref xs, 8).Count(), ref 0)
+	expect.Equal(ref slices.Windows(ref xs, 0).Count(), ref 7)
+	sums := slices.Windows(ref xs, 2).Map(func(w ref []int) int { return w[0] + w[1] }).Collect()
+	expect.Equal(ref fmt.Sprint(sums), "[3 5 7 9 11 13]")
+	slices.EachChunk(mut xs, 3, func(piece mut []int) { piece.Reverse() })
+	expect.Equal(ref fmt.Sprint(xs), "[3 2 1 6 5 4 7]")
+	slices.EachChunk(mut xs, 0, func(piece mut []int) { piece[0] *= 10 })
+	expect.Equal(ref fmt.Sprint(xs), "[30 20 10 60 50 40 70]")
+	slices.EachChunk(mut empty, 2, func(piece mut []int) { expect.Fail("a piece of nothing") })
+}

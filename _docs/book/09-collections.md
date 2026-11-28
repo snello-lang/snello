@@ -36,6 +36,22 @@ Growing and shrinking are methods, since a slice owns its elements and the metho
 | `xs.Sort()`, `xs.SortBy(less)` | Sort in place, keeping equal elements in their order; `Sort` orders numbers and strings, `SortBy` takes the ordering as a function |
 | `xs.Clone()` | A new slice holding a copy of every element |
 
+The `slices` package adds what these do not, as functions over a slice lent, `ref xs`, or lent for changing, `mut xs`, since a method on `[]T` is the language's:
+
+| Function | What it does |
+|---|---|
+| `slices.IndexBy(ref xs, f)`, `slices.ContainsBy(ref xs, f)` | The position of the first element `f` says yes to, as `int?`, and whether there is one |
+| `slices.Min(ref xs)`, `slices.Max(ref xs)` | The least and the greatest element by `Cmp`, as `ref T?` |
+| `slices.Equal(ref xs, ref ys)` | Whether two slices hold the same elements in the same order |
+| `slices.Retain(mut xs, keep)` | Drops the elements `keep` refuses, in place, keeping the order |
+| `slices.Dedup(mut xs)` | Drops each element equal to the one before it, so a sorted slice holds each value once |
+| `slices.Fill(mut xs, ref v)` | Sets every element to a clone of `v` |
+| `slices.Concat(ref a, ref b, ...)`, `slices.Repeat(ref xs, n)` | A new slice of clones of the elements, joined, or repeated `n` times |
+| `slices.Chunks(ref xs, n)`, `slices.Windows(ref xs, n)` | Walks over the slice in pieces of `n`, and over every run of `n` neighbours, each piece lent |
+| `slices.EachChunk(mut xs, n, f)` | Gives `f` each piece of `n` lent for changing, since a walk cannot lend for changing |
+
+`sort` orders and searches: `sort.Sort(mut xs)` and `sort.SortBy(mut xs, less)`, `sort.Search(ref xs, ref x)` on a sorted slice and `sort.SearchBy(ref xs, cmp)` with the order as a function, and `sort.IsSorted`.
+
 `Push`, `Pop`, `Insert`, `Remove`, `RemoveValue`, `Clear`, `Swap`, `Reverse`, `Sort`, `Extend` and `Truncate` change the slice, so they need it owned or lent with `mut`; through a `ref` they are an error. `Swap` is how an algorithm moves elements it does not own a copy of: Go's `xs[i], xs[j] = xs[j], xs[i]` would move each element out of the slice, which is refused for a type that is not `Copy`, `cannot move xs[j] out of the slice`. The core tree uses most of them:
 
 ```go
@@ -58,7 +74,7 @@ func (b mut Bag) bump() {
 
 Ranging over an owned slice by value moves each element out, as chapter 5 describes, which is how `wordfreq` turns a map into a list.
 
-Two slices do not compare with `==`: equality of a list is a question with more than one answer. Elements compare, which is what `Contains`, `RemoveValue` and `Index` use, so their element must be `Eq`, or a slice of such elements, which they compare element by element, or a borrow of one, as the pieces `Split` gives are; `Sort` needs `Ord`, and `Extend` and `Clone` need `Clone`, and the compiler says so at the call: `Contains needs the elements to be Eq: Point is not`. A `[]byte` has two methods of its own: `b.Equal(o)` compares the bytes of two, and `b.Find(sub)` gives the offset of a run of bytes, `int?`, by the search `s.Index` makes; `b.Index(c)` finds one byte, as `Index` finds one element of any slice.
+Two slices do not compare with `==`: equality of a list is a question with more than one answer, and `slices.Equal(ref xs, ref ys)` gives the usual one, element by element. Elements compare, which is what `Contains`, `RemoveValue` and `Index` use, so their element must be `Eq`, or a slice of such elements, which they compare element by element, or a borrow of one, as the pieces `Split` gives are; `Sort` needs `Ord`, and `Extend` and `Clone` need `Clone`, and the compiler says so at the call: `Contains needs the elements to be Eq: Point is not`. A `[]byte` has two methods of its own: `b.Equal(o)` compares the bytes of two, and `b.Find(sub)` gives the offset of a run of bytes, `int?`, by the search `s.Index` makes; `b.Index(c)` finds one byte, as `Index` finds one element of any slice.
 
 ## Strings
 
@@ -131,6 +147,8 @@ A key is any type that is `Eq` and `Hash` (chapter 11): numbers, strings, boolea
 `for k, v := range m` walks the entries in the order they were inserted, which is also the order a map prints in: `map[one:1 two:2]`. Through a `mut` borrow the values are lent for writing, as slice elements are; ranging over an owned map by value moves each key and value out, which is how `wordfreq` turns its counts into a list to sort.
 
 Two maps do not compare with `==`, for the same reason two slices do not.
+
+The `maps` package walks and fills a map: `maps.Keys(ref m)` and `maps.Values(ref m)` are walks over the keys or the values alone, lending each in insertion order, with the adapters of chapter 31, `maps.Keys(ref ages).Map(clone).Collect()`; `maps.Extend(mut m, mut it)` adds the pairs an iterator gives, a key already there taking the new value, and `maps.FromIter(mut it)` makes a map of them.
 
 ## Deques and sets
 

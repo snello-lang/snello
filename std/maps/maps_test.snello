@@ -1,0 +1,49 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package maps_test
+
+import ("expect"; "fmt"; "iter"; "maps"; "testing")
+
+// Keys and Values walk a map in insertion order, lending; the adapters
+// wrap them, and a removed entry is passed over.
+func TestKeysValues() {
+	ages := map[string]int{"ann": 31, "bob": 17, "cid": 45}
+	names := maps.Keys(ref ages).Map(func(k ref string) string { return k.Clone() }).Collect()
+	expect.Equal(ref fmt.Sprint(names), "[ann bob cid]")
+	total := maps.Values(ref ages).Fold(0, func(sum int, v ref int) int { return sum + *v })
+	expect.Equal(ref total, ref 93)
+	_ = ages.Remove("bob")
+	ages.Insert("dee".Clone(), 12)
+	expect.Equal(ref maps.Keys(ref ages).Count(), ref 3)
+	seen := ""
+	for k := range maps.Keys(ref ages) {
+		seen = seen + k
+	}
+
+	expect.Equal(ref seen, "ann" + "cid" + "dee")
+	adults := maps.Values(ref ages).Filter(func(v ref int) bool { return *v >= 18 }).Count()
+	expect.Equal(ref adults, ref 2)
+	empty := map[int]int{}
+	expect.Equal(ref maps.Keys(ref empty).Count(), ref 0)
+	expect.Equal(ref maps.Values(ref empty).Count(), ref 0)
+}
+
+// Extend adds an iterator's pairs, a repeated key taking the later
+// value, and FromIter builds a map from them.
+func TestExtendFromIter() {
+	pairs := []string{"a".Clone(), "b".Clone(), "a".Clone()}
+	m := maps.FromIter(mut iter.Over(ref pairs).Enumerate().Map(func(e (int, ref string)) (string, int) {
+		i, s := e
+		return (s.Clone(), i)
+	}))
+	expect.Equal(ref len(m), ref 2)
+	expect.Equal(ref fmt.Sprint(m), "map[a:2 b:1]")
+	more := []int{7, 8}
+	maps.Extend(mut m, mut iter.Over(ref more).Map(func(v ref int) (string, int) { return (fmt.Sprint("k", v), *v) }))
+	expect.Equal(ref fmt.Sprint(m), "map[a:2 b:1 k7:7 k8:8]")
+	none := []int{}
+	maps.Extend(mut m, mut iter.Over(ref none).Map(func(v ref int) (string, int) { return ("x".Clone(), *v) }))
+	expect.Equal(ref len(m), ref 4)
+}
