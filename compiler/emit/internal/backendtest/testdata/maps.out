@@ -15,3 +15,9 @@ zero false
 map[x:2 y:-1]
 map[a:map[b:1] new:map[c:1]] map[k:[0 7 1]]
 [4 0] map[z:1]
+map[ann:32 bob:18 cid:46] 3
+map[eve:22]
+map[] 0 false
+map[fay:1]
+map[a:[x]]
+2 false true

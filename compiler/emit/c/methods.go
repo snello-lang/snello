@@ -79,7 +79,7 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 var mutating = map[string]bool{
 	"Push": true, "Pop": true, "Insert": true, "Remove": true, "RemoveValue": true,
 	"Clear": true, "Swap": true, "Reverse": true, "Sort": true, "SortBy": true, "GetMut": true,
-	"Extend": true, "Truncate": true, "GetOrInsert": true,
+	"Extend": true, "Truncate": true, "GetOrInsert": true, "Retain": true,
 }
 
 func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Slice) string {
@@ -418,6 +418,10 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 		e.line(e.cType(t, x.Pos()) + " " + out + ";")
 		e.line("sn_map_clone(&" + place + ", " + mt + ", &" + out + ");")
 		return out
+	case "Retain":
+		keep := e.saved(x.Args[0], e.typeOf(x.Args[0]))
+		e.line(e.mapRetain(t, x.Pos()) + "(&" + place + ", " + keep + ");")
+		return ""
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on maps")
@@ -489,6 +493,32 @@ func (e *Emitter) mapGetOrInsert(t *types.Map, pos token.Pos) string {
 	put(&e.protos, head, ";\n")
 	put(&e.helpers, head, " {\n\tvoid *added;\n\t", v, " *slot = sn_map_slot((sn_map *)m, ", mt, ", &k, &added);\n")
 	put(&e.helpers, "\tif (added == NULL) {\n\t\t", e.dropIfNeeded("k", t.Key(), pos), "\n\t\t", e.dropIfNeeded("v", t.Value(), pos), "\n\t} else {\n\t\t*slot = v;\n\t}\n\n\treturn slot;\n}\n\n")
+	return name
+}
+
+// mapRetain writes the function that walks a map's live entries in
+// order, gives each to keep, the key as a ref parameter is passed and
+// the value at its address, and takes out at its place each entry keep
+// refuses: the runtime drops the key and the value and frees the slot,
+// with no key hashed or compared again. The function is read out of
+// the function value once, before the loop: the value's box has its
+// address passed to each call, so a read inside the loop would be a
+// load the C compiler cannot fold where the function is known, and the
+// call would stay one through a pointer, which costs a task calling
+// Retain the bound of its stack.
+func (e *Emitter) mapRetain(t *types.Map, pos token.Pos) string {
+	name := "sn_mapretain_" + lower.Mangle(t)
+	if e.state[name] != undeclared {
+		return name
+	}
+
+	e.state[name] = defined
+	keep := types.NewSignature(nil, []*types.Var{types.NewVar(token.NoPos, "k", types.NewRef(t.Key(), false)), types.NewVar(token.NoPos, "v", types.NewRef(t.Value(), true))}, types.Typ[types.Bool])
+	mt, k, v := e.mapType(t, pos), e.cType(t.Key(), pos), e.cType(t.Value(), pos)
+	head := "static void " + name + "(" + e.cType(t, pos) + " *m, " + e.cType(keep, pos) + " keep)"
+	put(&e.protos, head, ";\n")
+	put(&e.helpers, head, " {\n\t__typeof__(keep.fn) fn = keep.fn;\n\tfor (int64_t i = sn_map_next((sn_map *)m, 0); i >= 0; i = sn_map_next((sn_map *)m, i + 1)) {\n")
+	put(&e.helpers, "\t\tif (!fn(keep.box, ((", k, " *)m->keys)[i], &((", v, " *)m->vals)[i])) {\n\t\t\tsn_map_remove_at((sn_map *)m, ", mt, ", i);\n\t\t}\n\t}\n}\n\n")
 	return name
 }
 

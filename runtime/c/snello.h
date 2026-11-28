@@ -525,6 +525,7 @@ const void *sn_map_get(const sn_map *m, const sn_map_type *t, const void *key, c
 void *sn_map_slot(sn_map *m, const sn_map_type *t, const void *key, void **added);
 void sn_map_reserve(sn_map *m, const sn_map_type *t, int64_t n);
 bool sn_map_remove(sn_map *m, const sn_map_type *t, const void *key, void *out);
+void sn_map_remove_at(sn_map *m, const sn_map_type *t, int64_t i);
 void sn_map_clone(const sn_map *m, const sn_map_type *t, sn_map *out);
 void sn_map_free(sn_map *m, const sn_map_type *t);
 int64_t sn_map_next(const sn_map *m, int64_t i);

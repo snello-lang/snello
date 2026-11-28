@@ -115,6 +115,7 @@ The methods say what happens to the entry:
 | `m.GetOrInsert(k, v)` | The value under `k` as a `mut V`, storing `v` first when the key is absent; one lookup either way, and `k` and `v` are dropped when the key is there |
 | `m.Remove(k)` | Takes the entry out and returns its value as `V?` |
 | `m.Contains(k)` | Whether the key is there |
+| `m.Retain(keep)` | Calls `keep(ref k, mut v)` once per entry, in order, and drops every entry it returns false for; a kept value may be changed |
 | `m.Clone()` | A new map with a clone of every entry; its keys and values must be `Clone` |
 
 `GetOrInsert` is the counter's method when `m[k] += 1` will not do, a value with no zero value or one to build only once: `*groups.GetOrInsert(key, 0) += 1`.

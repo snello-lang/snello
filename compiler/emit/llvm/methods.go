@@ -80,7 +80,7 @@ func (e *Emitter) methodCall(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 var mutating = map[string]bool{
 	"Push": true, "Pop": true, "Insert": true, "Remove": true, "RemoveValue": true,
 	"Clear": true, "Swap": true, "Reverse": true, "Sort": true, "SortBy": true, "GetMut": true,
-	"Extend": true, "Truncate": true, "GetOrInsert": true,
+	"Extend": true, "Truncate": true, "GetOrInsert": true, "Retain": true,
 }
 
 // receiver writes the place a predeclared method is called on, made
@@ -568,10 +568,52 @@ func (e *Emitter) mapMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Map
 		e.store(value{"%sn_map", "zeroinitializer"}, out)
 		e.rt("sn_map_clone", "void", m, mt, value{"ptr", out})
 		return e.load("%sn_map", out)
+	case "Retain":
+		keep := e.spill(e.valueTo(x.Args[0], e.typeOf(x.Args[0])))
+		e.inst("call void @" + e.mapRetain(t, x.Pos()) + "(ptr " + p + ", ptr " + keep + ")")
+		return unit
 	}
 
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on maps")
 	return unit
+}
+
+// mapRetain writes the function that walks a map's live entries in
+// order, gives each to keep, the key as a ref parameter is passed and
+// the value at its address, and takes out at its place each entry keep
+// refuses: the runtime drops the key and the value and frees the slot,
+// with no key hashed or compared again.
+func (e *Emitter) mapRetain(t *types.Map, pos token.Pos) string {
+	name := "sn_mapretain_" + lower.Mangle(t)
+	if e.state[name] {
+		return name
+	}
+
+	e.state[name] = true
+	keep := types.NewSignature(nil, []*types.Var{types.NewVar(token.NoPos, "k", types.NewRef(t.Key(), false)), types.NewVar(token.NoPos, "v", types.NewRef(t.Value(), true))}, types.Typ[types.Bool])
+	pair := e.irType(keep, pos)
+	mt := e.mapType(t, pos)
+	e.helper(name, "void", []string{"ptr %m", "ptr %keep"}, func() {
+		fn := e.load("ptr", e.gep(pair, "%keep", 0))
+		box := e.gep(pair, "%keep", 1)
+		e.eachEntry("%m", t, pos, func(i, k, v string) {
+			kv := value{"ptr", k}
+			if viewed(t.Key()) { // the function takes a ref of a string or a slice as the view itself
+				kv = e.load(e.irType(t.Key(), pos), k)
+			}
+
+			kept := e.op("call i1 "+fn.s+"(ptr "+box+", "+kv.typed()+", ptr "+v+")", "i1")
+			remove, next := e.block("retain.remove"), e.block("retain.next")
+			e.branch(kept.s, next, remove)
+			e.label(remove)
+			e.rt("sn_map_remove_at", "void", value{"ptr", "%m"}, value{"ptr", mt}, value{"i64", i})
+			e.jump(next)
+			e.label(next)
+		})
+		e.inst("ret void")
+		e.fn.terminated = true
+	})
+	return name
 }
 
 // optionOf builds the option or Result-free option value of type t
@@ -801,9 +843,9 @@ func (e *Emitter) mapType(t *types.Map, pos token.Pos) string {
 }
 
 // eachEntry writes a loop over the live entries of the map at the
-// address m, in insertion order, calling body with the addresses of
-// each key and value.
-func (e *Emitter) eachEntry(m string, t *types.Map, pos token.Pos, body func(k, v string)) {
+// address m, in insertion order, calling body with each entry's place
+// and the addresses of its key and value.
+func (e *Emitter) eachEntry(m string, t *types.Map, pos token.Pos, body func(i, k, v string)) {
 	e.declare("sn_map_next", "declare i64 @sn_map_next(ptr, i64)")
 	i := e.slot("i64")
 	e.store(e.op("call i64 @sn_map_next(ptr "+m+", i64 0)", "i64"), i)
@@ -816,7 +858,7 @@ func (e *Emitter) eachEntry(m string, t *types.Map, pos token.Pos, body func(k, 
 	e.label(loop)
 	keys := e.load("ptr", e.gep("%sn_map", m, 0))
 	vals := e.load("ptr", e.gep("%sn_map", m, 1))
-	body(e.elem(e.irType(t.Key(), pos), keys.s, cur.s), e.elem(e.irType(t.Value(), pos), vals.s, cur.s))
+	body(cur.s, e.elem(e.irType(t.Key(), pos), keys.s, cur.s), e.elem(e.irType(t.Value(), pos), vals.s, cur.s))
 	next := e.op("add i64 "+cur.s+", 1", "i64")
 	e.store(e.op("call i64 @sn_map_next(ptr "+m+", i64 "+next.s+")", "i64"), i)
 	e.jump(cond)

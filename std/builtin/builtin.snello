@@ -835,6 +835,16 @@ func (m mut map[K]V) GetOrInsert(k K, v V) mut V
 // set's Iter does, from 0 and from each place found plus one.
 func (m ref map[K]V) Entry(i int) (int, ref K, ref V)?
 
+// Retain calls keep once for each entry, in insertion order, and drops
+// every entry for which keep returns false; the entries that stay keep
+// their order. keep is given the key lent and the value lent mut, so it
+// may change a value that stays. The map holds keep for the call alone.
+// No key is hashed or compared: an entry dropped is taken out at its
+// place.
+//
+//	counts.Retain(func(word ref string, n mut int) bool { return *n > 1 })
+func (m mut map[K]V) Retain(keep func(ref K, mut V) bool)
+
 // Clone returns another handle on the same channel, of the same
 // direction, to hand to another task: a channel handle is owned,
 // moved by assignment, a call, a capture or a send, and the channel is

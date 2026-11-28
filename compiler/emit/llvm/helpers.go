@@ -362,7 +362,7 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 			e.ret(e.joined("(", ")", ", ", parts))
 		case *types.Map:
 			out := e.spill(e.constString("map["))
-			e.eachEntry("%v", u, pos, func(k, v string) {
+			e.eachEntry("%v", u, pos, func(_, k, v string) {
 				n := e.load("i64", e.gep("%sn_string", out, 1))
 				started := e.op("icmp sgt i64 "+n.s+", 4", "i1")
 				sep, next := e.block("sep"), e.block("entry")
