@@ -22,6 +22,15 @@ const eexist int = 17  // file exists
 const enotdir int = 20 // not a directory
 const einval int = 22  // invalid argument
 
+// maxLinks is how many symbolic links EvalSymlinks follows in one path
+// before it gives up on a chain that may loop: a bound above any
+// system's own, which is 40 on Linux and 32 on macOS.
+const maxLinks = 255
+
+// globMeta are the bytes that make an element of a pattern a pattern,
+// which Glob matches against a directory's names.
+const globMeta = "*?["
+
 // The flags of OpenFile: one of O_RDONLY, O_WRONLY and O_RDWR says how
 // the file is opened, and the rest are added to it with |. The numbers
 // are Snello's own and the same on every system, where the system's
@@ -189,6 +198,25 @@ struct OpenOptions {
 	Truncate  bool             // empty the file when it is opened
 	Exclusive bool             // make the file, failing when it exists
 	Perm      FileMode = 0o666 // the permissions of a file it makes
+}
+
+// A Walk is what a function given to WalkDir answers after each file:
+// go on, skip the directory just given, or the rest of the one holding
+// the file given, skip everything left, or stop with an error, which
+// WalkDir returns.
+enum Walk {
+	// Continue goes on to the next file.
+	Continue
+
+	// SkipDir leaves out the directory just given, or, after a file, the
+	// files left in its directory.
+	SkipDir
+
+	// SkipAll leaves out every file left; WalkDir then returns Ok.
+	SkipAll
+
+	// Stop ends the walk, and WalkDir returns the error.
+	Stop(io.Error)
 }
 
 // Exit ends the program at once with code as its status, 0 for success
@@ -763,6 +791,249 @@ func Readlink(path ref string) Result<string, io.Error> {
 	}
 
 	return Ok(target)
+}
+
+// Abs returns the absolute form of path, a new string: path itself
+// cleaned when it is absolute, and otherwise the current directory
+// with path joined to it, as filepath.Join joins and cleans; no link
+// is followed, and the file need not exist; an empty path is the
+// current directory. On Windows a path that starts at a root with no
+// drive, \tmp, is on the current directory's drive, and one on another
+// drive without a root,
+// "D:notes.txt", is refused as an invalid argument, since that drive's
+// current directory is the system's alone. path is only read.
+//
+//	full := os.Abs("docs/notes.txt")?
+//
+// It fails when the current directory cannot be read, as Getwd fails.
+func Abs(path ref string) Result<string, io.Error> {
+	if filepath.IsAbs(path) {
+		return Ok(filepath.Clean(path))
+	}
+
+	wd := Getwd()?
+	if path.Len() == 0 { // the current directory itself
+		return Ok(wd)
+	}
+
+	return abs(path, ref wd)
+}
+
+// EvalSymlinks returns the path with every symbolic link in it
+// followed, a new string: what the file system reaches when it reads
+// path, element by element, a link's text spliced in where the link is,
+// an absolute link starting the path over; the result is clean, and
+// relative when path is and no link made it absolute. Every element
+// must exist. path is only read.
+//
+//	real := os.EvalSymlinks(ref link)?
+//
+// A path that names nothing is an Error of Kind io.NotExist, as Lstat
+// reports it, and a chain of more than 255 links an Error, "evalsymlinks
+// PATH: too many links".
+func EvalSymlinks(path ref string) Result<string, io.Error> {
+	if path.Len() == 0 {
+		return Ok(path.Clone())
+	}
+
+	// The path is read element by element into dest, the volume and the
+	// root, when the path starts at one, first; a link replaces what is
+	// left of the path with its text and the rest, and the reading goes
+	// on from there.
+	rest := path.Clone()
+	volLen := filepath.VolumeName(ref rest).Len()
+	if volLen < rest.Len() && filepath.IsSeparator(rest[volLen]) {
+		volLen++
+	}
+
+	dest := rest[0:volLen].Clone()
+	links := 0
+	start := volLen
+	for start < rest.Len() {
+		for start < rest.Len() && filepath.IsSeparator(rest[start]) {
+			start++
+		}
+
+		end := start
+		for end < rest.Len() && !filepath.IsSeparator(rest[end]) {
+			end++
+		}
+
+		if end == start { // separators alone are left
+			break
+		}
+
+		if end-start == 1 && rest[start] == dotByte {
+			start = end
+			continue
+		}
+
+		if end-start == 2 && rest[start] == dotByte && rest[start+1] == dotByte {
+			// Back up to the element before, which is no link, having
+			// been followed already; with nothing before, or a ".." kept
+			// before, this ".." is kept too.
+			r := dest.Len() - 1
+			for r >= volLen && !filepath.IsSeparator(dest[r]) {
+				r--
+			}
+
+			kept := r < volLen || (dest.Len()-(r+1) == 2 && dest[r+1] == dotByte && dest[r+2] == dotByte)
+			if kept {
+				if dest.Len() > volLen {
+					dest = dest + string(filepath.Separator)
+				}
+
+				dest = dest + ".."
+			} else {
+				dest = dest[0:r].Clone()
+			}
+
+			start = end
+			continue
+		}
+
+		if dest.Len() > volLen && !filepath.IsSeparator(dest[dest.Len()-1]) {
+			dest = dest + string(filepath.Separator)
+		}
+
+		dest = dest + rest[start:end]
+		fi := Lstat(ref dest)?
+		if fi.Mode()&ModeSymlink == 0 {
+			if !fi.Mode().IsDir() && end < rest.Len() {
+				return Err(io.Errno("evalsymlinks", path, enotdir))
+			}
+
+			start = end
+			continue
+		}
+
+		links++
+		if links > maxLinks {
+			return Err(io.NewError("evalsymlinks", path.Clone(), "too many links", io.Other))
+		}
+
+		link := Readlink(ref dest)?
+		after := rest[end:].Clone()
+		rest = link + after
+		linkVolLen := filepath.VolumeName(ref link).Len()
+		if linkVolLen > 0 { // a link to a path with a volume starts over there
+			if linkVolLen < link.Len() && filepath.IsSeparator(link[linkVolLen]) {
+				linkVolLen++
+			}
+
+			volLen = linkVolLen
+			dest = link[0:volLen].Clone()
+			start = volLen
+		} else if link.Len() > 0 && filepath.IsSeparator(link[0]) { // a link to an absolute path starts over at the root
+			volLen = 1
+			dest = link[0:1].Clone()
+			start = 1
+		} else { // a link to a relative path is read where the link is: its element goes
+			r := dest.Len() - 1
+			for r >= volLen && !filepath.IsSeparator(dest[r]) {
+				r--
+			}
+
+			if r < volLen {
+				dest = dest[0:volLen].Clone()
+			} else {
+				dest = dest[0:r].Clone()
+			}
+
+			start = 0
+		}
+	}
+
+	return Ok(filepath.Clean(ref dest))
+}
+
+// WalkDir walks the tree under root, giving each file and directory to
+// visit, the directory before what it holds and the entries of a
+// directory in the order of their names: the root first, by its Lstat,
+// then each entry as ReadDir lists it, with no link followed. visit is
+// given the path, root with the elements under it joined on, and the
+// entry, or the error that stopped the walk from reading a directory,
+// and answers how to go on, a Walk; a directory it cannot read is given
+// a second time with the error, after its own visit, and left out when
+// visit answers Continue. The walk is done once, each directory read
+// once, and stops at Stop, whose error it returns.
+//
+//	os.WalkDir(ref root, func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+//		match found {
+//			Ok(e) => {
+//				if e.IsDir() && e.Name() == ".git" {
+//					return os.SkipDir
+//				}
+//
+//				fmt.Println(path)
+//			},
+//			Err(e) => fmt.Println("unreadable:", e),
+//		}
+//
+//		return os.Continue
+//	})?
+//
+// A root that names nothing is given to visit with its error, and the
+// walk ends as visit answers: Continue returns Ok.
+func WalkDir(root ref string, visit func(path ref string, found Result<ref DirEntry, io.Error>) Walk) Result<(), io.Error> {
+	match Lstat(root) {
+		Ok(fi) => {
+			entry := DirEntry{name: fi.name.Clone(), typ: fi.mode.Type()}
+			_ = walk(root, ref entry, visit)?
+			return Ok(())
+		},
+		Err(e) => {
+			match visit(root, Err(e)) {
+				Stop(failure) => return Err(failure),
+				_ => return Ok(()),
+			}
+		},
+	}
+}
+
+// Glob returns the paths of the files that fit pattern, as
+// filepath.Match fits a name, in the order of their names, each a new
+// string: the elements up to the first with a *, ? or [ name the
+// directory to start in, and each element from there is matched
+// against the names of the directories reached so far, so
+// "src/*/main.snello" lists each package's main file. No file fitting
+// is an empty slice, and a directory that cannot be read is skipped, as
+// a shell skips it; a pattern that cannot be read is an error, as Match
+// reports it. The pattern is read in one pass, however many elements it
+// has. pattern is only read.
+//
+//	for _, name := range ref os.Glob("*.log")? {
+//		os.Remove(ref name)?
+//	}
+func Glob(pattern ref string) Result<[]string, io.Error> {
+	_ = filepath.Match(pattern, "")? // a bad pattern is reported whatever is on disk
+	volLen := filepath.VolumeName(pattern).Len()
+	first := firstMeta(pattern, volLen)
+	if first == pattern.Len() {
+		match Lstat(pattern) {
+			Ok(_) => return Ok([]string{pattern.Clone()}),
+			Err(_) => return Ok([]string{}),
+		}
+	}
+
+	dirs := []string{cleanGlobDir(pattern[0:first])}
+	start := first
+	for start <= pattern.Len() && len(dirs) > 0 {
+		end := start
+		for end < pattern.Len() && !filepath.IsSeparator(pattern[end]) {
+			end++
+		}
+
+		found := []string{}
+		for _, d := range ref dirs {
+			found = glob(d, pattern[start:end], found)?
+		}
+
+		dirs = found
+		start = end + 1
+	}
+
+	return Ok(dirs)
 }
 
 // CreateTemp makes a new file under dir, or the system's temporary
@@ -1347,6 +1618,122 @@ func statInto(path ref string, follow bool, fi mut FileInfo) int {
 // named by the last element of the path.
 func fileInfo(path ref string, size i64, mode u32, sec i64, nsec i64, dev u64, ino u64) FileInfo {
 	return FileInfo{name: filepath.Base(path).Clone(), size: size, mode: FileMode(mode), modTime: time.Unix(sec, nsec), dev: dev, ino: ino}
+}
+
+// walk gives the entry at path to visit and, for a directory it may
+// enter, the entries under it, each walked in turn; it answers for the
+// directory holding the entry: Continue, SkipDir when visit asked for
+// the rest of that directory to be left out, or SkipAll, and a Stop's
+// error as its own. A directory that cannot be read is given to visit
+// a second time, with the error, and left out when visit answers
+// Continue or SkipDir.
+func walk(path ref string, entry ref DirEntry, visit func(path ref string, found Result<ref DirEntry, io.Error>) Walk) Result<Walk, io.Error> {
+	match visit(path, Ok(entry)) {
+		Continue => {},
+		SkipDir => {
+			if entry.IsDir() { // the directory just given is left out, and its siblings go on
+				return Ok(Continue)
+			}
+
+			return Ok(SkipDir) // after a file: the rest of its directory
+		},
+		SkipAll => return Ok(SkipAll),
+		Stop(failure) => return Err(failure),
+	}
+
+	if !entry.IsDir() {
+		return Ok(Continue)
+	}
+
+	entries := []DirEntry{}
+	match ReadDir(path) {
+		Ok(listed) => entries = listed,
+		Err(e) => {
+			match visit(path, Err(e)) {
+				SkipAll => return Ok(SkipAll),
+				Stop(failure) => return Err(failure),
+				_ => return Ok(Continue),
+			}
+		},
+	}
+
+	for _, e := range ref entries {
+		under := filepath.Join(path, e.Name())
+		match walk(ref under, e, visit)? {
+			Continue => {},
+			SkipDir => break,
+			_ => return Ok(SkipAll),
+		}
+	}
+
+	return Ok(Continue)
+}
+
+// glob adds to matches the files in dir whose names fit pattern, in the
+// order ReadDir lists them, joined to dir; a dir that cannot be read or
+// is no directory adds nothing.
+func glob(dir ref string, pattern ref string, matches []string) Result<[]string, io.Error> {
+	out := matches
+	match Stat(dir) {
+		Ok(fi) => {
+			if !fi.IsDir() {
+				return Ok(out)
+			}
+		},
+		Err(_) => return Ok(out),
+	}
+
+	match ReadDir(dir) {
+		Ok(entries) => {
+			for _, e := range ref entries {
+				if filepath.Match(pattern, e.Name())? {
+					out.Push(filepath.Join(dir, e.Name()))
+				}
+			}
+		},
+		Err(_) => {},
+	}
+
+	return Ok(out)
+}
+
+// firstMeta returns where the first element of the pattern that holds
+// a *, ? or [ starts, past the volume, or the pattern's length when
+// none does.
+func firstMeta(pattern ref string, volLen int) int {
+	for i := volLen; i < pattern.Len(); i++ {
+		if globMeta.IndexByte(pattern[i]).IsSome() {
+			for i > volLen && !filepath.IsSeparator(pattern[i-1]) {
+				i--
+			}
+
+			return i
+		}
+	}
+
+	return pattern.Len()
+}
+
+// cleanGlobDir is the part of a pattern before its first element with a
+// metacharacter, as Glob starts from it: the current directory for
+// none, a root as it is, "/" and on Windows "C:\\", a drive alone as
+// its current directory, "C:.", and any other without the separator it
+// ends in, so that the matches are joined to it as written.
+func cleanGlobDir(dir ref string) string {
+	volLen := filepath.VolumeName(dir).Len()
+	if dir.Len() == 0 {
+		return ".".Clone()
+	}
+
+	if volLen+1 == dir.Len() && filepath.IsSeparator(dir[dir.Len()-1]) { // a root, with or without its drive
+		return dir.Clone()
+	}
+
+	if volLen == dir.Len() { // a drive alone
+		return dir + "."
+	}
+
+	return dir[0 : dir.Len()-1].Clone()
 }
 
 // hasSeparator reports whether p holds a separator of the system's.

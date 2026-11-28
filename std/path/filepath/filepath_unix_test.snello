@@ -24,3 +24,18 @@ func TestUnix() {
 	expect.Equal(filepath.VolumeName("C:/x"), "")
 	expect.Equal(ref filepath.Clean("a\\b"), "a\\b") // a backslash is a byte of a name
 }
+
+// TestUnixPatterns checks what a backslash is on Linux and macOS: a
+// quote in a pattern, and a byte of a name; and that a colon separates
+// a list.
+func TestUnixPatterns() {
+	expect.True(expect.IsOk(filepath.Match("\\*", "*")))
+	expect.False(expect.IsOk(filepath.Match("\\*", "a")))
+	expect.True(expect.IsOk(filepath.Match("a\\\\b", "a\\b"))) // a quoted backslash is one byte of the name
+	expect.True(expect.IsOk(filepath.Match("a\\b", "ab")))       // a quoted b is a b
+	expect.Equal(ref filepath.ListSeparator, ref ':')
+	expect.EqualSlice(ref filepath.SplitList("/usr/bin:/bin::/sbin"), ref []string{"/usr/bin".Clone(), "/bin".Clone(), "".Clone(), "/sbin".Clone()})
+	expect.Equal(ref filepath.ToSlash("a\\b"), "a\\b") // no separator to exchange
+	expect.True(filepath.IsLocal("NUL"))                   // no name is reserved
+	expect.True(filepath.IsLocal("a:b"))
+}

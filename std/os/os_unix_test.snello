@@ -4,7 +4,7 @@
 
 package os_test
 
-import ("expect"; "fmt"; "os"; "testing"; "time")
+import ("expect"; "fmt"; "io"; "os"; "path/filepath"; "testing"; "time")
 
 // TestStatUnix checks what a stat says on Linux and macOS alone: a
 // temporary directory is its owner's alone, and the root is named "/".
@@ -120,4 +120,38 @@ func restore(key ref string, saved string?) {
 	} else {
 		os.Unsetenv(key)
 	}
+}
+
+// TestUnreadableDirectory walks and globs over a directory the program
+// may not read: WalkDir gives it a second time with the error, and
+// leaves it out on Continue; Glob skips it. The root reads anything, so
+// the test is for every other user.
+func TestUnreadableDirectory() {
+	if uid := os.Getuid() {
+		if uid == 0 {
+			return
+		}
+	}
+
+	dir := testing.TempDir()
+	expect.IsOk(os.MkdirAll(ref dir.Join("open/x"), 0o755))
+	expect.IsOk(os.Mkdir(ref dir.Join("shut"), 0o755))
+	expect.IsOk(os.WriteString(ref dir.Join("shut/hidden.txt"), "."))
+	shut := dir.Join("shut")
+	expect.IsOk(os.Chmod(ref shut, 0o000))
+	defer os.Chmod(ref shut, 0o755) // so that the temporary directory can be removed
+	visits := []string{}
+	expect.IsOk(os.WalkDir(dir.Path(), func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+		match found {
+			Ok(e) => visits.Push(e.Name().Clone()),
+			Err(e) => {
+				expect.True(e.Kind() == io.Permission)
+				visits.Push("error ".Clone() + filepath.Base(path))
+			},
+		}
+
+		return os.Continue
+	}))
+	expect.EqualSlice(ref visits, ref []string{filepath.Base(dir.Path()).Clone(), "open".Clone(), "x".Clone(), "shut".Clone(), "error shut".Clone()})
+	expect.EqualSlice(ref expect.IsOk(os.Glob(ref dir.Join("*/*"))), ref []string{dir.Join("open/x")}) // the shut directory is skipped
 }

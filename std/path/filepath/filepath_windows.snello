@@ -9,7 +9,17 @@
 // volume, every separator then written as a backslash.
 package filepath
 
-import "path"
+import ("io"; "path"; "strings")
+
+// listSeparatorRune separates the paths of a list, a semicolon, and
+// quote is what a path holding one is wrapped in.
+const listSeparatorRune rune = ';'
+const quote byte = '"'
+
+// reservedNames are the device names the system takes a file name to
+// be, whatever directory and extension it is written with, each in
+// capitals as the comparison folds it; a path holding one is not local.
+const reservedNames = "CON PRN AUX NUL COM1 COM2 COM3 COM4 COM5 COM6 COM7 COM8 COM9 COM¹ COM² COM³ LPT1 LPT2 LPT3 LPT4 LPT5 LPT6 LPT7 LPT8 LPT9 LPT¹ LPT² LPT³"
 
 // separatorRune is the separator of a Windows path, a backslash.
 const separatorRune rune = '\\'
@@ -272,15 +282,85 @@ func backslashes(p ref string) string {
 	return replaced(p, slash, backslash)
 }
 
-// replaced returns a copy of p with every byte that is from made to.
-func replaced(p ref string, from byte, to byte) string {
-	buf := make([]byte, p.Len())
-	for i := 0; i < p.Len(); i++ {
-		buf[i] = p[i]
-		if buf[i] == from {
-			buf[i] = to
+// matchPattern fits the name to the pattern as path.Match does, with every
+// separator read as a slash: a backslash separates a Windows path and
+// quotes nothing, which the pattern and the name say by their slashes.
+func matchPattern(pattern ref string, name ref string) Result<bool, io.Error> {
+	return path.Match(ref replaced(pattern, backslash, slash), ref replaced(name, backslash, slash))
+}
+
+// splitList splits the list at its semicolons, but one inside double
+// quotes, which are dropped from the path they wrap.
+func splitList(list ref string) []string {
+	out := []string{}
+	if list.Len() == 0 {
+		return out
+	}
+
+	start := 0
+	quoted := false
+	for i := 0; i < list.Len(); i++ {
+		if list[i] == quote {
+			quoted = !quoted
+		} else if list[i] == byte(listSeparatorRune) && !quoted {
+			out.Push(unquoted(list[start:i]))
+			start = i + 1
 		}
 	}
 
-	return string(buf)
+	out.Push(unquoted(list[start:]))
+	return out
+}
+
+// unquoted is the path with its double quotes dropped, a new string.
+func unquoted(p ref string) string {
+	out := []byte{}
+	for i := 0; i < p.Len(); i++ {
+		if p[i] != quote {
+			out.Push(p[i])
+		}
+	}
+
+	return string(out)
+}
+
+// isLocal is the rule of every system, and the system's own: no
+// volume, no name the system reserves and no stream.
+func isLocal(p ref string) bool {
+	if p.Len() == 0 || isAbs(p) || volumeLength(p) > 0 || isSeparator(p[0]) {
+		return false
+	}
+
+	for element := range p.Split("\\") {
+		for part := range element.Split("/") {
+			if part.IndexByte(driveColon).IsSome() || isReserved(part) { // a colon names a stream of a file
+				return false
+			}
+		}
+	}
+
+	return !escapes(ref clean(p))
+}
+
+// isReserved reports whether the name, read without its extension and
+// with its case folded, is a device's.
+func isReserved(name ref string) bool {
+	end := name.Len()
+	if dot := name.IndexByte(deviceMark) {
+		end = dot
+	}
+
+	base := name[0:end].TrimRight(" ")
+	if base.Len() == 0 {
+		return false
+	}
+
+	upper := strings.ToUpper(base)
+	for reserved := range reservedNames.Split(" ") {
+		if upper == reserved {
+			return true
+		}
+	}
+
+	return false
 }

@@ -98,3 +98,24 @@ func TestWindowsGuards() {
 	expect.Equal(filepath.VolumeName("\\??\\c:\\x"), "\\??\\c:")
 	expect.False(filepath.IsAbs(ref filepath.Clean("a/../c:/x")))
 }
+
+// TestWindowsPatterns checks what a backslash is on Windows: a separator
+// in a pattern as in a name, quoting nothing; a semicolon separates a
+// list, and a path in quotes may hold one; and a reserved name or a
+// stream is not local.
+func TestWindowsPatterns() {
+	expect.True(expect.IsOk(filepath.Match("a\\*", "a\\b")))
+	expect.True(expect.IsOk(filepath.Match("a/*", "a\\b")))
+	expect.False(expect.IsOk(filepath.Match("a\\*", "a\\b\\c")))
+	expect.False(expect.IsOk(filepath.Match("\\*", "*")))
+	expect.Equal(ref filepath.ListSeparator, ref ';')
+	expect.EqualSlice(ref filepath.SplitList("C:\\bin;\"D:\\a;b\";E:"), ref []string{"C:\\bin".Clone(), "D:\\a;b".Clone(), "E:".Clone()})
+	expect.Equal(ref filepath.ToSlash("a\\b/c"), "a/b/c")
+	expect.Equal(ref filepath.FromSlash("a/b"), "a\\b")
+	expect.False(filepath.IsLocal("NUL"))
+	expect.False(filepath.IsLocal("docs\\com1.txt"))
+	expect.False(filepath.IsLocal("a:b"))
+	expect.False(filepath.IsLocal("C:a"))
+	expect.False(filepath.IsLocal("\\a"))
+	expect.True(filepath.IsLocal("docs\\a.txt"))
+}

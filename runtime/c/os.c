@@ -544,8 +544,9 @@ SN_HELD void sn_io_reserve(sn_slice_u8 *buf, int64_t n) { sn_strings_reserve(buf
 
 // The names of temporary files and directories, which both systems make
 // the same way: sn_os_tempParts splits the pattern into the prefix, dir
-// and the pattern up to its last *, joined by the system's separator,
-// and the suffix after the *, empty when the pattern has none;
+// and the pattern up to its last *, joined by the system's separator
+// unless dir ends in one, and the suffix after the *, empty when the
+// pattern has none;
 // sn_os_tempName is one name to try, the prefix, a random number and
 // the suffix, owned; sn_os_tempFailed reports a name that could not be
 // made, taking the prefix: a dir that is missing, which the caller has
@@ -560,7 +561,9 @@ SN_HELD void sn_os_tempParts(sn_string dir, sn_string pattern, char separator, s
         }
     }
 
-    *prefix = sn_join(sn_join(dir, SN_STR(&separator, 1), 0), SN_STR(pattern.ptr, star), 1);
+    bool ended = dir.len > 0 && (dir.ptr[dir.len - 1] == (uint8_t)separator || dir.ptr[dir.len - 1] == '/');
+    sn_string joined = ended ? sn_string_clone(dir) : sn_join(dir, SN_STR(&separator, 1), 0);
+    *prefix = sn_join(joined, SN_STR(pattern.ptr, star), 1);
     *suffix = star < pattern.len ? SN_STR(pattern.ptr + star + 1, pattern.len - star - 1) : SN_STR("", 0);
 }
 

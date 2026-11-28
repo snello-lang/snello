@@ -733,3 +733,205 @@ func BenchmarkCreateTemp() {
 		expect.IsOk(os.Remove(ref name))
 	}
 }
+
+// TestAbs makes a path absolute against the current directory, cleaned,
+// and leaves an absolute one cleaned.
+func TestAbs() {
+	wd := expect.IsOk(os.Getwd())
+	expect.Equal(ref expect.IsOk(os.Abs("docs/x")), ref filepath.Join(ref wd, "docs/x"))
+	expect.Equal(ref expect.IsOk(os.Abs(".")), ref wd)
+	expect.Equal(ref expect.IsOk(os.Abs(ref filepath.Join(ref wd, "a/./b/../c"))), ref filepath.Join(ref wd, "a/c"))
+	expect.Equal(ref expect.IsOk(os.Abs("")), ref wd) // the current directory itself
+}
+
+// TestTempTrailingSeparator makes temporary names under a directory
+// written with its separator at the end, with no second separator.
+func TestTempTrailingSeparator() {
+	dir := testing.TempDir()
+	under := filepath.Clean(dir.Path()) + string(filepath.Separator)
+	made := expect.IsOk(os.MkdirTemp(ref under, "d-*"))
+	expect.Equal(ref filepath.Dir(ref made), ref filepath.Clean(dir.Path()))
+	expect.False(made.Contains(ref (string(filepath.Separator) + string(filepath.Separator))))
+	f := expect.IsOk(os.CreateTemp(ref under, "f-*"))
+	expect.False(f.Name().Contains(ref (string(filepath.Separator) + string(filepath.Separator))))
+}
+
+// TestEvalSymlinks follows the links in a path, relative and absolute,
+// a link to a link, and ".." read where it stands; a missing element
+// and a loop are errors.
+func TestEvalSymlinks() {
+	dir := testing.TempDir()
+	real := expect.IsOk(os.EvalSymlinks(dir.Path())) // the temporary directory may itself sit under a link
+	expect.IsOk(os.MkdirAll(ref dir.Join("src/pkg"), 0o755))
+	expect.IsOk(os.WriteString(ref dir.Join("src/pkg/c.txt"), "c"))
+	expect.IsOk(os.WriteString(ref dir.Join("src/x.txt"), "x"))
+	expect.IsOk(os.Symlink("src/pkg", ref dir.Join("link")))
+	expect.IsOk(os.Symlink("c.txt", ref dir.Join("src/pkg/clink")))
+	expect.IsOk(os.Symlink(ref dir.Join("src"), ref dir.Join("abs")))
+	expect.Equal(ref expect.IsOk(os.EvalSymlinks(ref dir.Join("link/clink"))), ref filepath.Join(ref real, "src/pkg/c.txt"))
+	expect.Equal(ref expect.IsOk(os.EvalSymlinks(ref (dir.Path() + "/link/"))), ref filepath.Join(ref real, "src/pkg"))
+	expect.Equal(ref expect.IsOk(os.EvalSymlinks(ref (dir.Path() + "/link/../x.txt"))), ref filepath.Join(ref real, "src/x.txt")) // ".." read after the link, where Join would have cleaned it away first
+	expect.True(expect.IsErr(os.EvalSymlinks(ref (dir.Path() + "/link/../src/./pkg"))).Kind() == io.NotExist)          // src/pkg/../src: no such directory
+	expect.Equal(ref expect.IsOk(os.EvalSymlinks(ref dir.Join("abs/pkg/clink"))), ref filepath.Join(ref real, "src/pkg/c.txt"))
+	expect.Equal(ref expect.IsOk(os.EvalSymlinks(ref dir.Join("src/pkg/c.txt"))), ref filepath.Join(ref real, "src/pkg/c.txt"))
+	expect.True(expect.IsErr(os.EvalSymlinks(ref dir.Join("gone"))).Kind() == io.NotExist)
+	expect.Equal(ref expect.IsErr(os.EvalSymlinks(ref dir.Join("src/pkg/c.txt/x"))).Error(), ref ("evalsymlinks " + dir.Join("src/pkg/c.txt/x") + ": not a directory"))
+	expect.IsOk(os.Symlink("loop2", ref dir.Join("loop1")))
+	expect.IsOk(os.Symlink("loop1", ref dir.Join("loop2")))
+	expect.Equal(ref expect.IsErr(os.EvalSymlinks(ref dir.Join("loop1"))).Error(), ref ("evalsymlinks " + dir.Join("loop1") + ": too many links"))
+	expect.Equal(ref expect.IsOk(os.EvalSymlinks("")), "")
+}
+
+// TestWalkDir walks a tree in the order of names, the directory before
+// what it holds, and answers SkipDir, SkipAll and Stop as said; a root
+// that names nothing goes to visit with its error.
+func TestWalkDir() {
+	dir := testing.TempDir()
+	root := dir.Join("tree")
+	expect.IsOk(os.MkdirAll(ref filepath.Join(ref root, "b/deep"), 0o755))
+	expect.IsOk(os.MkdirAll(ref filepath.Join(ref root, "a"), 0o755))
+	for _, name := range ref []string{"a/x.txt".Clone(), "a/y.txt".Clone(), "b/deep/z.txt".Clone(), "b/w.txt".Clone(), "top.txt".Clone()} {
+		expect.IsOk(os.WriteString(ref filepath.Join(ref root, name), "."))
+	}
+
+	seen := []string{}
+	expect.IsOk(os.WalkDir(ref root, func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+		match found {
+			Ok(e) => {
+				seen.Push(path[root.Len():].Clone()) // the path under the root
+				expect.Equal(e.Name(), filepath.Base(path))
+			},
+			Err(e) => expect.Fail("a directory could not be read: ".Clone() + e.Error()),
+		}
+
+		return os.Continue
+	}))
+	expect.EqualSlice(ref seen, ref []string{"".Clone(), "/a".Clone(), "/a/x.txt".Clone(), "/a/y.txt".Clone(), "/b".Clone(), "/b/deep".Clone(), "/b/deep/z.txt".Clone(), "/b/w.txt".Clone(), "/top.txt".Clone()})
+	skipped := []string{}
+	expect.IsOk(os.WalkDir(ref root, func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+		skipped.Push(path[root.Len():].Clone())
+		match found {
+			Ok(e) => {
+				if e.Name() == "b" {
+					return os.SkipDir // the directory just given
+				}
+
+				if e.Name() == "x.txt" {
+					return os.SkipDir // the rest of its directory
+				}
+			},
+			Err(_) => {},
+		}
+
+		return os.Continue
+	}))
+	expect.EqualSlice(ref skipped, ref []string{"".Clone(), "/a".Clone(), "/a/x.txt".Clone(), "/b".Clone(), "/top.txt".Clone()})
+	count := 0
+	expect.IsOk(os.WalkDir(ref root, func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+		count++
+		if count == 3 {
+			return os.SkipAll
+		}
+
+		return os.Continue
+	}))
+	expect.Equal(ref count, ref 3)
+	stopped := expect.IsErr(os.WalkDir(ref root, func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+		return os.Stop(io.NewError("walk", path.Clone(), "stopped", io.Other))
+	}))
+	expect.Equal(ref stopped.Error(), ref ("walk " + root + ": stopped"))
+	expect.IsOk(os.Symlink("a", ref filepath.Join(ref root, "la"))) // a link to a directory is given, and not entered
+	expect.IsOk(os.Symlink("top.txt", ref filepath.Join(ref root, "lt")))
+	linked := []string{}
+	expect.IsOk(os.WalkDir(ref filepath.Join(ref root, "la"), func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+		linked.Push(filepath.Base(path).Clone() + fmt.Sprint(expect.IsOk(found).Type()&os.ModeSymlink != 0))
+		return os.Continue
+	}))
+	expect.EqualSlice(ref linked, ref []string{"latrue".Clone()}) // the root itself a link: given once, as the link, not entered
+	names := []string{}
+	expect.IsOk(os.WalkDir(ref root, func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+		e := expect.IsOk(found)
+		if e.Type()&os.ModeSymlink != 0 {
+			names.Push(e.Name().Clone())
+		}
+
+		return os.Continue
+	}))
+	expect.EqualSlice(ref names, ref []string{"la".Clone(), "lt".Clone()}) // the links are listed and neither is followed
+	missing := 0
+	expect.IsOk(os.WalkDir(ref dir.Join("gone"), func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+		missing++
+		expect.True(expect.IsErr(found).Kind() == io.NotExist)
+		return os.Continue
+	}))
+	expect.Equal(ref missing, ref 1)
+}
+
+// TestGlob lists the files fitting a pattern in the order of their
+// names, an element at a time, with a pattern without metacharacters
+// taken as a name, and reports a pattern that cannot be read.
+func TestGlob() {
+	dir := testing.TempDir()
+	expect.IsOk(os.MkdirAll(ref dir.Join("src/pkg"), 0o755))
+	expect.IsOk(os.MkdirAll(ref dir.Join("src/lib"), 0o755))
+	for _, name := range ref []string{"src/a.snello".Clone(), "src/pkg/b.snello".Clone(), "src/pkg/c.txt".Clone(), "src/lib/d.snello".Clone()} {
+		expect.IsOk(os.WriteString(ref dir.Join(name), "."))
+	}
+
+	expect.EqualSlice(ref expect.IsOk(os.Glob(ref dir.Join("src/*/*.snello"))), ref []string{dir.Join("src/lib/d.snello"), dir.Join("src/pkg/b.snello")})
+	expect.EqualSlice(ref expect.IsOk(os.Glob(ref dir.Join("src/*"))), ref []string{dir.Join("src/a.snello"), dir.Join("src/lib"), dir.Join("src/pkg")})
+	expect.EqualSlice(ref expect.IsOk(os.Glob(ref dir.Join("src/pkg/[bc].*"))), ref []string{dir.Join("src/pkg/b.snello"), dir.Join("src/pkg/c.txt")})
+	expect.EqualSlice(ref expect.IsOk(os.Glob(ref dir.Join("src/a.snello"))), ref []string{dir.Join("src/a.snello")}) // no metacharacter: the name, when it exists
+	expect.Len(ref expect.IsOk(os.Glob(ref dir.Join("src/z.snello"))), 0)
+	expect.Len(ref expect.IsOk(os.Glob(ref dir.Join("nothing*"))), 0)
+	expect.Len(ref expect.IsOk(os.Glob(ref dir.Join("src/a.snello/*"))), 0) // a file is no directory to list
+	expect.Equal(ref expect.IsErr(os.Glob("a[")).Error(), "match a[: syntax error in pattern")
+	deep := expect.IsSome(strings.Repeat("*/", 20000)) // a pattern of any depth is read in one pass: nothing fits, and no stack is spent
+	expect.Len(ref expect.IsOk(os.Glob(ref (deep + "x"))), 0)
+	expect.Len(ref expect.IsOk(os.Glob(ref dir.Join("src/*/"))), 0) // an empty last element fits no name
+}
+
+// EvalSymlinks of a path through one link.
+func BenchmarkEvalSymlinks() {
+	dir := testing.TempDir()
+	expect.IsOk(os.Mkdir(ref dir.Join("d"), 0o755))
+	expect.IsOk(os.WriteString(ref dir.Join("d/f.txt"), "."))
+	expect.IsOk(os.Symlink("d", ref dir.Join("link")))
+	target := dir.Join("link/f.txt")
+	for testing.Loop() { _ = os.EvalSymlinks(ref target) }
+}
+
+// WalkDir over a tree of 500 files in 10 directories.
+func BenchmarkWalkDir() {
+	dir := testing.TempDir()
+	for d := 0; d < 10; d++ {
+		sub := dir.Join(fmt.Sprintf("d%d", d))
+		expect.IsOk(os.Mkdir(ref sub, 0o755))
+		for f := 0; f < 50; f++ {
+			expect.IsOk(os.WriteString(ref filepath.Join(ref sub, fmt.Sprintf("f%d.txt", f)), "."))
+		}
+	}
+
+	for testing.Loop() {
+		n := 0
+		expect.IsOk(os.WalkDir(dir.Path(), func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+			n++
+			return os.Continue
+		}))
+	}
+}
+
+// Glob over 500 files in 10 directories, two elements with a star.
+func BenchmarkGlob() {
+	dir := testing.TempDir()
+	for d := 0; d < 10; d++ {
+		sub := dir.Join(fmt.Sprintf("d%d", d))
+		expect.IsOk(os.Mkdir(ref sub, 0o755))
+		for f := 0; f < 50; f++ {
+			expect.IsOk(os.WriteString(ref filepath.Join(ref sub, fmt.Sprintf("f%d.txt", f)), "."))
+		}
+	}
+
+	pattern := dir.Join("d*/f1*.txt")
+	for testing.Loop() { _ = os.Glob(ref pattern) }
+}

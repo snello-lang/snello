@@ -262,6 +262,9 @@ Unchanged: import paths and package names, `import m "math"` to rename, exported
 | `errors.New("message")` for a one-off error | An enum variant, or a struct listing `Error`: the message is derived from the value |
 | Wrapping by hand at every `return err`, `return fmt.Errorf("read: %w", err)` or an error type of the program's | `?` wraps the error in the one variant of the function's error enum that holds its type |
 | A type with a `String() string` method prints as it, a `fmt.Stringer` | A type prints as its `String` when it lists `impl fmt.Stringer`; traits are named, not matched by method |
+| `filepath.Abs`, `filepath.EvalSymlinks`, `filepath.WalkDir`, `filepath.Glob` | `os.Abs`, `os.EvalSymlinks`, `os.WalkDir`, `os.Glob`: what asks the system is `os`'s, and `filepath` asks it nothing |
+| `filepath.WalkDir`'s `fn(path, d, err) error`, `SkipDir` and `SkipAll` as errors | `fn(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk`: `Continue`, `SkipDir`, `SkipAll` or `Stop(err)` |
+| `signal.Stop(c)` leaves `c` open and blocking | `signal.Stop(ref c)`: the channel reads `None` once empty, its senders gone |
 | `os.Chtimes(name, atime, mtime)`, a zero `Time` leaving a time as it is | `os.Chtimes(ref path, atime time.Time?, mtime time.Time?)`: `None` leaves it, no zero value stands for none |
 | `os.Getuid()` is -1 on Windows | `os.Getuid()` and `os.Getgid()` are `int?`, `None` on Windows |
 | `fmt.Formatter`, `Format(f fmt.State, verb rune)`, with `f.Width()` and `f.Flag('-')`, and the type padding by hand | `fmt.Formatter`, `Format(f mut fmt.State, verb rune)`, with `Width()` and `Precision()` as `int?`, `Minus()` and `Zero()`, and `Pad` and `PadNumber` applying them; `%+v` is an error's chain, so no `+` reaches a `Format` |

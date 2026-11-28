@@ -6,7 +6,7 @@
 // application data from the environment, and no user or group id.
 package os
 
-import "io"
+import ("io"; "path/filepath"; "strings")
 
 // UserHomeDir returns the user's home directory, the USERPROFILE of the
 // environment, in a string of its own, and on Linux and macOS the HOME.
@@ -63,4 +63,25 @@ func envDir(key ref string) Result<string, io.Error> {
 	}
 
 	return Err(io.NewError("userdir", "", "%"+key+"% is not defined", io.Other))
+}
+
+// abs joins a relative path to the current directory: one that starts
+// at a root, \tmp, is on the current directory's drive, and one on
+// another drive without a root, D:notes.txt, is refused, since that
+// drive's current directory is the system's alone.
+func abs(path ref string, wd ref string) Result<string, io.Error> {
+	volume := filepath.VolumeName(path)
+	if volume.Len() == 0 {
+		if path.Len() > 0 && filepath.IsSeparator(path[0]) {
+			return Ok(filepath.Clean(ref (filepath.VolumeName(wd) + path)))
+		}
+
+		return Ok(filepath.Join(wd, path))
+	}
+
+	if !strings.EqualIgnoreCase(volume, filepath.VolumeName(wd)) {
+		return Err(io.Errno("abs", path, einval))
+	}
+
+	return Ok(filepath.Join(wd, path[volume.Len():]))
 }

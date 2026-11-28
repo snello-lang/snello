@@ -184,6 +184,8 @@ A file's permissions, times and size are set by path: `os.Chmod(ref path, 0o755)
 
 On Windows, which keeps no permissions, `Chmod` sets or clears the read-only flag from the owner's write bit; a symbolic link to a directory is made as a directory link, which takes the target to exist, and making a link takes the right developer mode gives; `Readlink` reads a link or a junction. Every function reports as the rest of the package does: `chmod /x: no such file or directory`, `link OLD NEW: file exists`, `readlink /x: invalid argument` for a file that is no link.
 
+`os.Abs(ref path)` is the path made absolute against the current directory and cleaned, and `os.EvalSymlinks(ref path)` is where the file system arrives when it reads the path, every link followed, element by element, as a path a program shows a user or compares with another; a chain of more than 255 links is an error, as a loop would be.
+
 ### The program and its user
 
 `os.Executable()` is the absolute path of the running program's file, what the system says started it, so a program finds the files beside itself with `filepath.Dir`; the system is asked once, and the string is lent from a block kept for the program's life, as `Getenv`'s are. `os.UserHomeDir()` is the home, `HOME` or `USERPROFILE`; `os.UserConfigDir()` and `os.UserCacheDir()` are where a program keeps its configuration and its cache, under a directory named for it: `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` on Linux, with `.config` and `.cache` under the home as the defaults, `Library/Application Support` and `Library/Caches` on macOS, `AppData` and `LocalAppData` on Windows. A home not defined is an error, and so is a relative `$XDG_CONFIG_HOME`; nothing is made or checked to exist. `os.Getppid()` is the parent's process id, and `os.Getuid()` and `os.Getgid()` the user's and the group's, `int?` that is `None` on Windows, which has no such ids.
@@ -218,7 +220,27 @@ path.Base("/usr/lib/snello")        // "snello"
 path.Ext("notes.tar.gz")            // ".gz"
 dir, file := path.Split("a/b/c.txt") // "a/b/" and "c.txt"
 path.IsAbs("/usr")                  // true
+path.Match("*.txt", "notes.txt")    // Ok(true): the shell's patterns, * and ? stopping at a slash, [a-z] a class
 ```
+
+`filepath` is the same for the system's own paths, a backslash on Windows, and adds `Match` with the system's separator, `SplitList` for a list such as `PATH`, `ToSlash` and `FromSlash` for a path that crosses systems, and `IsLocal`, which says whether a name stays under the current directory, the check a program makes before joining a name it was given to a directory of its own. All of them read strings and ask the system nothing; what asks the system of a path is `os`'s: `os.Abs` makes a path absolute against the current directory, `os.EvalSymlinks` follows every link in it, `os.WalkDir` walks a tree, and `os.Glob` lists the files fitting a pattern, an element at a time:
+
+```go
+for _, name := range ref os.Glob("logs/*.log")? {
+	os.Remove(ref name)?
+}
+
+os.WalkDir(ref root, func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+	match found {
+		Ok(e) => fmt.Println(path, e.IsDir()), // the entry, as its directory listed it
+		Err(e) => fmt.Println("unreadable:", e), // the error that stopped a directory from being read
+	}
+
+	return os.Continue // or os.SkipDir, os.SkipAll, os.Stop(err)
+})?
+```
+
+`WalkDir` gives the directory before what it holds, the entries in the order of their names, each directory read once, and follows no link; its function answers with a `Walk`: `Continue`, `SkipDir` for the directory just given or, after a file, the rest of its directory, `SkipAll`, or `Stop` with an error, which `WalkDir` returns.
 
 `Clean` applies four rules until none applies: several slashes become one, an element that is a single dot is dropped, an element that is two dots is dropped with the element before it, and two dots at the start of a path that starts with a slash are dropped. So a path a user typed that climbs out of where it started shows it after `Clean`, by starting with two dots, which `examples/paths/paths.snello` uses to refuse one.
 

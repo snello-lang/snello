@@ -65,3 +65,8 @@ func xdgDir(key ref string, fallback ref string) Result<string, io.Error> {
 func getuid() int
 
 func getgid() int
+
+// abs joins a relative path to the current directory.
+func abs(path ref string, wd ref string) Result<string, io.Error> {
+	return Ok(filepath.Join(wd, path))
+}

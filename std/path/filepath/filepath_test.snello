@@ -22,3 +22,38 @@ func TestEverySystem() {
 	expect.False(filepath.IsAbs("notes.txt"))
 	expect.Equal(filepath.VolumeName("notes.txt"), "")
 }
+
+// TestMatchEverySystem fits names to patterns with the separator the
+// system has, and reports a pattern that cannot be read.
+func TestMatchEverySystem() {
+	expect.True(expect.IsOk(filepath.Match("*.go", "main.go")))
+	expect.False(expect.IsOk(filepath.Match("*.go", "main.snello")))
+	expect.False(expect.IsOk(filepath.Match("src/*", ref ("src" + string(filepath.Separator) + "a" + string(filepath.Separator) + "b.go"))))
+	expect.True(expect.IsOk(filepath.Match("[a-c]?", "bz")))
+	expect.Equal(ref expect.IsErr(filepath.Match("a[", "a")).Error(), "match a[: syntax error in pattern")
+}
+
+// TestSlashes exchanges the separator and the slash, and SplitList cuts a
+// list at the system's list separator.
+func TestSlashes() {
+	expect.Equal(ref filepath.ToSlash(ref ("a" + string(filepath.Separator) + "b")), "a/b")
+	expect.Equal(ref filepath.FromSlash("a/b"), ref ("a" + string(filepath.Separator) + "b"))
+	expect.Equal(ref filepath.ToSlash(""), "")
+	expect.Len(ref filepath.SplitList(""), 0)
+	expect.EqualSlice(ref filepath.SplitList(ref ("a" + string(filepath.ListSeparator) + "b" + string(filepath.ListSeparator))), ref []string{"a".Clone(), "b".Clone(), "".Clone()})
+}
+
+// TestIsLocalEverySystem holds IsLocal to the rules of every system: a
+// name under the current directory is local, an empty, absolute or
+// escaping path is not.
+func TestIsLocalEverySystem() {
+	expect.True(filepath.IsLocal("docs/a.txt"))
+	expect.True(filepath.IsLocal("a/../b"))
+	expect.True(filepath.IsLocal("."))
+	expect.True(filepath.IsLocal("..a"))
+	expect.False(filepath.IsLocal(""))
+	expect.False(filepath.IsLocal(".."))
+	expect.False(filepath.IsLocal("../secret"))
+	expect.False(filepath.IsLocal("a/../../b"))
+	expect.False(filepath.IsLocal("/etc"))
+}

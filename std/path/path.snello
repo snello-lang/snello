@@ -9,14 +9,35 @@
 // and ask the system nothing.
 //
 // Base, Ext and Split lend parts of the path they are given, with
-// nothing copied. Clean, Join and Dir return a new string.
+// nothing copied. Clean, Join and Dir return a new string. Match tells
+// whether a name fits a pattern of the shell's kind.
 package path
+
+import ("io"; "unicode/utf8")
 
 // The bytes a path is made of: the separator between its elements, and
 // the dot that names the current directory alone and its parent
 // doubled.
 const separator byte = '/'
 const dot byte = '.'
+
+// The bytes of a pattern Match reads: the star that stands for any run
+// of characters but the separator, the question mark for any one, the
+// brackets around a class of characters, the caret that negates it,
+// the dash between the ends of a range and the backslash that quotes
+// the byte after it.
+const star byte = '*'
+const anyOne byte = '?'
+const classOpen byte = '['
+const classClose byte = ']'
+const negation byte = '^'
+const rangeDash byte = '-'
+const escape byte = '\\'
+
+// The error of a pattern Match cannot read, and the call it is reported
+// under.
+const badPattern = "syntax error in pattern"
+const matchOp = "match"
 
 // The paths a function returns when nothing is left of what it was
 // given: the current directory, and the root, a path of a separator
@@ -213,6 +234,230 @@ func Dir(p ref string) string {
 	}
 
 	return Clean(p[0:end])
+}
+
+// Match reports whether name fits pattern, read as a shell reads one:
+// a * stands for any run of characters but a slash, including none, a
+// ? for any one character but a slash, a class in brackets for one of
+// the characters listed or in a range, [a-c] for a, b or c, with a ^
+// after the bracket for one not listed, [^a-c], and a backslash quotes
+// the byte after it, so \* is a star. The whole name must fit; a slash in the name fits only a
+// slash in the pattern. Both are only read. A pattern that cannot be
+// read, a class left open, a range with no end or a backslash with
+// nothing after it, is an error, "match a[: syntax error in pattern",
+// reported whatever the name: a pattern that does not fit is still read
+// to its end, for its syntax.
+//
+//	path.Match("*.txt", "notes.txt")   // Ok(true)
+//	path.Match("a/*", "a/b/c")         // Ok(false): the star stops at a slash
+//	path.Match("[a-c]?", "bz")         // Ok(true)
+func Match(pattern ref string, name ref string) Result<bool, io.Error> {
+	rest := pattern
+	left := name
+	for rest.Len() > 0 {
+		starred, chunk, after := scanChunk(rest)
+		rest = after
+		if starred && chunk.Len() == 0 { // a star ending the pattern fits the rest of the name, up to a slash
+			return Ok(left.IndexByte(separator).IsNone())
+		}
+
+		if taken := matchChunk(chunk, left, pattern)? { // fits here, and the name is used up or the pattern goes on
+			if taken == left.Len() || rest.Len() > 0 {
+				left = left[taken:]
+				continue
+			}
+		}
+
+		if starred { // the star takes one character more each time, up to a slash
+			if skipped := matchAfterStar(chunk, left, rest.Len() == 0, pattern)? {
+				left = left[skipped:]
+				continue
+			}
+		}
+
+		for rest.Len() > 0 { // no fit: the rest of the pattern is still read, for its syntax
+			_, chunk, after = scanChunk(rest)
+			rest = after
+			_ = matchChunk(chunk, "", pattern)?
+		}
+
+		return Ok(false)
+	}
+
+	return Ok(left.Len() == 0)
+}
+
+// scanChunk splits the pattern into the stars it starts with, the chunk
+// up to the next star outside a class, and the rest.
+func scanChunk(pattern ref string) (bool, ref string, ref string) {
+	starred := false
+	p := pattern
+	for p.Len() > 0 && p[0] == star {
+		p = p[1:]
+		starred = true
+	}
+
+	inClass := false
+	i := 0
+	for i < p.Len() {
+		c := p[i]
+		if c == escape && i+1 < p.Len() { // the quoted byte is the chunk's, whatever it is
+			i++
+		} else if c == classOpen {
+			inClass = true
+		} else if c == classClose {
+			inClass = false
+		} else if c == star && !inClass {
+			break
+		}
+
+		i++
+	}
+
+	return (starred, p[0:i], p[i:])
+}
+
+// matchAfterStar tries the chunk at each later start of the name, up to
+// a slash, which a star never crosses, and returns how much of the name
+// the star and the chunk took together, or None when no start fits; a
+// chunk ending the pattern must use the name up.
+func matchAfterStar(chunk ref string, name ref string, last bool, pattern ref string) Result<int?, io.Error> {
+	for i := 0; i < name.Len() && name[i] != separator; i++ {
+		if taken := matchChunk(chunk, name[i+1:], pattern)? {
+			if !last || i+1+taken == name.Len() {
+				return Ok(Some(i + 1 + taken))
+			}
+		}
+	}
+
+	return Ok(None)
+}
+
+// matchChunk fits the chunk, which holds no star, at the start of s and
+// returns how many bytes of s it took, or None when it does not fit;
+// once the fit has failed the chunk is read on without s, for its
+// syntax, so that a bad pattern is reported whatever the name.
+func matchChunk(chunk ref string, s ref string, pattern ref string) Result<int?, io.Error> {
+	c := chunk
+	at := 0
+	failed := false
+	for c.Len() > 0 {
+		if !failed && at == s.Len() {
+			failed = true
+		}
+
+		if c[0] == classOpen {
+			r := rune(0)
+			if !failed {
+				decoded, n := utf8.DecodeRuneInString(s[at:])
+				r = decoded
+				at += n
+			}
+
+			c = c[1:]
+			negated := false
+			if c.Len() > 0 && c[0] == negation {
+				negated = true
+				c = c[1:]
+			}
+
+			found := false
+			ranges := 0
+			for {
+				if c.Len() > 0 && c[0] == classClose && ranges > 0 {
+					c = c[1:]
+					break
+				}
+
+				lo, loLen := classEnd(c, pattern)?
+				hi := lo
+				c = c[loLen:]
+				if c[0] == rangeDash {
+					high, hiLen := classEnd(c[1:], pattern)?
+					hi = high
+					c = c[1+hiLen:]
+				}
+
+				if lo <= r && r <= hi {
+					found = true
+				}
+
+				ranges++
+			}
+
+			if found == negated {
+				failed = true
+			}
+		} else if c[0] == anyOne {
+			if !failed {
+				if s[at] == separator {
+					failed = true
+				}
+
+				_, n := utf8.DecodeRuneInString(s[at:])
+				at += n
+			}
+
+			c = c[1:]
+		} else {
+			if c[0] == escape {
+				c = c[1:]
+				if c.Len() == 0 {
+					return Err(badPatternError(pattern))
+				}
+			}
+
+			if !failed {
+				if c[0] != s[at] {
+					failed = true
+				}
+
+				at++
+			}
+
+			c = c[1:]
+		}
+	}
+
+	if failed {
+		return Ok(None)
+	}
+
+	return Ok(Some(at))
+}
+
+// classEnd reads one end of a range in a class, a character or a
+// quoted one, and returns it with the bytes it took of the chunk; a
+// dash, a closing bracket or nothing where a character is wanted is a
+// bad pattern, and so is a class the pattern ends inside.
+func classEnd(chunk ref string, pattern ref string) Result<(rune, int), io.Error> {
+	if chunk.Len() == 0 || chunk[0] == rangeDash || chunk[0] == classClose {
+		return Err(badPatternError(pattern))
+	}
+
+	quoted := 0
+	if chunk[0] == escape {
+		quoted = 1
+		if chunk.Len() == 1 {
+			return Err(badPatternError(pattern))
+		}
+	}
+
+	r, n := utf8.DecodeRuneInString(chunk[quoted:])
+	if r == utf8.RuneError && n == 1 {
+		return Err(badPatternError(pattern))
+	}
+
+	if quoted+n == chunk.Len() {
+		return Err(badPatternError(pattern))
+	}
+
+	return Ok((r, quoted+n))
+}
+
+// badPatternError is the error of a pattern Match cannot read.
+func badPatternError(pattern ref string) io.Error {
+	return io.NewError(matchOp, pattern.Clone(), badPattern, io.Other)
 }
 
 // isClean reports whether Clean would return p as it is: no element is
