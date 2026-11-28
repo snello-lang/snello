@@ -616,6 +616,22 @@ static inline SN_NODEBUG sn_slice_u8 sn_string_to_bytes(sn_string s) {
     return (sn_slice_u8){ (uint8_t *)c.ptr, c.len, c.cap };
 }
 
+// The searches, splits and trims a []byte has are the string's, run on
+// the bytes as a string view: sn_bytes_as_string views a byte slice,
+// sn_bytes_view gives a string view back as a view of the bytes, its
+// cap SN_VIEW as a sub-slice's is, and sn_bytes_owned takes a string
+// the routine made, never a view of its input, as an owned slice: the
+// empty string, which no routine allocates, becomes the empty slice,
+// and any other result is the routine's own block, handed over. A
+// slice of string views has the layout of a slice of byte views but
+// for each piece's cap, which sn_strings_to_bytes sets to SN_VIEW.
+static inline SN_NODEBUG sn_string sn_bytes_as_string(sn_slice_u8 b) { return (sn_string){ b.ptr, b.len, 0 }; }
+
+static inline SN_NODEBUG sn_slice_u8 sn_bytes_view(sn_string s) { return (sn_slice_u8){ (uint8_t *)s.ptr, s.len, SN_VIEW }; }
+
+sn_slice_u8 sn_bytes_owned(sn_string s);
+void sn_strings_to_bytes(sn_slice *pieces);
+
 // Printing: fmt.Println(a, b) builds the line, a, separator, b and
 // newline, and writes it to standard output at once.
 void sn_print_string(sn_string s);

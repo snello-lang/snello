@@ -973,6 +973,28 @@ bool sn_bytes_equal(sn_slice_u8 a, sn_slice_u8 b) {
 // to b, or -1, by the search a string's Index makes.
 int64_t sn_bytes_find(sn_slice_u8 a, sn_slice_u8 b) { return find(SN_STR(a.ptr, a.len), SN_STR(b.ptr, b.len)); }
 
+// sn_bytes_owned takes a string a routine made as an owned slice of
+// its bytes: the empty string, which no routine allocates, becomes the
+// empty slice, and any other result is the routine's own block, handed
+// over.
+sn_slice_u8 sn_bytes_owned(sn_string s) {
+    if (s.cap == 0) {
+        return (sn_slice_u8){ 0 };
+    }
+
+    return (sn_slice_u8){ (uint8_t *)s.ptr, s.len, s.cap };
+}
+
+// sn_strings_to_bytes makes a slice of string views one of byte views:
+// the layouts are one but for each piece's cap, SN_VIEW for a view of
+// bytes as for a sub-slice.
+void sn_strings_to_bytes(sn_slice *pieces) {
+    sn_slice_u8 *p = pieces->ptr;
+    for (int64_t i = 0; i < pieces->len; i++) {
+        p[i].cap = SN_VIEW;
+    }
+}
+
 // sn_fields splits s around runs of white space, the runes
 // unicode.IsSpace reports, into views of s, as strings.Fields does.
 void sn_fields(sn_string s, sn_slice *out) {

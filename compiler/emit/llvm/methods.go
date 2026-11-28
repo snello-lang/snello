@@ -297,8 +297,81 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		return e.someIndex(e.rt("sn_bytes_find", "i64", e.load("%sn_slice", p), e.looked(x.Args[0], t)), x)
 	}
 
+	if v, ok := e.byteSliceMethod(x, sel, t, p); ok {
+		return v
+	}
+
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on slices")
 	return unit
+}
+
+// byteSliceMethod writes the searches, splits, trims and case a []byte
+// has from the string's, run on the bytes as a string view: a view
+// given back is a view of the bytes, a string made is taken as an
+// owned slice, and a slice of views has each piece marked a view.
+// false for any other method, and for a slice of any other element.
+func (e *Emitter) byteSliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Slice, p string) (value, bool) {
+	if !byteEqual(t.Elem()) {
+		return unit, false
+	}
+
+	name := sel.Sel.Name
+	asString := func(b value) value { // the bytes viewed as a string: the pointer and the length, no cap
+		str := e.insert(value{"%sn_string", "zeroinitializer"}, e.extract(b, 0, "ptr"), 0)
+		return e.insert(str, e.extract(b, 1, "i64"), 1)
+	}
+
+	view := func(str value) value { // a string view back as a view of the bytes, its cap the mark of a view
+		b := e.insert(value{"%sn_slice", "zeroinitializer"}, e.extract(str, 0, "ptr"), 0)
+		return e.insert(e.insert(b, e.extract(str, 1, "i64"), 1), value{"i64", snView}, 2)
+	}
+
+	s := asString(e.load("%sn_slice", p))
+	arg := func(i int) value { return asString(e.looked(x.Args[i], t)) }
+	pieces := func(fn string, args ...value) value {
+		out := e.slot("%sn_slice")
+		e.rt(fn, "void", append(append([]value{s}, args...), value{"ptr", out})...)
+		e.rt("sn_strings_to_bytes", "void", value{"ptr", out})
+		return e.load("%sn_slice", out)
+	}
+
+	switch name {
+	case "FindLast":
+		return e.someIndex(e.rt("sn_string_last_index", "i64", s, arg(0)), x), true
+	case "Count":
+		return e.rt("sn_string_count", "i64", s, arg(0)), true
+	case "HasPrefix":
+		return e.rt("sn_has_prefix", "i1", s, arg(0)), true
+	case "HasSuffix":
+		return e.rt("sn_has_suffix", "i1", s, arg(0)), true
+	case "Trim", "TrimSpace":
+		return view(e.rt("sn_trim", "%sn_string", s)), true
+	case "TrimPrefix":
+		return view(e.rt("sn_trim_prefix", "%sn_string", s, arg(0))), true
+	case "TrimSuffix":
+		return view(e.rt("sn_trim_suffix", "%sn_string", s, arg(0))), true
+	case "ToUpper":
+		return e.rt("sn_bytes_owned", "%sn_slice", e.rt("sn_to_upper", "%sn_string", s)), true
+	case "ToLower":
+		return e.rt("sn_bytes_owned", "%sn_slice", e.rt("sn_to_lower", "%sn_string", s)), true
+	case "Fields":
+		return pieces("sn_fields"), true
+	case "Lines":
+		return pieces("sn_lines"), true
+	case "Split":
+		return pieces("sn_split", arg(0)), true
+	case "SplitN":
+		return pieces("sn_split_n", arg(0), e.valueTo(x.Args[1], types.Typ[types.Int])), true
+	case "SplitOnce":
+		before, after := e.slot("%sn_string"), e.slot("%sn_string")
+		has := e.rt("sn_split_once", "i1", s, arg(0), value{"ptr", before}, value{"ptr", after})
+		pair := e.irType(lower.ValueType(e.typeOf(x)).Underlying().(*types.Option).Elem(), x.Pos())
+		tuple := e.insert(value{pair, "zeroinitializer"}, view(e.load("%sn_string", before)), 0)
+		tuple = e.insert(tuple, view(e.load("%sn_string", after)), 1)
+		return e.optionOf(e.typeOf(x), has, tuple, x.Pos()), true
+	}
+
+	return unit, false
 }
 
 // lessAdapter returns the name of the function that lets the runtime

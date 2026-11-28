@@ -6,6 +6,7 @@ package c
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/snello-lang/snello/compiler/ast"
 	"github.com/snello-lang/snello/compiler/emit/lower"
@@ -222,8 +223,76 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 		return e.someIndex(at, x)
 	}
 
+	if v := e.byteSliceMethod(x, sel, t, place); v != "" {
+		return v
+	}
+
 	e.unsupported(x.Pos(), "the method "+sel.Sel.Name+" on slices")
 	return "0"
+}
+
+// byteSliceMethod writes the searches, splits, trims and case a []byte
+// has from the string's, run on the bytes as a string view: a view
+// given back is a view of the bytes, a string made is taken as an
+// owned slice, and a slice of views has each piece marked a view by a
+// second call in the same expression, the two joined by a comma. ""
+// for any other method, and for a slice of any other element.
+func (e *Emitter) byteSliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.Slice, place string) string {
+	if !byteEqual(t.Elem()) {
+		return ""
+	}
+
+	name := sel.Sel.Name
+	s := "sn_bytes_as_string(" + place + ")"
+	arg := func(i int) string { return "sn_bytes_as_string(" + e.looked(x.Args[i], t) + ")" }
+	pieces := func(call string, args ...string) string {
+		return e.into(e.typeOf(x), x.Pos(), func(out string) string {
+			return call + "(" + strings.Join(append(append([]string{s}, args...), out), ", ") + "), sn_strings_to_bytes(" + out + ")"
+		})
+	}
+
+	switch name {
+	case "FindLast":
+		at := e.temp()
+		e.line("int64_t " + at + " = sn_string_last_index(" + s + ", " + arg(0) + ");")
+		return e.someIndex(at, x)
+	case "Count":
+		return "sn_string_count(" + s + ", " + arg(0) + ")"
+	case "HasPrefix":
+		return "sn_has_prefix(" + s + ", " + arg(0) + ")"
+	case "HasSuffix":
+		return "sn_has_suffix(" + s + ", " + arg(0) + ")"
+	case "Trim", "TrimSpace":
+		return "sn_bytes_view(sn_trim(" + s + "))"
+	case "TrimPrefix":
+		return "sn_bytes_view(sn_trim_prefix(" + s + ", " + arg(0) + "))"
+	case "TrimSuffix":
+		return "sn_bytes_view(sn_trim_suffix(" + s + ", " + arg(0) + "))"
+	case "ToUpper":
+		return "sn_bytes_owned(sn_to_upper(" + s + "))"
+	case "ToLower":
+		return "sn_bytes_owned(sn_to_lower(" + s + "))"
+	case "Fields":
+		return pieces("sn_fields")
+	case "Lines":
+		return pieces("sn_lines")
+	case "Split":
+		return pieces("sn_split", arg(0))
+	case "SplitN":
+		return pieces("sn_split_n", arg(0), e.valueTo(x.Args[1], types.Typ[types.Int]))
+	case "SplitOnce":
+		out, before, after := e.temp(), e.temp(), e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + " = {0};")
+		e.line("sn_string " + before + ", " + after + ";")
+		e.line("if (sn_split_once(" + s + ", " + arg(0) + ", &" + before + ", &" + after + ")) {")
+		e.line(out + ".has = true;")
+		e.line(out + ".val.e0 = sn_bytes_view(" + before + ");")
+		e.line(out + ".val.e1 = sn_bytes_view(" + after + ");")
+		e.line("}")
+		return out
+	}
+
+	return ""
 }
 
 // lessAdapter returns the name of the function that lets the runtime

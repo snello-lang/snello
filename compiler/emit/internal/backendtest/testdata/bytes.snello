@@ -1,0 +1,43 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// A byte slice's text methods, the string's run on the bytes: Find and
+// FindLast of a run, Count, HasPrefix and HasSuffix, the trims lending
+// views of the slice, ToUpper and ToLower making owned slices, and the
+// splits lending views, each piece a slice that is indexed and
+// sub-sliced; Index and Contains stay the slice's, of one byte.
+
+package main
+
+import "fmt"
+
+func main() {
+	b := []byte("  the cat sat on the mat  ")
+	fmt.Println(b.Find([]byte("at")), b.FindLast([]byte("at")), b.Find([]byte("dog")), b.Count([]byte("at")), b.Count([]byte("")))
+	fmt.Println(b.HasPrefix([]byte("  the")), b.HasSuffix([]byte("mat  ")), b.HasPrefix([]byte("cat")), b.Index(ref 'c'), b.Contains(ref 'z'))
+	t := b.Trim()
+	fmt.Println(len(t), string(t), string(b.TrimSpace()), len(t.TrimPrefix([]byte("the "))), string(t.TrimSuffix([]byte(" mat"))), string(t.TrimPrefix([]byte("dog"))))
+	up := t.ToUpper()
+	up.Push('!')
+	fmt.Println(string(up), string(up.ToLower()), len([]byte("").ToUpper()))
+	fields := t.Fields()
+	fmt.Println(len(fields), string(fields[0]), string(fields[5]), fields[2][0], string(fields[1][1:]))
+	for piece := range t.Split([]byte(" ")) {
+		fmt.Printf("%d ", len(piece))
+	}
+
+	fmt.Println(len(t.SplitN([]byte(" "), 2)), string(t.SplitN([]byte(" "), 2)[1]), len(t.Split([]byte(""))))
+	if (head, rest) := t.SplitOnce([]byte(" sat ")) {
+		fmt.Println(string(head), "|", string(rest))
+	}
+
+	fmt.Println(t.SplitOnce([]byte("dog")).IsNone())
+	src := []byte("a\r\nbc\n\nd\n")
+	lines := src.Lines()
+	fmt.Println(len(lines), string(lines[0]), len(lines[2]), string(lines[3]))
+	text := []byte("Straße und ÉCOLE")
+	fmt.Println(string(text.ToUpper()), string(text.ToLower()), len(text.Fields()))
+	empty := []byte{}
+	fmt.Println(len(empty.Fields()), len(empty.Lines()), len(empty.Trim()), empty.Find([]byte("")), empty.HasPrefix([]byte("")))
+}

@@ -134,13 +134,34 @@ func sliceMethod(t *Slice, name string) *Signature {
 }
 
 // byteSliceMethod: what a []byte has beside every slice's methods, the
-// comparison and the search a string has for text.
+// comparison, and the searches, splits, trims and case a string has
+// for text, each by the string's algorithm over the bytes; Index and
+// Contains stay the slice's, of one byte, and Find and FindLast find a
+// run.
 func byteSliceMethod(t *Slice, name string) *Signature {
 	switch name {
 	case "Equal":
 		return reads([]*Var{param("o", ref(t))}, Typ[Bool])
-	case "Find":
-		return reads([]*Var{param("sub", ref(t))}, NewOption(Typ[Int]))
+	case "Find", "FindLast":
+		return reads([]*Var{param("t", ref(t))}, NewOption(Typ[Int]))
+	case "Count":
+		return reads([]*Var{param("t", ref(t))}, Typ[Int])
+	case "HasPrefix", "HasSuffix":
+		return reads([]*Var{param("t", ref(t))}, Typ[Bool])
+	case "Trim", "TrimSpace":
+		return reads(nil, ref(t))
+	case "TrimPrefix", "TrimSuffix":
+		return reads([]*Var{param("p", ref(t))}, ref(t))
+	case "ToUpper", "ToLower":
+		return reads(nil, t)
+	case "Fields", "Lines":
+		return reads(nil, NewSlice(ref(t)))
+	case "Split":
+		return reads([]*Var{param("sep", ref(t))}, NewSlice(ref(t)))
+	case "SplitN":
+		return reads([]*Var{param("sep", ref(t)), param("n", Typ[Int])}, NewSlice(ref(t)))
+	case "SplitOnce":
+		return reads([]*Var{param("sep", ref(t))}, NewOption(NewTuple(ref(t), ref(t))))
 	}
 
 	return nil

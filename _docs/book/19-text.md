@@ -147,6 +147,20 @@ fmt.Println(strings.EqualIgnoreCase("Straße", "STRASSE"), strings.EqualIgnoreCa
 
 `strings.IndexRune(s, r)` gives the byte offset of the first `r`, or -1, and `ContainsRune` says whether there is one. The functions that take a predicate on runes, `func(rune) bool`, work with any of `unicode`'s: `IndexFunc` and `LastIndexFunc` find the first and last rune for which it holds; `TrimFunc`, `TrimLeftFunc` and `TrimRightFunc` lend the string without such runes at its ends; `FieldsFunc` splits around runs of them, each piece a borrow into the string. `strings.Map(f, s)` gives a new string of each rune passed through `f`, dropping a rune for which `f` returns a negative value.
 
+## Text in a `[]byte`
+
+A parser often has bytes it has not made a string of, read from a file or a socket, and the string's text methods are methods of `[]byte` too, each by the same algorithm over the bytes read as UTF-8: `Find` and `FindLast` give the offset of a run of bytes as `int?`, `Count`, `HasPrefix` and `HasSuffix` ask, `Trim`, `TrimSpace`, `TrimPrefix` and `TrimSuffix` lend a view of the slice, `ToUpper` and `ToLower` make a new slice, and `Fields`, `Lines`, `Split`, `SplitN` and `SplitOnce` lend views, so a parser cuts its input up with no string between.
+
+```go
+line := []byte("  key = value  ")
+if (k, v) := line.Trim().SplitOnce([]byte(" = ")) {
+	fmt.Println(string(k), string(v))   // key value
+}
+for field := range line.Fields() { ... } // key, =, value
+```
+
+`Index` and `Contains` on a `[]byte` stay the slice's, of one byte, which is why the run's search is `Find`: `line.Index(ref '=')` and `line.Find([]byte("="))` give the same offset. A view a method lends borrows the slice, so the slice cannot change while it is held, as a view of a string cannot.
+
 ## The encodings: `unicode/utf8` and `unicode/utf16`
 
 `unicode/utf8` reads and writes runes in UTF-8, for a program working with bytes. It is imported by its path and named by its last element, `utf8`:

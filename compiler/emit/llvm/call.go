@@ -20,6 +20,10 @@ import (
 // the function owns its elements but not its buffer.
 const snCaller = "-9223372036854775807"
 
+// snView is the runtime's SN_VIEW, INT64_MIN: the capacity of a slice
+// that lends another's bytes, a sub-slice's and a byte view's.
+const snView = "-9223372036854775808"
+
 // Calls: of the program's functions and methods, of generic instances,
 // through a bound or a trait value, of the operators a declared type
 // defines, conversions, and calls into the runtime under the
