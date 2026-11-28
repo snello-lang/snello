@@ -4,7 +4,7 @@
 
 package heap_test
 
-import ("expect"; "heap"; "testing")
+import ("expect"; "fmt"; "heap"; "iter"; "sort"; "testing")
 
 // TestPushPop pushes elements out of order and pops them least first,
 // then None once the heap is empty.
@@ -63,4 +63,139 @@ func TestReverse() {
 	expect.True(heap.Reverse<int>{V: 1}.Cmp(ref heap.Reverse<int>{V: 2}) == Greater)
 	words := heap.From([]heap.Reverse<string>{heap.Reverse<string>{V: "b".Clone()}, heap.Reverse<string>{V: "c".Clone()}, heap.Reverse<string>{V: "a".Clone()}})
 	expect.Equal(ref expect.IsSome(words.Pop()).V, "c")
+}
+
+// Extend adds elements and restores the order whether it sifts the new
+// ones up, a few next to many, or builds the heap again, many next to a
+// few; the elements then pop least first either way.
+func TestExtend() {
+	for _, sizes := range [][2]int{{100, 3}, {3, 100}, {50, 50}, {0, 20}, {20, 0}, {3000, 400}, {3000, 2}} {
+		h := heap.New<int>()
+		model := []int{}
+		for i := 0; i < sizes[0]; i++ {
+			v := (i * 7919) % 1009
+			h.Push(v)
+			model.Push(v)
+		}
+
+		added := []int{}
+		for i := 0; i < sizes[1]; i++ {
+			added.Push((i * 104729) % 997)
+		}
+
+		model.Extend(ref added)
+		h.Extend(mut iter.Over(ref added).Map(owned))
+		expect.Equal(ref h.Len(), ref len(model))
+		expectPopsSorted(mut h, mut model)
+	}
+}
+
+// Retain drops the elements refused, wherever they lie, and leaves a
+// heap that pops least first; refusing nothing moves nothing, and
+// refusing everything empties it.
+func TestRetain() {
+	h := heap.From([]int{9, 4, 7, 1, 8, 2, 6, 3, 5})
+	h.Retain(func(v ref int) bool { return *v%2 == 1 })
+	expect.Equal(ref h.Len(), ref 5)
+	model := []int{9, 7, 1, 3, 5}
+	expectPopsSorted(mut h, mut model)
+	h2 := heap.From([]int{3, 1, 2})
+	h2.Retain(func(v ref int) bool { return true })
+	expect.Equal(ref h2.Len(), ref 3)
+	h2.Retain(func(v ref int) bool { return false })
+	expect.True(h2.IsEmpty())
+	h2.Push(5)
+	expect.Equal(ref expect.IsSome(h2.Pop()), ref 5)
+	words := heap.From([]string{"pear".Clone(), "fig".Clone(), "apple".Clone(), "kiwi".Clone()})
+	words.Retain(func(w ref string) bool { return w.Len() > 3 })
+	expect.Equal(ref expect.IsSome(words.Pop()), "apple")
+	expect.Equal(ref expect.IsSome(words.Pop()), "kiwi")
+	expect.Equal(ref expect.IsSome(words.Pop()), "pear")
+	expect.IsNone(words.Pop())
+}
+
+// Drain hands every element out and leaves the heap empty, pulled to
+// the end or not.
+func TestDrain() {
+	h := heap.From([]int{5, 1, 4, 2, 3})
+	all := h.Drain().Collect()
+	expect.Equal(ref len(all), ref 5)
+	sort.Sort(mut all)
+	expect.Equal(ref fmt.Sprint(all), "[1 2 3 4 5]")
+	expect.True(h.IsEmpty())
+	h.Push(7)
+	h.Push(8)
+	{
+		d := h.Drain()
+		expect.True(d.Next().IsSome())
+	} // d dropped here, the rest with it
+
+	expect.True(h.IsEmpty())
+	expect.IsNone(h.Pop())
+	words := heap.From([]string{"b".Clone(), "a".Clone()})
+	n := 0
+	for w := range words.Drain() {
+		n += w.Len()
+	}
+
+	expect.Equal(ref n, ref 2)
+	expect.True(words.IsEmpty())
+}
+
+// IntoSorted turns the heap into a slice ordered least first, in place.
+func TestIntoSorted() {
+	h := heap.From([]int{5, 1, 4, 2, 3, 9, 0, 7, 8, 6})
+	expect.Equal(ref fmt.Sprint(h.IntoSorted()), "[0 1 2 3 4 5 6 7 8 9]")
+	expect.Equal(ref fmt.Sprint(heap.New<int>().IntoSorted()), "[]")
+	expect.Equal(ref fmt.Sprint(heap.From([]int{1}).IntoSorted()), "[1]")
+	words := heap.From([]string{"pear".Clone(), "fig".Clone(), "apple".Clone()})
+	expect.Equal(ref fmt.Sprint(words.IntoSorted()), "[apple fig pear]")
+	many := heap.New<int>()
+	model := []int{}
+	for i := 0; i < 500; i++ {
+		v := (i * 7919) % 613
+		many.Push(v)
+		model.Push(v)
+	}
+
+	sort.Sort(mut model)
+	expect.Equal(ref fmt.Sprint(many.IntoSorted()), ref fmt.Sprint(model))
+}
+
+// PeekMut lends the least element for changing and puts it back in
+// place when it goes: made greater it moves down, made less it stays.
+func TestPeekMut() {
+	h := heap.From([]int{1, 5, 3, 8, 6})
+	if top := h.PeekMut() {
+		expect.Equal(top.Get(), ref 1)
+		*top.Get() = 7
+	} else {
+		expect.Fail("no top")
+	}
+
+	if v := h.Peek() { expect.Equal(v, ref 3) } else { expect.Fail("no top") }
+	if top := h.PeekMut() {
+		*top.Get() = 0
+	}
+
+	if v := h.Peek() { expect.Equal(v, ref 0) } else { expect.Fail("no top") }
+	model := []int{0, 5, 7, 8, 6}
+	expectPopsSorted(mut h, mut model)
+	expect.True(h.PeekMut().IsNone())
+}
+
+// expectPopsSorted pops h to the end and expects the elements least
+// first, the same as model sorted; both are emptied.
+func expectPopsSorted(h mut heap.Heap<int>, model mut []int) {
+	sort.Sort(model)
+	for _, want := range model {
+		expect.Equal(ref expect.IsSome(h.Pop()), want)
+	}
+
+	expect.IsNone(h.Pop())
+}
+
+// owned copies a lent int, for a Map to owned items.
+func owned(x ref int) int {
+	return *x
 }
