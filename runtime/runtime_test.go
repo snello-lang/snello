@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -4222,8 +4223,11 @@ int main(void) {
 // lowered for all four, it adds to the same work listed, so the
 // comparison holds on a machine of shared cores. Processor time is
 // measured, not the clock's, so that a machine busy with other tests
-// does not look like a shared word, and of three runs the least of
-// each time is kept, since other work only ever adds to a time.
+// does not look like a shared word, and of three runs the middle
+// ratio is kept, each run's four times compared among themselves, so
+// that one time a machine's clock misreports, too small or too large,
+// decides nothing: a virtualized runner has reported a thread's time
+// at a thousandth of its worth.
 func TestAllocScales(t *testing.T) {
 	if runtime.NumCPU() < 4 {
 		t.Skip("fewer than four processors")
@@ -4305,31 +4309,32 @@ int main(void) {
 }
 `
 	bin := buildProbeAs(t, filepath.Join(t.TempDir(), "scales"), probe, "-O2")
-	least := [4]float64{math.Inf(1), math.Inf(1), math.Inf(1), math.Inf(1)} // allocating on one thread and four, listing on one and four
+	var ratios []float64 // each run's growth of allocating's time against listing's
 	for range 3 {
 		out, err := testproc.Command(bin).Output()
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		var times [4]float64
+		var times [4]float64 // allocating on one thread and four, listing on one and four
 		if _, err := fmt.Sscanf(string(out), "%f %f %f %f", &times[0], &times[1], &times[2], &times[3]); err != nil {
 			t.Fatalf("%q: %v", out, err)
 		}
 
-		for i, v := range times {
+		for _, v := range times {
 			if !(v > 0) || math.IsInf(v, 0) {
 				t.Fatalf("%q: a processor time that is not a positive number", out)
 			}
-
-			least[i] = min(least[i], v)
 		}
+
+		allocating, listing := times[1]/(4*times[0]), times[3]/(4*times[2])
+		t.Logf("four threads against one: allocating %.2f times, listing %.2f times", allocating, listing)
+		ratios = append(ratios, allocating/listing)
 	}
 
-	allocating, listing := least[1]/(4*least[0]), least[3]/(4*least[2])
-	t.Logf("four threads against one: allocating %.2f times, listing %.2f times", allocating, listing)
-	if allocating/listing > allocScalesLimit {
-		t.Errorf("a processor's time to allocate, four threads against one: %.2f times, %.2f times what listing's grows, want under %.1f", allocating, allocating/listing, allocScalesLimit)
+	slices.Sort(ratios)
+	if middle := ratios[len(ratios)/2]; middle > allocScalesLimit {
+		t.Errorf("a processor's time to allocate, four threads against one, grows %.2f times what listing's grows in the middle run, want under %.1f", middle, allocScalesLimit)
 	}
 }
 
