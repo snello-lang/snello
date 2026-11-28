@@ -59,7 +59,8 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 		"sync.rawNew", "sync.rawMut", "sync.rawTake":
 		return e.cellCall(x, key)
 	case "deque.rawAlloc", "deque.rawFree", "deque.rawPut", "deque.rawTake", "deque.rawRef", "deque.rawMut", "deque.rawMove",
-		"btree.rawAlloc", "btree.rawFree", "btree.rawPut", "btree.rawTake", "btree.rawRef", "btree.rawMut", "btree.rawMove":
+		"btree.rawAlloc", "btree.rawFree", "btree.rawPut", "btree.rawTake", "btree.rawRef", "btree.rawMut", "btree.rawMove",
+		"btree.rawWord", "btree.rawSetWord":
 		return e.rawCall(x, rawName(key))
 	case "testing.Logf", "expect.Failf": // the format read at compile time as fmt's are, the line handed to the unformatted function with the place of this call
 		fn := e.info.Uses[x.Fun.(*ast.SelectorExpr).Sel].(*types.Func)
@@ -366,8 +367,10 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 // which: the deque's head and count, and a node's count, name the slots
 // that hold one, so a slot is written only when it holds nothing, read
 // only when it holds one, and the elements are moved, not copied. The
-// key is the primitive's name, the same in both packages. rawAlloc
-// makes a block of n slots, n above zero, and rawFree
+// key is the primitive's name, the same in both packages. A block
+// carries a few words of its holder's before its slots, which rawWord
+// reads and rawSetWord writes, a node's count and its other blocks.
+// rawAlloc makes a block of n slots, n above zero, and rawFree
 // frees one; rawPut moves an element into a slot and rawTake moves one
 // out; rawRef and rawMut lend the element in a slot, as a map's Get and
 // GetMut lend an entry, the borrow tied to the owner; rawMove moves n
@@ -384,7 +387,18 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) string {
 	}
 
 	if key == "rawFree" {
-		e.line("sn_free((void *)(intptr_t)(" + e.operands(x.Args, ints(1))[0] + "));")
+		e.line("sn_free_slots((void *)(intptr_t)(" + e.operands(x.Args, ints(1))[0] + "));")
+		return ""
+	}
+
+	if key == "rawWord" { // a word of the block's header, before its slots
+		args := e.operands(x.Args, ints(2))
+		return "(*sn_slot_word((void *)(intptr_t)(" + args[0] + "), " + args[1] + "))"
+	}
+
+	if key == "rawSetWord" {
+		args := e.operands(x.Args, ints(3))
+		e.line("*sn_slot_word((void *)(intptr_t)(" + args[0] + "), " + args[1] + ") = " + args[2] + ";")
 		return ""
 	}
 
@@ -397,7 +411,7 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) string {
 	switch key {
 	case "rawAlloc":
 		n := e.operands(x.Args, ints(1))[0]
-		return "((sn_int)(intptr_t)sn_alloc_elems(" + n + ", sizeof(" + ct + ")))"
+		return "((sn_int)(intptr_t)sn_alloc_slots(" + n + ", sizeof(" + ct + ")))"
 	case "rawPut":
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int], t})
 		e.line(slots(args[0]) + "[" + args[1] + "] = " + args[2] + ";")

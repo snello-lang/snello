@@ -566,8 +566,10 @@ func capacityFor(n int) int {
 	return c
 }
 
-// rawAlloc makes a block of n slots of T, n above zero, and returns its
-// address. The compiler writes it for this package alone.
+// rawAlloc makes a block of n slots of T, n above zero, with a few words
+// of a header before them, which a btree's node keeps its count in and
+// a deque leaves unread, and returns the first slot's address. The
+// compiler writes it for this package and the btree's.
 func rawAlloc<T>(n int) int
 
 // rawFree frees the block of slots at p. The compiler writes it.

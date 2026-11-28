@@ -483,6 +483,14 @@ void sn_init(int argc, char **argv);
 
 void sn_slice_make(sn_slice *out, int64_t len, int64_t cap, size_t size);
 void *sn_alloc_elems(int64_t n, size_t size);
+// A block of slots may carry SN_SLOT_WORDS words of its holder's before
+// its first slot, which sn_alloc_slots makes and sn_free_slots frees by
+// the first slot's address; sn_slot_word is the i-th word's place.
+#define SN_SLOT_WORDS 4
+#define SN_SLOT_HEADER ((size_t)SN_SLOT_WORDS * sizeof(int64_t))
+void *sn_alloc_slots(int64_t n, size_t size);
+void sn_free_slots(void *p);
+static inline SN_NODEBUG int64_t *sn_slot_word(void *p, int64_t i) { return (int64_t *)p - SN_SLOT_WORDS + i; }
 // SN_PUSH_FAST and SN_POP_FAST say when the C backend's Push and Pop
 // write in place, without the runtime: a push with room, and a pop of a
 // slice that owns its elements and has one; a sub-slice's capacity,

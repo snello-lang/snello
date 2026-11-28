@@ -157,7 +157,7 @@ var lowered = map[string]bool{
 	"deque.rawAlloc": true, "deque.rawFree": true, "deque.rawPut": true, "deque.rawTake": true,
 	"deque.rawRef": true, "deque.rawMut": true, "deque.rawMove": true,
 	"btree.rawAlloc": true, "btree.rawFree": true, "btree.rawPut": true, "btree.rawTake": true,
-	"btree.rawRef": true, "btree.rawMut": true, "btree.rawMove": true,
+	"btree.rawRef": true, "btree.rawMut": true, "btree.rawMove": true, "btree.rawWord": true, "btree.rawSetWord": true,
 	"testing.Catch": true, "testing.Logf": true, "expect.Failf": true,
 }
 

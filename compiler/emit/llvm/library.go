@@ -15,6 +15,10 @@ import (
 	"github.com/snello-lang/snello/compiler/types"
 )
 
+// slotWords is the words of a raw block's header, before its slots: the
+// runtime's SN_SLOT_WORDS, which a test holds it equal to.
+const slotWords = 4
+
 // The functions the library declares without a body and the compiler
 // writes are listed in emit/lower, with the reason for each; this file
 // writes them in IR: fmt's printing as the runtime's printers over the
@@ -57,7 +61,8 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) value {
 		"sync.rawNew", "sync.rawMut", "sync.rawTake":
 		return e.cellCall(x, key)
 	case "deque.rawAlloc", "deque.rawFree", "deque.rawPut", "deque.rawTake", "deque.rawRef", "deque.rawMut", "deque.rawMove",
-		"btree.rawAlloc", "btree.rawFree", "btree.rawPut", "btree.rawTake", "btree.rawRef", "btree.rawMut", "btree.rawMove":
+		"btree.rawAlloc", "btree.rawFree", "btree.rawPut", "btree.rawTake", "btree.rawRef", "btree.rawMut", "btree.rawMove",
+		"btree.rawWord", "btree.rawSetWord":
 		return e.rawCall(x, rawName(key))
 	case "testing.Logf", "expect.Failf": // the format read at compile time as fmt's are, the line handed to the unformatted function with the place of this call
 		fn := e.info.Uses[x.Fun.(*ast.SelectorExpr).Sel].(*types.Func)
@@ -423,8 +428,10 @@ func (e *Emitter) bitOp(x *ast.CallExpr, op string, width int) value {
 // which: the deque's head and count, and a node's count, name the slots
 // that hold one, so a slot is written only when it holds nothing, read
 // only when it holds one, and the elements are moved, not copied. The
-// key is the primitive's name, the same in both packages. rawAlloc
-// makes a block of n slots, n above zero, and rawFree
+// key is the primitive's name, the same in both packages. A block
+// carries slotWords words of its holder's before its slots, which
+// rawWord reads and rawSetWord writes, a node's count and its other
+// blocks. rawAlloc makes a block of n slots, n above zero, and rawFree
 // frees one; rawPut moves an element into a slot and rawTake moves one
 // out; rawRef and rawMut lend the element in a slot, as a map's Get and
 // GetMut lend an entry, the borrow tied to the owner; rawMove moves n
@@ -442,7 +449,23 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) value {
 
 	at := func(p value) value { return e.op("inttoptr i64 "+p.s+" to ptr", "ptr") }
 	if key == "rawFree" {
-		e.rt("sn_free", "void", at(e.operands(x.Args, ints(1))[0]))
+		e.rt("sn_free_slots", "void", at(e.operands(x.Args, ints(1))[0]))
+		return unit
+	}
+
+	word := func(p, i value) string { // the i-th word of the block's header, before its slots
+		before := e.op("sub i64 "+i.s+", "+strconv.Itoa(slotWords), "i64")
+		return e.elem("i64", at(p).s, before.s)
+	}
+
+	if key == "rawWord" {
+		args := e.operands(x.Args, ints(2))
+		return e.load("i64", word(args[0], args[1]))
+	}
+
+	if key == "rawSetWord" {
+		args := e.operands(x.Args, ints(3))
+		e.store(args[2], word(args[0], args[1]))
 		return unit
 	}
 
@@ -455,7 +478,7 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) value {
 	switch key {
 	case "rawAlloc":
 		n := e.operands(x.Args, ints(1))[0]
-		p := e.rt("sn_alloc_elems", "ptr", n, size) // the count checked against the address space before the product
+		p := e.rt("sn_alloc_slots", "ptr", n, size) // the count checked against the address space before the product; the header's words before the slots
 		return e.op("ptrtoint ptr "+p.s+" to i64", "i64")
 	case "rawPut":
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int], t})
