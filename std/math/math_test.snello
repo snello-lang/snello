@@ -211,3 +211,211 @@ func BenchmarkPow() {
 	x := 1.0001
 	for testing.Loop() { x = math.Pow(x, 0.999) + 0.5 }
 }
+
+// The bits of a float and back: the encoding of one, a negative zero,
+// the smallest subnormal, and a round trip through both widths.
+func TestFloatBits() {
+	expect.Equal(ref math.Float64bits(1.0), ref u64(0x3ff0000000000000))
+	expect.Equal(ref math.Float64bits(-0.0), ref u64(0x8000000000000000))
+	expect.Equal(ref math.Float64bits(math.SmallestNonzeroFloat64), ref u64(1))
+	expect.Equal(ref math.Float64frombits(0x4000000000000000), ref 2.0)
+	expect.Equal(ref math.Float64frombits(math.Float64bits(math.Pi)), ref math.Pi)
+	expect.Equal(ref math.Float32bits(f32(1.0)), ref u32(0x3f800000))
+	expect.Equal(ref math.Float32frombits(0x40000000), ref f32(2.0))
+	expect.True(math.IsNaN(math.Float64frombits(0x7ff8000000000001)))
+	bits := math.Float64bits // as a value
+	expect.Equal(ref bits(0.5), ref u64(0x3fe0000000000000))
+}
+
+// Frexp and Ldexp take a float apart into a fraction and a power of two
+// and put it together, with the special cases settled.
+func TestFrexpLdexp() {
+	frac, exp := math.Frexp(8)
+	expect.Equal(ref frac, ref 0.5)
+	expect.Equal(ref exp, ref 4)
+	frac, exp = math.Frexp(-0.75)
+	expect.Equal(ref frac, ref -0.75)
+	expect.Equal(ref exp, ref 0)
+	frac, exp = math.Frexp(0)
+	expect.Equal(ref frac, ref 0.0)
+	expect.Equal(ref exp, ref 0)
+	frac, exp = math.Frexp(math.Inf(1))
+	expect.True(math.IsInf(frac, 1))
+	expect.Equal(ref exp, ref 0)
+	frac, exp = math.Frexp(math.NaN())
+	expect.True(math.IsNaN(frac))
+	expect.Equal(ref exp, ref 0)
+	frac, exp = math.Frexp(math.SmallestNonzeroFloat64)
+	expect.Equal(ref frac, ref 0.5)
+	expect.Equal(ref exp, ref -1073)
+	expect.Equal(ref math.Ldexp(0.5, 4), ref 8.0)
+	expect.Equal(ref math.Ldexp(frac, exp), ref math.SmallestNonzeroFloat64)
+	expect.True(math.IsInf(math.Ldexp(1, 5000), 1))
+	expect.Equal(ref math.Ldexp(1, -5000), ref 0.0)
+	expect.True(math.IsInf(math.Ldexp(-1, 9223372036854775807), -1)) // an exponent past any int the library takes
+	expect.Equal(ref math.Ldexp(1, -9223372036854775808), ref 0.0)
+}
+
+// Modf splits a float into its whole part and its fraction, both with
+// its sign; Remainder and FMA are the IEEE operations.
+func TestModfRemainderFMA() {
+	whole, frac := math.Modf(-2.5)
+	expect.Equal(ref whole, ref -2.0)
+	expect.Equal(ref frac, ref -0.5)
+	whole, frac = math.Modf(3)
+	expect.Equal(ref whole, ref 3.0)
+	expect.Equal(ref frac, ref 0.0)
+	whole, frac = math.Modf(math.Inf(-1))
+	expect.True(math.IsInf(whole, -1))
+	expect.True(math.IsNaN(frac))
+	whole, frac = math.Modf(math.NaN())
+	expect.True(math.IsNaN(whole))
+	expect.True(math.IsNaN(frac))
+	expect.Equal(ref math.Remainder(7, 4), ref -1.0) // 7 is nearer to 8 than to 4
+	expect.Equal(ref math.Remainder(5, 2), ref 1.0)  // a tie goes to the even multiple, 4
+	expect.Equal(ref math.Remainder(-7, 4), ref 1.0)
+	expect.True(math.IsNaN(math.Remainder(1, 0)))
+	expect.True(math.IsNaN(math.Remainder(math.Inf(1), 2)))
+	expect.Equal(ref math.Remainder(3, math.Inf(1)), ref 3.0)
+	expect.Equal(ref math.FMA(2, 3, 4), ref 10.0)
+	expect.Equal(ref math.FMA(0.1, 10, -1), ref 5.551115123125783e-17) // rounded once: the product's excess over one survives, where 0.1*10 - 1 written out is 0
+}
+
+// The exponentials, logarithms and hyperbolic functions near their
+// hard points, and the gamma and error functions at known values.
+func TestMoreFunctions() {
+	expect.Equal(ref math.Expm1(0), ref 0.0)
+	expect.True(math.Abs(math.Expm1(1e-10)-1.00000000005e-10) < 1e-25)
+	expect.Equal(ref math.Expm1(math.Inf(-1)), ref -1.0)
+	expect.Equal(ref math.Log1p(0), ref 0.0)
+	expect.True(math.Abs(math.Log1p(1e-10)-9.9999999995e-11) < 1e-25)
+	expect.True(math.IsInf(math.Log1p(-1), -1))
+	expect.True(math.IsNaN(math.Log1p(-2)))
+	expect.Equal(ref math.Exp2(10), ref 1024.0)
+	expect.Equal(ref math.Exp2(-1), ref 0.5)
+	expect.Equal(ref math.Asinh(0), ref 0.0)
+	expect.True(math.Abs(math.Asinh(1)-0.881373587019543) < 1e-15)
+	expect.Equal(ref math.Acosh(1), ref 0.0)
+	expect.True(math.IsNaN(math.Acosh(0.5)))
+	expect.True(math.Abs(math.Acosh(2)-1.3169578969248166) < 1e-15)
+	expect.Equal(ref math.Atanh(0), ref 0.0)
+	expect.True(math.IsInf(math.Atanh(1), 1))
+	expect.True(math.IsInf(math.Atanh(-1), -1))
+	expect.True(math.IsNaN(math.Atanh(2)))
+	expect.True(math.Abs(math.Atanh(0.5)-0.5493061443340548) < 1e-15)
+	expect.Equal(ref math.Gamma(5), ref 24.0)
+	expect.Equal(ref math.Gamma(1), ref 1.0)
+	expect.True(math.Abs(math.Gamma(0.5)-1.7724538509055159) < 1e-15) // the square root of pi
+	expect.True(math.IsInf(math.Gamma(0), 1))
+	expect.True(math.IsInf(math.Gamma(-0.0), -1))
+	expect.True(math.IsNaN(math.Gamma(-2)))
+	expect.True(math.IsNaN(math.Gamma(math.Inf(-1))))
+	expect.True(math.IsInf(math.Gamma(math.Inf(1)), 1))
+	expect.True(math.IsInf(math.Gamma(172), 1)) // past the largest double
+	lg, sign := math.Lgamma(5)
+	expect.True(math.Abs(lg-math.Log(24)) < 1e-14)
+	expect.Equal(ref sign, ref 1)
+	lg, sign = math.Lgamma(-0.5) // the gamma function is negative between -1 and 0
+	expect.True(math.Abs(lg-1.2655121234846454) < 1e-14)
+	expect.Equal(ref sign, ref -1)
+	lg, sign = math.Lgamma(-1.5) // and positive between -2 and -1
+	expect.Equal(ref sign, ref 1)
+	lg, sign = math.Lgamma(-2.5)
+	expect.Equal(ref sign, ref -1)
+	lg, sign = math.Lgamma(0)
+	expect.True(math.IsInf(lg, 1))
+	expect.Equal(ref sign, ref 1)
+	lg, sign = math.Lgamma(-3)
+	expect.True(math.IsInf(lg, 1))
+	expect.Equal(ref sign, ref 1)
+	lg, sign = math.Lgamma(math.Inf(1))
+	expect.True(math.IsInf(lg, 1))
+	lg, sign = math.Lgamma(math.NaN())
+	expect.True(math.IsNaN(lg))
+	expect.Equal(ref sign, ref 1)
+	expect.Equal(ref math.Erf(0), ref 0.0)
+	expect.Equal(ref math.Erf(math.Inf(1)), ref 1.0)
+	expect.Equal(ref math.Erf(math.Inf(-1)), ref -1.0)
+	expect.True(math.Abs(math.Erf(1)-0.8427007929497149) < 1e-15)
+	expect.True(math.Abs(math.Erf(-1)+0.8427007929497149) < 1e-15)
+	expect.Equal(ref math.Erfc(0), ref 1.0)
+	expect.Equal(ref math.Erfc(math.Inf(1)), ref 0.0)
+	expect.Equal(ref math.Erfc(math.Inf(-1)), ref 2.0)
+	expect.True(math.Erfc(26) > 0 && math.Erfc(26) < 1e-290) // where 1 - Erf(26) would be zero
+	// One value in each range of the ported algorithms.
+	expect.Equal(ref math.Erf(0.5), ref 0.5204998778130465)   // below 0.84375
+	expect.Equal(ref math.Erf(1), ref 0.8427007929497149)     // 0.84375 to 1.25
+	expect.Equal(ref math.Erf(3), ref 0.9999779095030014)     // 1.25 to 6, above 1/0.35
+	expect.Equal(ref math.Erfc(3), ref 2.2090496998585438e-05)
+	expect.Equal(ref math.Erfc(-0.5), ref 1.5204998778130465)
+	expect.Equal(ref math.Gamma(-0.5), ref -3.5449077018110318) // the recurrence from below zero
+	expect.Equal(ref math.Gamma(-2.5), ref -0.9453087204829419)
+	expect.Equal(ref math.Gamma(-40.5), ref -6.031660822178509e-49) // the reflection formula with Stirling's
+	expect.Equal(ref math.Gamma(171), ref 7.257415615308e+306)      // Stirling's, split before the power overflows
+	expect.Equal(ref math.Gamma(1e-10), ref 9.999999999422785e+09)  // near zero
+	lg, sign = math.Lgamma(-40.5) // the reflection formula
+	expect.Equal(ref lg, ref -111.02964715732847)
+	expect.Equal(ref sign, ref -1)
+	lg, sign = math.Lgamma(100) // the asymptotic series, 8 to 2^58
+	expect.Equal(ref lg, ref 359.13420536957545)
+	lg, sign = math.Lgamma(1e20)
+	expect.Equal(ref lg, ref 4.5051701859880917e+21)
+	lg, sign = math.Lgamma(-0.0)
+	expect.True(math.IsInf(lg, 1))
+	expect.Equal(ref sign, ref 1)
+	expect.Equal(ref math.Asinh(1e300), ref 691.4686750787736) // past 2^28: log(2x)
+	expect.Equal(ref math.Asinh(3), ref 1.8184464592320668)    // above 2
+	expect.True(math.IsInf(math.Asinh(math.Inf(1)), 1))
+	expect.True(math.IsInf(math.Asinh(math.Inf(-1)), -1))
+	expect.Equal(ref math.Atanh(0.999), ref 3.8002011672501994) // at and above 0.5
+	expect.True(math.IsInf(math.Expm1(math.Inf(1)), 1))
+	expect.True(math.IsInf(math.Acosh(math.Inf(1)), 1))
+	expect.Equal(ref math.Ldexp(-1, -5000), ref -0.0)
+	expect.True(math.Signbit(math.Ldexp(-1, -5000))) // an underflow keeps the sign
+}
+
+// Nextafter steps to the neighbouring float, Pow10 is exact over the
+// whole range of a double, and Dim is the positive difference.
+func TestNextafterPow10Dim() {
+	expect.Equal(ref math.Nextafter(1, 2), ref 1.0000000000000002)
+	expect.Equal(ref math.Nextafter(1, 0), ref 0.9999999999999999)
+	expect.Equal(ref math.Nextafter(1, 1), ref 1.0)
+	expect.Equal(ref math.Nextafter(0, 1), ref math.SmallestNonzeroFloat64)
+	expect.Equal(ref math.Nextafter(math.MaxFloat64, math.Inf(1)), ref math.Inf(1))
+	expect.True(math.IsNaN(math.Nextafter(1, math.NaN())))
+	expect.True(math.IsNaN(math.Nextafter(math.NaN(), 1)))
+	expect.Equal(ref math.Pow10(0), ref 1.0)
+	expect.Equal(ref math.Pow10(3), ref 1000.0)
+	expect.Equal(ref math.Pow10(22), ref 1e22)
+	expect.Equal(ref math.Pow10(308), ref 1e308)
+	expect.Equal(ref math.Pow10(-5), ref 1e-5)
+	expect.Equal(ref math.Pow10(-323), ref 1e-323)
+	expect.Equal(ref math.Pow10(-324), ref 0.0)
+	expect.True(math.IsInf(math.Pow10(309), 1))
+	expect.True(math.IsInf(math.Pow10(9223372036854775807), 1))
+	expect.Equal(ref math.Pow10(-9223372036854775808), ref 0.0)
+	expect.Equal(ref math.Dim(5, 3), ref 2.0)
+	expect.Equal(ref math.Dim(3, 5), ref 0.0)
+	expect.Equal(ref math.Dim(3, 3), ref 0.0)
+	expect.True(math.IsNaN(math.Dim(math.Inf(1), math.Inf(1))))
+	expect.True(math.IsNaN(math.Dim(math.Inf(-1), math.Inf(-1))))
+	expect.True(math.IsNaN(math.Dim(1, math.NaN())))
+	expect.True(math.IsNaN(math.Dim(math.NaN(), 1)))
+	expect.Equal(ref math.Dim(math.Inf(1), 1), ref math.Inf(1))
+}
+
+// BenchmarkExpm1 measures e^x - 1 near zero.
+func BenchmarkExpm1() {
+	for testing.Loop() { _ = math.Expm1(1e-5) }
+}
+
+// BenchmarkGamma measures the gamma function of a non-integer.
+func BenchmarkGamma() {
+	for testing.Loop() { _ = math.Gamma(4.5) }
+}
+
+// BenchmarkFloat64bits measures a copy of a float's bits and back.
+func BenchmarkFloat64bits() {
+	x := 1.5
+	for testing.Loop() { x = math.Float64frombits(math.Float64bits(x) + 1) }
+}

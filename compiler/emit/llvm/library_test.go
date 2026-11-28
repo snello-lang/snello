@@ -24,12 +24,20 @@ func TestVerbPlus(t *testing.T) {
 // bitCalls calls a function of math/bits of each kind and keeps one as
 // a value.
 const bitCalls = `package main
-import ("fmt"; "math/bits")
+import ("fmt"; "math"; "math/bits")
 func main() {
 	var a u8 = 1
+	var c u32 = 1
 	var d u64 = 1
 	f := bits.OnesCount64
+	g := math.Float64bits
 	fmt.Println(bits.LeadingZeros8(a), bits.TrailingZeros64(d), bits.OnesCount64(d), bits.Len8(a), bits.RotateLeft8(a, -1), bits.Reverse64(d), f(d))
+	fmt.Println(bits.ReverseBytes32(c), math.Float64bits(1.5), math.Float32frombits(c), g(2.5))
+	sum, carry := bits.Add64(d, d, 0)
+	hi, lo := bits.Mul64(d, d)
+	diff, borrow := bits.Sub64(d, d, 0)
+	add := bits.Add64
+	fmt.Println(sum, carry, hi, lo, diff, borrow, add(d, d, 1))
 }
 `
 
@@ -41,13 +49,15 @@ func TestBitOps(t *testing.T) {
 	for _, want := range []string{
 		"call i8 @llvm.ctlz.i8(i8 %", ", i1 false)", "call i64 @llvm.cttz.i64(", "call i64 @llvm.ctpop.i64(",
 		"call i8 @llvm.fshl.i8(", "call i64 @llvm.bitreverse.i64(", "sub i64 8, ",
+		"call i32 @llvm.bswap.i32(", "bitcast double ", " to i64", "bitcast i32 ", " to float",
+		"call { i64, i1 } @llvm.uadd.with.overflow.i64(", "call { i64, i1 } @llvm.usub.with.overflow.i64(", "mul i128 ",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("main lacks %s:\n%s", want, body)
 		}
 	}
 
-	if strings.Contains(body, "call i64 @sn_math__bits_") || strings.Contains(body, "call i8 @sn_math__bits_") {
+	if strings.Contains(body, "call i64 @sn_math__bits_") || strings.Contains(body, "call i8 @sn_math__bits_") || strings.Contains(body, "call i64 @sn_math_Float") {
 		t.Errorf("main calls the library's function where the intrinsic belongs:\n%s", body)
 	}
 

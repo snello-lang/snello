@@ -37,6 +37,8 @@
 // fails does.
 package rand
 
+import "math/bits"
+
 // The multiplier and the increment of PCG's 128-bit linear congruential
 // step, state*multiplier + increment, each as its high and its low
 // word.
@@ -181,8 +183,7 @@ func Perm(n int) []int {
 // bits, and returns the permutation DXSM, double xorshift multiply, of
 // the new state.
 func (r mut Rand) nextBits() u64 {
-	var lo u64 = 0
-	hi := mul64(r.lo, pcgMultiplierLow, mut lo)
+	hi, lo := bits.Mul64(r.lo, pcgMultiplierLow)
 	hi += r.hi * pcgMultiplierLow + r.lo * pcgMultiplierHigh
 	sum := lo + pcgIncrementLow
 	if sum < lo { // the carry out of the low half
@@ -237,12 +238,11 @@ func drawBelow<S: source>(s mut S, n u64) u64 {
 		return s.nextBits() & (n - 1)
 	}
 
-	var lo u64 = 0
-	hi := mul64(s.nextBits(), n, mut lo)
+	hi, lo := bits.Mul64(s.nextBits(), n)
 	if lo < n {
 		threshold := (0 - n) % n
 		for lo < threshold {
-			hi = mul64(s.nextBits(), n, mut lo)
+			hi, lo = bits.Mul64(s.nextBits(), n)
 		}
 	}
 
@@ -273,6 +273,3 @@ func permutation<S: source>(s mut S, n int) []int {
 // thread's ChaCha8 generator. The runtime provides it.
 func random() u64
 
-// mul64 returns the high half of the 128-bit product of x and y and
-// stores the low half in lo. The runtime provides it.
-func mul64(x, y u64, lo mut u64) u64

@@ -4116,7 +4116,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < ` + strconv.Itoa(count) + `; i++) printf("%llx\n", (unsigned long long)sn_math__rand_random());
     uint64_t pairs[][2] = {` + muls.String() + `};
     for (size_t i = 0; i < sizeof pairs / sizeof pairs[0]; i++) {
-        uint64_t lo, hi = sn_math__rand_mul64(pairs[i][0], pairs[i][1], &lo);
+        uint64_t lo, hi = sn_math__bits_mul64(pairs[i][0], pairs[i][1], &lo);
         printf("%llx %llx\n", (unsigned long long)hi, (unsigned long long)lo);
     }
     probe_thread th[4];

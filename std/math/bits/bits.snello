@@ -5,13 +5,19 @@
 // Package bits counts and moves the bits of the unsigned integer
 // types: LeadingZeros, TrailingZeros, OnesCount, RotateLeft, Reverse
 // and Len, each for uint and, with the width in its name, for u8, u16,
-// u32 and u64.
+// u32 and u64, and ReverseBytes for uint, u16, u32 and u64; and it
+// works on two words at once: Add64, Sub64 and Mul64, the sum with its
+// carry, the difference with its borrow and the two halves of a
+// product, and Div64, a 128-bit number divided.
 //
-// Every function is one instruction of the processor's, or a few,
-// which the compiler writes in place of the call: none is a call when
-// the program runs. Each is defined for every argument, zero included,
-// and none panics. Each takes its argument by value, since the
-// integers are Copy, allocates nothing and runs in constant time.
+// Every function but Div64 is one instruction of the processor's, or a
+// few, which the compiler writes in place of a call: none is a call
+// when the program runs, and the bodies Add64, Sub64 and Mul64 have
+// here serve a program that keeps one as a value and calls it through
+// the value. Div64 checks its arguments and divides in the runtime.
+// Each function is defined for every argument, zero included, and none
+// panics. Each takes its arguments by value, since the integers are
+// Copy, allocates nothing and runs in constant time.
 //
 //	n := bits.OnesCount8(0b1011_0000) // 3
 package bits
@@ -172,3 +178,77 @@ func Len32(x u32) int
 // Len64 returns the number of bits needed to write the u64 x, from 0
 // for zero to 64.
 func Len64(x u64) int
+
+// ReverseBytes returns x, a uint of 64 bits, with its bytes in the
+// opposite order: the lowest byte becomes the highest. It turns a
+// number between the two byte orders, one instruction.
+//
+//	bits.ReverseBytes(0x0102) // 0x0201000000000000
+func ReverseBytes(x uint) uint
+
+// ReverseBytes16 returns the u16 x with its two bytes swapped.
+func ReverseBytes16(x u16) u16
+
+// ReverseBytes32 returns the u32 x with its bytes in the opposite order.
+func ReverseBytes32(x u32) u32
+
+// ReverseBytes64 returns the u64 x with its bytes in the opposite order.
+func ReverseBytes64(x u64) u64
+
+// Add64 returns the sum of x, y and carry, which is 0 or 1, and the
+// carry out of the sum, 0 or 1: the sum wraps at 2^64 and the carry
+// says it did. A chain of Add64 calls adds numbers of many words, each
+// word's carry into the next.
+//
+//	sum, carry := bits.Add64(x, y, 0)
+func Add64(x, y, carry u64) (u64, u64) {
+	sum := x + y + carry
+	carryOut := ((x & y) | ((x | y) &^ sum)) >> 63 // a carry out when both top bits were set, or one was and the sum's is not
+	return (sum, carryOut)
+}
+
+// Sub64 returns the difference x - y - borrow, borrow being 0 or 1,
+// and the borrow out of it, 0 or 1: the difference wraps below zero
+// and the borrow says it did, so a chain of Sub64 calls subtracts
+// numbers of many words.
+//
+//	diff, borrow := bits.Sub64(x, y, 0)
+func Sub64(x, y, borrow u64) (u64, u64) {
+	diff := x - y - borrow
+	borrowOut := ((^x & y) | (^(x ^ y) & diff)) >> 63 // a borrow when y's top bit is set and x's not, or the two are alike and the difference's is set
+	return (diff, borrowOut)
+}
+
+// Mul64 returns the 128-bit product of x and y as its high and low
+// halves, one multiply instruction; the low half alone is x * y.
+//
+//	hi, lo := bits.Mul64(x, y)
+func Mul64(x, y u64) (u64, u64) {
+	lo := u64(0)
+	hi := mul64(x, y, mut lo)
+	return (hi, lo)
+}
+
+// Div64 divides the 128-bit number whose halves are hi and lo by y and
+// returns the quotient and the remainder, or None when y is zero or
+// the quotient does not fit 64 bits, which is when hi is not below y.
+//
+//	quo, rem := bits.Div64(hi, lo, y) ?? return
+func Div64(hi, lo, y u64) (u64, u64)? {
+	if y == 0 || y <= hi {
+		return None
+	}
+
+	rem := u64(0)
+	quo := div64(hi, lo, y, mut rem)
+	return Some((quo, rem))
+}
+
+// mul64 returns the high half of the 128-bit product of x and y and
+// stores the low half. The runtime provides it.
+func mul64(x, y u64, lo mut u64) u64
+
+// div64 returns the quotient of the 128-bit number hi, lo by y, which
+// is not zero and above hi, and stores the remainder. The runtime
+// provides it.
+func div64(hi, lo, y u64, rem mut u64) u64

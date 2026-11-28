@@ -19,18 +19,44 @@ import (
 // writes are listed in emit/lower, with the reason for each; this file
 // writes them in C: fmt's printing as the runtime's printers chosen by
 // the type of each argument, os.Exit as the runtime's exit, the
-// primitives of rc and sync as the pointer itself, and the functions
-// of math/bits as the compiler's builtins.
+// primitives of rc and sync as the pointer itself, the functions of
+// math/bits as the compiler's builtins, the two-word ones among them
+// into the pair they return, and the float bits of math as the header's
+// copies.
+
+// paramTypes lists the types of the parameters of the function x calls,
+// which its arguments are made to.
+func (e *Emitter) paramTypes(x *ast.CallExpr) []types.Type {
+	params := e.typeOf(x.Fun).(*types.Signature).Params()
+	wants := make([]types.Type, len(params))
+	for i, p := range params {
+		wants[i] = p.Type()
+	}
+
+	return wants
+}
 
 // libraryCall writes the call x of the lowered function key.
 func (e *Emitter) libraryCall(x *ast.CallExpr, key string) string {
 	if op, width, ok := lower.BitOp(key); ok { // the runtime header's function over the compiler's builtin, always written in place
-		var wants []types.Type
-		for _, p := range e.typeOf(x.Fun).(*types.Signature).Params() {
-			wants = append(wants, p.Type())
+		return "sn_bits_" + op + strconv.Itoa(width) + "(" + strings.Join(e.operands(x.Args, e.paramTypes(x)), ", ") + ")"
+	}
+
+	if op, ok := lower.WideOp(key); ok { // the header's function over the compiler's builtins: the first word returned, the second stored into the pair
+		out := e.temp()
+		e.line(e.cType(e.typeOf(x), x.Pos()) + " " + out + ";")
+		e.line(out + ".e0 = sn_bits_" + op + "(" + strings.Join(e.operands(x.Args, e.paramTypes(x)), ", ") + ", &" + out + ".e1);")
+		return out
+	}
+
+	if width, toBits, ok := lower.FloatBits(key); ok { // the header's copy of the bits, which the C compiler writes as a move or as nothing
+		arg := e.operands(x.Args, e.paramTypes(x))[0]
+		fn := "sn_f" + strconv.Itoa(width) + "_bits("
+		if !toBits {
+			fn = "sn_f" + strconv.Itoa(width) + "_from_bits("
 		}
 
-		return "sn_bits_" + op + strconv.Itoa(width) + "(" + strings.Join(e.operands(x.Args, wants), ", ") + ")"
+		return fn + arg + ")"
 	}
 
 	switch key {

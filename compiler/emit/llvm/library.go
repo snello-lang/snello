@@ -31,6 +31,24 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) value {
 		return e.bitOp(x, op, width)
 	}
 
+	if op, ok := lower.WideOp(key); ok {
+		return e.wideOp(x, op)
+	}
+
+	if width, toBits, ok := lower.FloatBits(key); ok { // a copy of the bits: a bitcast, which is a move or nothing
+		arg := e.operands(x.Args, e.paramTypes(x))[0]
+		float, integer := "double", "i64"
+		if width == 32 {
+			float, integer = "float", "i32"
+		}
+
+		if toBits {
+			return e.op("bitcast "+arg.typed()+" to "+integer, integer)
+		}
+
+		return e.op("bitcast "+arg.typed()+" to "+float, float)
+	}
+
 	switch key {
 	case "fmt.Println": // the line built whole and written at once, so two tasks' lines do not interleave
 		e.print(text{e.sprintln(x.Args, x.Pos()), true})
@@ -370,20 +388,28 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 	return truncated(e.textOf(v, t, a.Pos()))
 }
 
+// paramTypes lists the types of the parameters of the function x calls,
+// which its arguments are made to.
+func (e *Emitter) paramTypes(x *ast.CallExpr) []types.Type {
+	params := e.typeOf(x.Fun).(*types.Signature).Params()
+	wants := make([]types.Type, len(params))
+	for i, p := range params {
+		wants[i] = p.Type()
+	}
+
+	return wants
+}
+
 // bitOp writes a function of math/bits on a value of the width as
 // LLVM's intrinsic, which is the processor's instruction: ctlz and
 // cttz, told that zero is no poison and gives the width, ctpop,
-// bitreverse, and fshl with the value as both halves, which rotates by
-// the count modulo the width, a negative count to the right. A count
+// bitreverse, bswap, and fshl with the value as both halves, which
+// rotates by the count modulo the width, a negative count to the
+// right. A count
 // widens to the int the function returns, and Len is the width less
 // the zeros above.
 func (e *Emitter) bitOp(x *ast.CallExpr, op string, width int) value {
-	var wants []types.Type
-	for _, p := range e.typeOf(x.Fun).(*types.Signature).Params() {
-		wants = append(wants, p.Type())
-	}
-
-	args := e.operands(x.Args, wants)
+	args := e.operands(x.Args, e.paramTypes(x))
 	ir := "i" + strconv.Itoa(width)
 	call := func(name, params, list string) value {
 		fn := "llvm." + name + "." + ir
@@ -412,6 +438,8 @@ func (e *Emitter) bitOp(x *ast.CallExpr, op string, width int) value {
 		return e.op("sub i64 "+strconv.Itoa(width)+", "+zeros.s, "i64")
 	case "Reverse":
 		return call("bitreverse", ir, a.typed())
+	case "ReverseBytes":
+		return call("bswap", ir, a.typed())
 	}
 
 	k := args[1] // RotateLeft
@@ -420,6 +448,45 @@ func (e *Emitter) bitOp(x *ast.CallExpr, op string, width int) value {
 	}
 
 	return call("fshl", ir+", "+ir+", "+ir, a.typed()+", "+a.typed()+", "+k.typed())
+}
+
+// wideOp writes a function of math/bits on two words as LLVM's
+// intrinsics: the sum or difference by two additions or subtractions
+// with overflow, whose flags make the carry or borrow, and the product
+// as a multiplication of the two words widened to 128 bits, split into
+// its halves; the pair the function returns is built in place.
+func (e *Emitter) wideOp(x *ast.CallExpr, op string) value {
+	args := e.operands(x.Args, e.paramTypes(x))
+	pair := e.irType(e.typeOf(x), x.Pos())
+	var first, second value
+	if op == "Mul64" {
+		a := e.op("zext "+args[0].typed()+" to i128", "i128")
+		b := e.op("zext "+args[1].typed()+" to i128", "i128")
+		p := e.op("mul i128 "+a.s+", "+b.s, "i128")
+		hi := e.op("lshr i128 "+p.s+", 64", "i128")
+		first = e.op("trunc i128 "+hi.s+" to i64", "i64")
+		second = e.op("trunc i128 "+p.s+" to i64", "i64")
+	} else {
+		name := "llvm.uadd.with.overflow.i64"
+		if op == "Sub64" {
+			name = "llvm.usub.with.overflow.i64"
+		}
+
+		e.declare(name, "declare { i64, i1 } @"+name+"(i64, i64)")
+		step := func(a, b value) (value, value) {
+			r := e.op("call { i64, i1 } @"+name+"("+a.typed()+", "+b.typed()+")", "{ i64, i1 }")
+			return e.extract(r, 0, "i64"), e.extract(r, 1, "i1")
+		}
+
+		s1, f1 := step(args[0], args[1])
+		s2, f2 := step(s1, args[2])
+		flag := e.op("or i1 "+f1.s+", "+f2.s, "i1")
+		first = s2
+		second = e.op("zext i1 "+flag.s+" to i64", "i64")
+	}
+
+	out := e.insert(value{pair, "zeroinitializer"}, first, 0)
+	return e.insert(out, second, 1)
 }
 
 // rawCall writes a primitive of a block of slots of the element type,

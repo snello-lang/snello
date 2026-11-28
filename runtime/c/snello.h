@@ -204,6 +204,59 @@ SN_ALWAYS_INLINE uint64_t sn_bits_RotateLeft64(uint64_t x, int64_t k) {
 #endif
 #endif
 
+// The bytes of a value in the opposite order, one instruction, and the
+// bits of a float as an integer of its width and back, a copy of the
+// bits that the compilers write as a move or as nothing.
+SN_ALWAYS_INLINE uint16_t sn_bits_ReverseBytes16(uint16_t x) { return __builtin_bswap16(x); }
+SN_ALWAYS_INLINE uint32_t sn_bits_ReverseBytes32(uint32_t x) { return __builtin_bswap32(x); }
+SN_ALWAYS_INLINE uint64_t sn_bits_ReverseBytes64(uint64_t x) { return __builtin_bswap64(x); }
+
+// Two words at once: the sum with its carry, the difference with its
+// borrow, and the two halves of the product, each the processor's
+// instructions through the compiler's builtins; the second word is
+// stored.
+SN_ALWAYS_INLINE uint64_t sn_bits_Add64(uint64_t x, uint64_t y, uint64_t carry, uint64_t *carryOut) {
+    uint64_t sum, c1 = __builtin_add_overflow(x, y, &sum), c2 = __builtin_add_overflow(sum, carry, &sum);
+    *carryOut = c1 | c2;
+    return sum;
+}
+
+SN_ALWAYS_INLINE uint64_t sn_bits_Sub64(uint64_t x, uint64_t y, uint64_t borrow, uint64_t *borrowOut) {
+    uint64_t diff, b1 = __builtin_sub_overflow(x, y, &diff), b2 = __builtin_sub_overflow(diff, borrow, &diff);
+    *borrowOut = b1 | b2;
+    return diff;
+}
+
+SN_ALWAYS_INLINE uint64_t sn_bits_Mul64(uint64_t x, uint64_t y, uint64_t *lo) {
+    unsigned __int128 p = (unsigned __int128)x * y;
+    *lo = (uint64_t)p;
+    return (uint64_t)(p >> 64);
+}
+
+SN_ALWAYS_INLINE uint64_t sn_f64_bits(double x) {
+    uint64_t b;
+    memcpy(&b, &x, 8);
+    return b;
+}
+
+SN_ALWAYS_INLINE double sn_f64_from_bits(uint64_t b) {
+    double x;
+    memcpy(&x, &b, 8);
+    return x;
+}
+
+SN_ALWAYS_INLINE uint32_t sn_f32_bits(float x) {
+    uint32_t b;
+    memcpy(&b, &x, 4);
+    return b;
+}
+
+SN_ALWAYS_INLINE float sn_f32_from_bits(uint32_t b) {
+    float x;
+    memcpy(&x, &b, 4);
+    return x;
+}
+
 SN_ALWAYS_INLINE uint64_t sn_bits_Reverse64(uint64_t x) {
 #ifdef SN_BITREVERSE
     return __builtin_bitreverse64(x);
@@ -249,6 +302,10 @@ SN_BITS_NAMED(16, 16, uint16_t)
 SN_BITS_NAMED(32, 32, uint32_t)
 SN_BITS_NAMED(64, 64, uint64_t)
 #undef SN_BITS_NAMED
+uint64_t sn_math__bits_ReverseBytes(uint64_t x);
+uint16_t sn_math__bits_ReverseBytes16(uint16_t x);
+uint32_t sn_math__bits_ReverseBytes32(uint32_t x);
+uint64_t sn_math__bits_ReverseBytes64(uint64_t x);
 
 // A debug build, snello build -debug, compiles the runtime with SN_DEBUG
 // and makes a mistake of the compiler a stopped program instead of a
@@ -688,8 +745,30 @@ bool sn_math_IsNaN(double x);
 bool sn_math_IsInf(double x, int64_t sign);
 bool sn_math_Signbit(double x);
 double sn_math_Copysign(double x, double sign);
+double sn_math_Ldexp(double frac, int64_t exp);
+double sn_math_Remainder(double x, double y);
+double sn_math_FMA(double x, double y, double z);
+double sn_math_Expm1(double x);
+double sn_math_Log1p(double x);
+double sn_math_Exp2(double x);
+double sn_math_Asinh(double x);
+double sn_math_Acosh(double x);
+double sn_math_Atanh(double x);
+double sn_math_Gamma(double x);
+double sn_math_Erf(double x);
+double sn_math_Erfc(double x);
+double sn_math_Nextafter(double x, double y);
+double sn_math_Pow10(int64_t n);
+double sn_math_frexp(double x, int64_t *exp);
+double sn_math_modf(double x, double *frac);
+double sn_math_lgamma(double x, int64_t *sign);
+uint64_t sn_math_Float64bits(double x);
+double sn_math_Float64frombits(uint64_t b);
+uint32_t sn_math_Float32bits(float x);
+float sn_math_Float32frombits(uint32_t b);
+uint64_t sn_math__bits_mul64(uint64_t x, uint64_t y, uint64_t *lo);
+uint64_t sn_math__bits_div64(uint64_t hi, uint64_t lo, uint64_t y, uint64_t *rem);
 uint64_t sn_math__rand_random(void);
-uint64_t sn_math__rand_mul64(uint64_t x, uint64_t y, uint64_t *lo);
 sn_string sn_io_reason(int64_t code);
 int64_t sn_io_kindOf(int64_t code);
 extern sn_slice sn_os_Args; // the command line, as a slice of sn_string
