@@ -212,9 +212,11 @@ func (d mut Deque<T>) Drop() {
 }
 
 // Iter returns a walk over the elements from front to back, lending
-// each for as long as the deque is lent; nothing is copied.
+// each for as long as the deque is lent; nothing is copied. A range
+// over the deque lent walks through it: for v := range ref d.
 //
-//	for v := range d.Iter() { ... }
+//	for v := range ref d { ... }
+//	evens := d.Iter().Filter(isEven).Count()
 func (d ref Deque<T>) Iter() Iter<T> {
 	return Iter<T>{d: d, i: 0, end: d.len}
 }
@@ -225,7 +227,7 @@ func (d ref Deque<T>) Iter() Iter<T> {
 func (d ref Deque<T>) String() string {
 	out := "deque["
 	sep := ""
-	for v := range d.Iter() {
+	for v := range d {
 		out = out + sep + fmt.Sprint(v)
 		sep = " "
 	}

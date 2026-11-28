@@ -156,7 +156,7 @@ for _, w := range ref words {
 }
 ```
 
-Both are walked with `range` over their `Iter`, which lends each element for the loop: `for v := range d.Iter()` from front to back, and `for v := range s.Iter()` in the order the values were inserted. A walk over a collection is a value with a `Next` method, chapter 3, and the loop holds the collection lent until it ends, so the body reads it and cannot change it.
+Both are walked with `range` over the collection lent, which lends each element for the loop: `for v := range ref d` from front to back, and `for v := range ref s` in the order the values were inserted. A walk over a collection is a value with a `Next` method, chapter 3, which the collection's `Iter` gives and `range ref` calls for it, as `range mut` calls `IterMut` where the type has one; `d.Iter()` is written out when adapters follow it, `d.Iter().Filter(f)`. The loop holds the collection lent until it ends, so the body reads it and cannot change it.
 
 ## Arrays
 

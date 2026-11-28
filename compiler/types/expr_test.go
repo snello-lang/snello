@@ -267,6 +267,13 @@ func TestExprErrors(t *testing.T) {
 		{"func f(m map[string]int) { for k, v := range m { keep(k); print(v) } }", nil},
 		{"func f(s string) { for w := range s.Fields() { keep(w.ToLower()) } }", nil},
 		{"func f(x int) { for i := range x {} }", []string{"cannot range over a value of type int"}},
+		// A collection with Iter is ranged lent through it: range ref b and range b with b a borrow are range b.Iter(), range mut b is range b.IterMut(); an owned one says how, and an iterator keeps its own rule.
+		{"struct Bag { xs []int }\nstruct Walk { b ref Bag; i int }\nfunc (b ref Bag) Iter() Walk { return Walk{b: b, i: 0} }\nfunc (w mut Walk) Next() ref int? { if w.i >= len(w.b.xs) { return None }; w.i++; return Some(ref w.b.xs[w.i-1]) }\nfunc f(b ref Bag, o Bag) int { t := 0; for v := range b { t += *v }; for v := range ref o { t += *v }; return t }", nil},
+		{"struct Bag { xs []int }\nstruct Walk { b ref Bag; i int }\nfunc (b ref Bag) Iter() Walk { return Walk{b: b, i: 0} }\nfunc (w mut Walk) Next() ref int? { return None }\nfunc f(o Bag) { for v := range o { print(v) } }", []string{"cannot range over o: a Bag is walked lent, for v := range ref o, through its Iter"}},
+		{"struct Bag { xs []int }\nstruct Walk { b mut Bag; i int }\nfunc (b mut Bag) IterMut() Walk { return Walk{b: b, i: 0} }\nfunc (w mut Walk) Next() mut int? { if w.i >= len(w.b.xs) { return None }; w.i++; return Some(mut w.b.xs[w.i-1]) }\nfunc f(b mut Bag) { for v := range b { *v = 0 }; for v := range mut b { *v += 1 } }", nil},
+		{"struct Bag { xs []int }\nstruct Walk { b ref Bag; i int }\nfunc (b ref Bag) Iter() Walk { return Walk{b: b, i: 0} }\nfunc (w mut Walk) Next() ref int? { return None }\nfunc f(b mut Bag) { for v := range mut b { *v = 0 } }", []string{"cannot assign to *v through a ref borrow"}},
+		{"struct Bag { xs []int }\nstruct Walk { b ref Bag; i int }\nfunc (b ref Bag) Iter() Walk { return Walk{b: b, i: 0} }\nfunc (w mut Walk) Next() ref int? { return None }\nfunc f(b ref Bag) { it := b.Iter(); for v := range ref it { print(v) } }", []string{"cannot range over ref it: Next changes the iterator, which a ref lends for reading; range over the variable, or mut of it"}},
+		{"struct Bag { xs []int }\nfunc (b ref Bag) Iter() int { return 0 }\nfunc f(b ref Bag) { for v := range b { print(v) } }", []string{"cannot range over a value of type ref Bag"}},
 		{"func f(ch chan int) { ch <- 1; x := <-ch; print(x) }", nil},
 		{"func f(ch chan int) { ch <- \"a\" }", []string{"cannot use a value of type string as int in send"}},
 		{"func f() { g := func(a ref Node) int { return a.n }; print(g) }", nil},

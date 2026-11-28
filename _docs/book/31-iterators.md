@@ -40,7 +40,7 @@ func (c mut Count) Next() int? {
 evens := Count{0, 10}.Filter(isEven).Collect()   // [0 2 4 6 8]
 ```
 
-`range` takes any value with `Next`, by its shape, so a type need not list the trait to be ranged over. Listing it gives the type the adapters, and lets a generic function take it by a bound (below). Every iterator of the library lists it: `d.Iter()` of a deque and `s.Iter()` of a set are `iter.Iterator<ref T>`, `a.Iter()` of an arena is an `iter.Iterator<(arena.Index<T>, ref T)>`, and a JSON document's `doc.Elements(n)` and `doc.Members(n)` are iterators of nodes and of members.
+`range` takes any value with `Next`, by its shape, so a type need not list the trait to be ranged over; a collection lent, `range ref d`, is ranged through its `Iter`, and `range mut d` through its `IterMut` where it has one. Listing it gives the type the adapters, and lets a generic function take it by a bound (below). Every iterator of the library lists it: `d.Iter()` of a deque and `s.Iter()` of a set are `iter.Iterator<ref T>`, `a.Iter()` of an arena is an `iter.Iterator<(arena.Index<T>, ref T)>`, and a JSON document's `doc.Elements(n)` and `doc.Members(n)` are iterators of nodes and of members.
 
 ## Adapters and consumers
 

@@ -614,12 +614,19 @@ func (c *Checker) forStmt(s *ast.ForStmt) bool {
 // for the loop, as range mut it lends it, since Next changes it where
 // it lies; one that is a call's result lives for the loop and is
 // dropped after it.
+//
+// A collection of the program's own is ranged lent, through the method
+// that gives its iterator, by shape as Next is: range ref s, or range
+// s with s a borrow, is range s.Iter(), and range mut d is range
+// d.IterMut(), or d.Iter() when the type has no IterMut. The statement
+// is rewritten to the call, so the loop over it is the one above.
 func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 	if call, b := c.partsCall(s.X); call != nil {
 		c.partsLoop(s, call, b)
 		return
 	}
 
+	s.X = c.rangeThrough(s.X)
 	x := c.expr(s.X, nil)
 	c.openScope()
 	defer c.closeScope()
@@ -642,7 +649,11 @@ func (c *Checker) rangeStmt(s *ast.RangeStmt) {
 			}
 		default:
 			if key, val, ok = rangeTypes(x); !ok {
-				c.errorf(s.X.Pos(), "cannot range over a value of type "+x.typ.String())
+				if n, isNamed := x.typ.(*Named); isNamed && walkMethod(n, false) != nil {
+					c.errorf(s.X.Pos(), "cannot range over "+exprText(s.X)+": a "+x.typ.String()+" is walked lent, for v := range ref "+exprText(s.X)+", through its "+walkMethod(n, false).name)
+				} else {
+					c.errorf(s.X.Pos(), "cannot range over a value of type "+x.typ.String())
+				}
 			} else if val == Typ[Invalid] && s.Value != nil { // a channel's one variable: the value
 				c.errorf(s.Value.Pos(), "range over "+exprText(s.X)+" permits only one iteration variable")
 				key = Typ[Invalid]
@@ -901,6 +912,81 @@ func IteratorNext(t Type) *Func {
 	}
 
 	if _, ok := sig.results.(*Option); !ok {
+		return nil
+	}
+
+	return fn
+}
+
+// rangeThrough returns what a range statement over e walks: e itself,
+// or the call of the method that gives a collection's iterator when e
+// is ref x, mut x, or a place that is a borrow, and x's type has no
+// Next but has Iter, or IterMut for a mut: range ref s is range
+// s.Iter(). The place is typed here and again in the call, which
+// records the same; an expression that is not a place is left as it
+// is, so that nothing in it is checked twice.
+func (c *Checker) rangeThrough(e ast.Expr) ast.Expr {
+	inner, mut := e, false
+	if u, ok := e.(*ast.UnaryExpr); ok && (u.Op == token.REF || u.Op == token.MUT) {
+		inner, mut = u.X, u.Op == token.MUT
+	}
+
+	if !isPlaceChain(inner) {
+		return e
+	}
+
+	x := c.expr(inner, nil)
+	if x.mode == invalid {
+		return e
+	}
+
+	if r, ok := x.typ.(*Ref); ok {
+		mut = mut || r.mut
+	} else if inner == e {
+		return e // an owned value: rangeStmt says how it is walked
+	}
+
+	base, _ := deref(x)
+	n, ok := base.(*Named)
+	if !ok || IteratorNext(n) != nil {
+		return e
+	}
+
+	fn := walkMethod(n, mut)
+	if fn == nil {
+		return e
+	}
+
+	sel := &ast.SelectorExpr{X: inner, Sel: &ast.Ident{NamePos: inner.Pos(), Name: fn.name}}
+	return &ast.CallExpr{Fun: sel, Lparen: inner.Pos(), Rparen: inner.Pos()}
+}
+
+// walkMethod returns the method of t that a range over the collection
+// lent calls for its iterator: IterMut when mut and t has one, else
+// Iter; each on a borrowed receiver, taking nothing, not generic, and
+// returning an iterator. Nil when t has none.
+func walkMethod(t *Named, mut bool) *Func {
+	if mut {
+		if fn := walkMethodNamed(t, "IterMut"); fn != nil {
+			return fn
+		}
+	}
+
+	return walkMethodNamed(t, "Iter")
+}
+
+func walkMethodNamed(t *Named, name string) *Func {
+	fn := t.Method(name)
+	if fn == nil {
+		return nil
+	}
+
+	sig, ok := fn.typ.(*Signature)
+	if !ok || sig.recv == nil || len(sig.params) != 0 || len(sig.tparams) != 0 || !isBorrow(sig.recv.typ) {
+		return nil
+	}
+
+	if IteratorNext(sig.results) == nil {
 		return nil
 	}
 
