@@ -540,7 +540,7 @@ func (imp *sourceImporter) Import(path string) (*Package, error) {
 
 	src, ok := imp.srcs[path]
 	if !ok {
-		return nil, errors.New("package " + path + " is not in the standard library")
+		return nil, fmt.Errorf("package %s is not in the standard library: %w", path, ErrNoPackage)
 	}
 
 	f, file, err := parser.ParseFile(path+".snello", []byte(src))

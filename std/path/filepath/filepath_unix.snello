@@ -6,7 +6,10 @@
 // separator, a slash, is theirs.
 package filepath
 
-import "path"
+import ("io"; "path")
+
+// listSeparatorRune separates the paths of a list, a colon.
+const listSeparatorRune rune = ':'
 
 // separatorRune is the separator of a Unix path.
 const separatorRune rune = '/'
@@ -32,3 +35,26 @@ func dir(p ref string) string { return path.Dir(p) }
 func volumeName(p ref string) ref string { return p[0:0] }
 
 func isSeparator(c byte) bool { return c == slash }
+
+func matchPattern(pattern ref string, name ref string) Result<bool, io.Error> { return path.Match(pattern, name) }
+
+func splitList(list ref string) []string {
+	if list.Len() == 0 {
+		return []string{}
+	}
+
+	out := []string{}
+	for dir := range list.Split(":") {
+		out.Push(dir.Clone())
+	}
+
+	return out
+}
+
+func isLocal(p ref string) bool {
+	if p.Len() == 0 || isAbs(p) {
+		return false
+	}
+
+	return !escapes(ref clean(p))
+}

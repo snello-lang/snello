@@ -58,6 +58,7 @@ func main() {
 	fmt.Printf("[%d] [%5d] [%.4d] [%v]\n", big, small, small, big)
 	fmt.Printf("%q %q\n", "a\x07\x08\x0c\x0b\x00\x7f \xff é  🙂\"\\", "tab\there")
 	fmt.Printf("%q %q %q %q %q %.2q\n", 'A', '\n', '\'', byte(0), 'é', "hello")
+	fmt.Printf("%q %q %q %q %q %q %q\n", big, -1, 0x110000, 0xD800, "\xed\xa0\x80", "\uFFFD", "\U000e0001") // no rune is U+FFFD; a surrogate's bytes are bytes; a written U+FFFD is itself; a non-printing rune past U+FFFF has eight digits
 
 	c := Celsius{deg: 21.5}
 	fmt.Println(c, Reading{place: "attic".Clone(), temp: Celsius{deg: -3}})

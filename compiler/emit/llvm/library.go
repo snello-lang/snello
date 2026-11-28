@@ -273,10 +273,11 @@ func (e *Emitter) sprintf(f ast.Expr, args []ast.Expr) value {
 		}
 
 		part := e.verb(p, args[0], parts[0])
+		own := lower.SelfFormatted(p, lower.ValueType(e.typeOf(args[0]))) // the type's Format was given the width and honoured it
 		args, parts = args[1:], parts[1:]
 		width, owned := value{"i64", strconv.Itoa(p.Width)}, value{"i1", strconv.FormatBool(part.owned)}
 		switch {
-		case p.Width < 0:
+		case p.Width < 0 || own:
 		case p.ZeroPads():
 			part = text{e.rt("sn_pad_zero", "%sn_string", part.v, width, owned), true}
 		default:
@@ -339,6 +340,8 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 	}
 
 	switch {
+	case lower.SelfFormatted(p, vt): // the type's Format, given the verb, its width, precision and flags
+		return text{e.formatted(e.addressOf(v, t), vt, p, a.Pos()), true}
 	case p.Verb == 'v' && p.Plus: // an error's chain
 		return text{e.op("call %sn_string @"+e.chainer(vt, a.Pos())+"(ptr "+e.addressOf(v, t)+")", "%sn_string"), true}
 	case p.Verb == 'f':
@@ -368,14 +371,10 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 	case p.Verb == 'c':
 		return text{e.rt("sn_char", "%sn_string", e.widen(e.derefTo(v, t, vt), !isUnsigned(vt))), true}
 	case p.Verb == 'q' && isInteger(vt):
-		return text{e.rt("sn_quote_rune", "%sn_string", e.widen(e.derefTo(v, t, vt), !isUnsigned(vt))), true}
+		return text{e.quotedRune(e.widen(e.derefTo(v, t, vt), !isUnsigned(vt)), a.Pos()), true}
 	case p.Verb == 'q':
 		s := truncated(e.textOf(v, t, a.Pos()))
-		if s.owned {
-			return text{e.rt("sn_quote_owned", "%sn_string", s.v), true}
-		}
-
-		return text{e.rt("sn_quote", "%sn_string", s.v), true}
+		return text{e.quotedString(s.v, s.owned, a.Pos()), true}
 	case p.Verb == 'd':
 		toString, signed := "sn_int_to_string", true
 		if isUnsigned(vt) {

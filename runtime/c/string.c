@@ -89,6 +89,24 @@ int sn_string_cmp(sn_string a, sn_string b) {
     return a.len < b.len ? -1 : a.len > b.len;
 }
 
+// sn_bytes_into_string makes the bytes of b, which it takes, a string's:
+// a string's cap is its allocation's size, as a slice's is, so the
+// buffer passes over whole, with no copy. No bytes give the empty
+// string, since an owned string of no bytes has no block, and a block
+// of no bytes is freed.
+sn_string sn_bytes_into_string(sn_slice_u8 b) {
+    sn_check_slice((sn_slice *)&b);
+    if (b.len == 0) {
+        if (b.ptr != NULL) { // a block of no bytes is a block too
+            sn_free(b.ptr);
+        }
+
+        return SN_STR("", 0);
+    }
+
+    return (sn_string){ b.ptr, b.len, b.cap };
+}
+
 sn_string sn_string_clone(sn_string s) {
     sn_check_string(s);
     // An owned string of no bytes would be a block with cap 0, which
@@ -1418,20 +1436,11 @@ sn_string sn_strings_repeat(sn_string s, int64_t n) {
     return SN_OWNED(p, total);
 }
 
-// sn_strings_ownString makes the bytes of b, which it takes, a string's:
-// a string's cap is its allocation's size, as a slice's is, so the
-// buffer passes over whole, with no copy.
+// sn_strings_ownString makes the bytes of b, which it takes, a string's,
+// the move sn_bytes_into_string makes, under the name the strings
+// package declares.
 sn_string sn_strings_ownString(sn_slice_u8 b) {
-    sn_check_slice((sn_slice *)&b);
-    if (b.len == 0) {
-        if (b.ptr != NULL) { // a block of no bytes is a block too
-            sn_free(b.ptr);
-        }
-
-        return SN_STR("", 0);
-    }
-
-    return (sn_string){ b.ptr, b.len, b.cap };
+    return sn_bytes_into_string(b);
 }
 
 // sn_encoding__json_slide moves the bytes of a Decoder's block from lo

@@ -68,8 +68,8 @@ func TestDocStandard(t *testing.T) {
 		has    []string
 		hasNot []string
 	}{
-		{[]string{"strings"}, []string{`package strings // import "strings"`, "Package strings builds", "struct Builder { ... }", "func Join("}, []string{"appendString"}},
-		{[]string{"strings.Builder"}, []string{"struct Builder {", "// Has unexported fields.", "A Builder accumulates text", "func (b mut Builder) WriteString(s ref string)"}, []string{"buf []byte"}},
+		{[]string{"strings"}, []string{`package strings // import "strings"`, "Package strings builds", "struct Builder impl io.Writer { ... }", "func Join("}, []string{"appendString"}},
+		{[]string{"strings.Builder"}, []string{"struct Builder impl io.Writer {", "// Has unexported fields.", "A Builder accumulates text", "func (b mut Builder) WriteString(s ref string)"}, []string{"buf []byte"}},
 		{[]string{"strings.Builder.WriteString"}, []string{"func (b mut Builder) WriteString(s ref string)", "appends the bytes of s"}, nil},
 		{[]string{"json"}, []string{`package json // import "encoding/json"`}, nil},
 		{[]string{"-u", "strings"}, []string{"appendString"}, nil},

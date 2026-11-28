@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"math/big"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path"
@@ -1007,6 +1008,64 @@ func FuzzUnquote(f *testing.F) {
 			t.Errorf("Unquote of %q: got %s, want %s", s, got, want)
 		}
 	})
+}
+
+// TestUnquoteCorpus holds Unquote to Go's strconv.Unquote on literals of
+// the three kinds, well formed and not, made from pieces that meet
+// every rule of the syntax and changed a byte at a time, the one text
+// they differ on being the empty character literal, which Go takes for
+// the empty string. The fuzz test above explores from its seeds; this
+// corpus is the same on every run.
+func TestUnquoteCorpus(t *testing.T) {
+	r := rand.New(rand.NewPCG(7, 11))
+	pieces := []string{
+		"a", "b", "\\", "\"", "'", "`", "\n", "\r", "\t", "x", "u", "U", "0", "1", "7", "8", "f", "F", "g", "\x80", "\xff", "é", "日", "\U0001F600", "\xed\xa0\x80",
+		`\n`, `\x41`, `\u00e9`, `\U0001F600`, `\377`, `\400`, `\ud800`, `\U00110000`, `\'`, `\"`, " ", "\x00", "\x7f",
+	}
+	texts := []string{"", `"`, `""`, "''", "``", "`", "'", `"a`, `a"`, `"a"b"`, "`a`b`", "'ab'", "'\xff'", "\"\xff\"", `'\''`, `'"'`, `"'"`}
+	for range 4000 {
+		s := ""
+		for range r.IntN(8) {
+			s += pieces[r.IntN(len(pieces))]
+		}
+
+		switch r.IntN(6) {
+		case 0:
+			s = strconv.Quote(s)
+		case 1:
+			s = "\"" + s + "\""
+		case 2:
+			s = "'" + s + "'"
+		case 3:
+			s = "`" + s + "`"
+		case 4:
+			s = strconv.QuoteRune(rune(r.IntN(0x11000)))
+		}
+
+		texts = append(texts, s)
+		if b := []byte(s); len(b) > 0 && r.IntN(3) == 0 {
+			b[r.IntN(len(b))] = byte(r.IntN(256))
+			texts = append(texts, string(b))
+		}
+	}
+
+	bad := 0
+	for _, s := range texts {
+		if !short(s) {
+			continue
+		}
+
+		want := "syntax"
+		if text, err := strconv.Unquote(s); err == nil && s != "''" {
+			want = "ok " + hex.EncodeToString([]byte(text))
+		}
+
+		if got := ask(t, 'q', s); got != want {
+			if bad++; bad <= 10 {
+				t.Errorf("Unquote of %q: got %s, want %s", s, got, want)
+			}
+		}
+	}
 }
 
 func TestMain(m *testing.M) {

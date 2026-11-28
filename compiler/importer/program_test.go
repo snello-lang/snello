@@ -527,7 +527,13 @@ func TestFailedOnce(t *testing.T) {
 
 	parsed := map[string]int{}
 	root := writeTree(t, files)
-	_, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(root, "main.snello")}, Parsed: func(file *token.File, _ *ast.File) { parsed[file.Name()]++ }}, &types.Info{})
+	count := func(file *token.File, _ *ast.File) {
+		if strings.HasPrefix(file.Name(), root) { // the program's own files; the library's, fmt loaded into every program among them, are not the chain's
+			parsed[file.Name()]++
+		}
+	}
+
+	_, _, err := LoadProgramFrom(Load{Names: []string{filepath.Join(root, "main.snello")}, Parsed: count}, &types.Info{})
 	if err == nil || !strings.Contains(err.Error(), "package p0 does not compile") {
 		t.Errorf("the chain: %v, want p0's error", err)
 	}

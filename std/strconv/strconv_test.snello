@@ -172,7 +172,9 @@ func TestUnquote() {
 	expect.Equal(ref expect.IsOk(strconv.Unquote("'🙂'")), "🙂")
 	expect.Equal(ref expect.IsOk(strconv.Unquote("\"\"")), "")
 	expect.Equal(ref expect.IsOk(strconv.Unquote("\"\xff\"")), "\uFFFD") // a byte that starts no character
-	for _, s := range []string{"", "\"", "a", "\"a", "a\"", "''", "'ab'", "\"\\q\"", "\"a\nb\"", "\"\\'\"", "'\\\"'", "\"\\ud800\"", "\"\\400\"", "\"\\x4\"", "\"a\"b\"", "`a`b`"} {
+	expect.Equal(ref expect.IsOk(strconv.Unquote("\"\\xFf\"")), "\xff")  // a hexadecimal digit in either case
+	expect.Equal(ref expect.IsOk(strconv.Unquote("\"\\U0001f642\"")), "🙂")
+	for _, s := range []string{"", "\"", "a", "\"a", "a\"", "''", "'ab'", "\"\\q\"", "\"a\nb\"", "\"\\'\"", "'\\\"'", "\"\\ud800\"", "\"\\400\"", "\"\\777\"", "\"\\x4\"", "\"\\U00110000\"", "\"a\"b\"", "`a`b`"} {
 		e := expect.IsErr(strconv.Unquote(ref s))
 		expect.True(e.Kind() == strconv.Syntax)
 		expect.Equal(ref e.Func, "Unquote")

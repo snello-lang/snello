@@ -224,10 +224,19 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 		t = r.Elem()
 	}
 
+	if types.IsFormatter(t) { // a Formatter prints what its Format writes, given %v with no width, precision or flag
+		msg := e.formatted(p, t, lower.PlainVerb, pos)
+		if quoted {
+			return text{e.quotedString(msg, true, pos), true}
+		}
+
+		return text{msg, true}
+	}
+
 	if tr, ok := t.(*types.Trait); ok && printsAsMessage(tr) { // a trait value of Error or fmt.Stringer prints through its table
 		msg := e.traitMessage(p, tr)
 		if quoted {
-			return text{e.rt("sn_quote_owned", "%sn_string", msg), true}
+			return text{e.quotedString(msg, true, pos), true}
 		}
 
 		return text{msg, true}
@@ -242,7 +251,7 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 		name, _ := e.methodNameOf(nil, n, method, pos)
 		msg := e.op("call %sn_string @"+name+"("+e.argsTo(n, method, pos, p)+")", "%sn_string")
 		if quoted {
-			return text{e.rt("sn_quote_owned", "%sn_string", msg), true}
+			return text{e.quotedString(msg, true, pos), true}
 		}
 
 		return text{msg, true}
@@ -257,7 +266,7 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 	v := e.load(ir, p)
 	switch {
 	case isString(b) && quoted:
-		return text{e.rt("sn_quote", "%sn_string", v), true}
+		return text{e.quotedString(v, false, pos), true}
 	case isString(b):
 		return text{v, false}
 	case b.Kind() == types.Bool:
@@ -288,6 +297,111 @@ func (e *Emitter) widen(v value, signed bool) value {
 	}
 
 	return e.op("zext "+v.typed()+" to i64", "i64")
+}
+
+// quotedString writes the call quoting the string v as %q writes a
+// string, and as a string inside a value printed as it would be
+// written is quoted, Some("x"): fmt's own quoteString, written in
+// Snello, which every program has since the checker loads fmt; the
+// string is given as its three words, as a ref string is. owned says v
+// is built here, so a helper drops it once quoted.
+func (e *Emitter) quotedString(v value, owned bool, pos token.Pos) value {
+	if e.quoteString == "" {
+		e.unsupported(pos, lower.NoQuoteString)
+		return e.constString("?")
+	}
+
+	if !owned {
+		return e.op("call %sn_string @"+e.quoteString+"("+v.typed()+")", "%sn_string")
+	}
+
+	name := lower.QuotedOwned
+	if !e.state[name] {
+		e.state[name] = true
+		e.helper(name, "%sn_string", []string{"%sn_string %s"}, func() {
+			q := e.op("call %sn_string @"+e.quoteString+"(%sn_string %s)", "%sn_string")
+			e.dropOf(e.spill(value{"%sn_string", "%s"}), types.Typ[types.String], pos)
+			e.ret(text{q, true})
+		})
+	}
+
+	return e.op("call %sn_string @"+name+"("+v.typed()+")", "%sn_string")
+}
+
+// quotedRune writes the call quoting the integer v, an i64, as %q
+// writes a rune: fmt's own quoteRune, which writes one that is no rune
+// as U+FFFD.
+func (e *Emitter) quotedRune(v value, pos token.Pos) value {
+	if e.quoteRune == "" {
+		e.unsupported(pos, lower.NoQuoteRune)
+		return e.constString("?")
+	}
+
+	return e.op("call %sn_string @"+e.quoteRune+"("+v.typed()+")", "%sn_string")
+}
+
+// formatter returns the name of the function printing a value of type
+// t, a declared type listing fmt.Formatter or a trait value of a trait
+// refining it, through its Format, writing it on first use. The
+// function takes the value's address, the verb and the verb's width
+// and precision, -1 for none, and its minus and zero flags, builds the
+// fmt.State the Format writes into, calls Format on the value lent, and
+// gives the text written as an owned string, the State's buffer moved.
+func (e *Emitter) formatter(t types.Type, pos token.Pos) string {
+	name := "sn_format_" + lower.Mangle(t)
+	if e.state[name] {
+		return name
+	}
+
+	e.state[name] = true
+	rune := e.irType(types.Typ[types.Rune], pos)
+	e.helper(name, "%sn_string", []string{"ptr %v", rune + " %verb", "i64 %width", "i64 %prec", "i1 %minus", "i1 %zero"}, func() {
+		state := lower.FormatState(t)
+		ir := e.irType(state, pos)
+		st := state.Underlying().(*types.Struct)
+		f := e.spill(value{ir, zero(ir)})
+		opt := types.NewOption(types.Typ[types.Int])
+		e.store(e.given(opt, value{"i64", "%width"}, pos), e.gep(ir, f, fieldIndex(st, lower.StateWidth)))
+		e.store(e.given(opt, value{"i64", "%prec"}, pos), e.gep(ir, f, fieldIndex(st, lower.StatePrecision)))
+		e.store(value{"i1", "%minus"}, e.gep(ir, f, fieldIndex(st, lower.StateMinus)))
+		e.store(value{"i1", "%zero"}, e.gep(ir, f, fieldIndex(st, lower.StateZero)))
+		e.formatCall(t, f, pos)
+		out := fieldIndex(st, lower.StateOut)
+		buf := e.load(e.irType(st.Field(out).Type(), pos), e.gep(ir, f, out))
+		e.ret(text{e.rt("sn_bytes_into_string", "%sn_string", buf), true})
+	})
+	return name
+}
+
+// formatCall writes the call of Format on the value at %v, the State at
+// the address f and the verb %verb: the type's method for a declared
+// type, the table's entry for a trait value.
+func (e *Emitter) formatCall(t types.Type, f string, pos token.Pos) {
+	verb := e.irType(types.Typ[types.Rune], pos) + " %verb"
+	if tr, ok := t.(*types.Trait); ok {
+		fn, data := e.tableEntry("%v", tr, "Format")
+		e.inst("call void " + fn.s + "(ptr " + data.s + ", ptr " + f + ", " + verb + ")")
+		return
+	}
+
+	name, sig := e.methodNameOf(nil, t.(*types.Named), "Format", pos)
+	e.inst("call void @" + name + "(" + e.passAt("%v", sig.Recv().Type(), false, pos) + ", ptr " + f + ", " + verb + ")")
+}
+
+// given returns the option of type u holding v when v is not below
+// zero, how a width or a precision is passed, and None otherwise.
+func (e *Emitter) given(u *types.Option, v value, pos token.Pos) value {
+	has := e.op("icmp sge "+v.typed()+", 0", "i1")
+	return e.optionOf(u, has, e.op("select i1 "+has.s+", "+v.typed()+", "+v.typ+" 0", v.typ), pos)
+}
+
+// formatted writes the call printing the value of type t at the address
+// p through its Format as the verb prints it, with the verb's width,
+// precision and flags, the zero flag as fmt applies it, not with a
+// precision on an integer verb; the text is built here.
+func (e *Emitter) formatted(p string, t types.Type, piece types.FormatPiece, pos token.Pos) value {
+	args := "ptr " + p + ", " + e.irType(types.Typ[types.Rune], pos) + " " + strconv.Itoa(int(piece.Verb)) + ", i64 " + strconv.Itoa(piece.Width) + ", i64 " + strconv.Itoa(piece.Prec) + ", i1 " + strconv.FormatBool(piece.Minus) + ", i1 " + strconv.FormatBool(piece.ZeroPads())
+	return e.op("call %sn_string @"+e.formatter(t, pos)+"("+args+")", "%sn_string")
 }
 
 // stringer returns the name of the function that turns a value of a

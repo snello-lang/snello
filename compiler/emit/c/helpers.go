@@ -92,6 +92,104 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 	return name
 }
 
+// quotedString writes the expression quoting the C string v as %q writes
+// a string, and as a string inside a value printed as it would be
+// written is quoted, Some("x"): fmt's own quoteString, written in
+// Snello, which every program has since the checker loads fmt. owned
+// says v is built here, so a helper drops it once quoted.
+func (e *Emitter) quotedString(v string, owned bool, pos token.Pos) string {
+	if e.quoteString == "" {
+		e.unsupported(pos, lower.NoQuoteString)
+		return literal("?")
+	}
+
+	if !owned {
+		return e.quoteString + "(" + v + ")"
+	}
+
+	name := lower.QuotedOwned
+	if e.state[name] == undeclared {
+		e.state[name] = defined
+		put(&e.helpers, "static sn_string ", name, "(sn_string s) {\n\tsn_string q = ", e.quoteString, "(s);\n\tsn_string_drop(&s);\n\treturn q;\n}\n\n")
+	}
+
+	return name + "(" + v + ")"
+}
+
+// quotedRune writes the expression quoting the C integer v as %q writes
+// a rune, fmt's own quoteRune, which takes any integer and writes one
+// that is no rune as U+FFFD.
+func (e *Emitter) quotedRune(v string, pos token.Pos) string {
+	if e.quoteRune == "" {
+		e.unsupported(pos, lower.NoQuoteRune)
+		return literal("?")
+	}
+
+	return e.quoteRune + "(" + v + ")"
+}
+
+// formatter returns the name of the function printing a value of type
+// t, a declared type listing fmt.Formatter or a trait value of a trait
+// refining it, through its Format, writing it on first use. The
+// function takes the value, the verb and the verb's width and
+// precision, -1 for none, and its minus and zero flags, builds the
+// fmt.State the Format writes into, calls Format on the value lent, and
+// gives the text written as an owned string, the State's buffer moved.
+func (e *Emitter) formatter(t types.Type, pos token.Pos) string {
+	name := "sn_format_" + lower.Mangle(t)
+	if e.state[name] != undeclared {
+		return name
+	}
+
+	e.state[name] = defined
+	st := e.cType(lower.FormatState(t), pos)
+	opt := e.cType(types.NewOption(types.Typ[types.Int]), pos)
+	params := "(" + e.cType(t, pos) + " v, " + e.cType(types.Typ[types.Rune], pos) + " verb, int64_t width, int64_t prec, bool minus, bool zero)"
+	put(&e.protos, "static sn_string ", name, params, ";\n")
+	var b strings.Builder
+	put(&b, "static sn_string ", name, params, " {\n")
+	put(&b, "\t", st, " f = (", st, "){", liveOf(lower.FormatState(t)), "};\n")
+	put(&b, "\tif (width >= 0) {\n\t\tf.", lower.Ident(lower.StateWidth), " = (", opt, "){.has = true, .val = width};\n\t}\n\n")
+	put(&b, "\tif (prec >= 0) {\n\t\tf.", lower.Ident(lower.StatePrecision), " = (", opt, "){.has = true, .val = prec};\n\t}\n\n")
+	put(&b, "\tf.", lower.Ident(lower.StateMinus), " = minus;\n\tf.", lower.Ident(lower.StateZero), " = zero;\n")
+	put(&b, "\t", e.formatCall(t, pos), ";\n")
+	put(&b, "\treturn sn_bytes_into_string(f.", lower.Ident(lower.StateOut), ");\n}\n\n")
+	e.helpers.WriteString(b.String())
+	return name
+}
+
+// liveOf is the initializer of a value of type t that holds its value:
+// the flag a type that wrote a Drop carries, which its drop reads,
+// and nothing for any other type, whatever it holds.
+func liveOf(t types.Type) string {
+	if hasDrop(t) {
+		return ".sn_live = true"
+	}
+
+	return "0"
+}
+
+// formatCall returns the C call of Format on the value v, the State f
+// and the verb: the type's method for a declared type, the table's
+// entry for a trait value.
+func (e *Emitter) formatCall(t types.Type, pos token.Pos) string {
+	if _, ok := t.(*types.Trait); ok {
+		return "v.tab->" + lower.Ident("Format") + "(v.data, &f, verb)"
+	}
+
+	name, _ := e.methodNameOf(nil, t.(*types.Named), "Format", pos)
+	return name + "(v, &f, verb)"
+}
+
+// formatted writes the call printing the C value v of type t through
+// its Format as the verb prints it, with the verb's width, precision
+// and flags, the zero flag as fmt applies it, not with a precision on
+// an integer verb; the text is built here.
+func (e *Emitter) formatted(v string, t types.Type, p types.FormatPiece, pos token.Pos) string {
+	vt := lower.ValueType(t)
+	return e.formatter(vt, pos) + "(" + deref(v, t) + ", " + strconv.Itoa(int(p.Verb)) + ", " + strconv.Itoa(p.Width) + ", " + strconv.Itoa(p.Prec) + ", " + strconv.FormatBool(p.Minus) + ", " + strconv.FormatBool(p.ZeroPads()) + ")"
+}
+
 func (e *Emitter) enumStringer(b *strings.Builder, en *types.Enum, v string, pos token.Pos) {
 	put(b, "\tswitch ((int)", v, ".tag) {\n") // an int: the cases of no fields have no case here
 	for i := 0; i < en.NumVariants(); i++ {
@@ -170,10 +268,19 @@ func (e *Emitter) textOf(v string, t types.Type, pos token.Pos, quoted bool) tex
 // into a sn_string, and whether the expression builds the string;
 // quoted says whether a string is written in quotes.
 func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (string, bool) {
+	if types.IsFormatter(lower.ValueType(t)) { // a Formatter prints what its Format writes, given %v with no width, precision or flag
+		msg := e.formatted(v, t, lower.PlainVerb, pos)
+		if quoted {
+			return e.quotedString(msg, true, pos), true
+		}
+
+		return msg, true
+	}
+
 	if tr, ok := lower.ValueType(t).(*types.Trait); ok && printsAsMessage(tr) { // a trait value of Error or fmt.Stringer prints through its table
 		msg := e.traitText(tr, pos) + "(" + deref(v, t) + ")"
 		if quoted {
-			return "sn_quote_owned(" + msg + ")", true
+			return e.quotedString(msg, true, pos), true
 		}
 
 		return msg, true
@@ -188,7 +295,7 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (st
 		name, _ := e.methodNameOf(nil, n, method, pos)
 		msg := name + "(" + deref(v, t) + ")"
 		if quoted {
-			return "sn_quote_owned(" + msg + ")", true
+			return e.quotedString(msg, true, pos), true
 		}
 
 		return msg, true
@@ -202,7 +309,7 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (st
 	v = deref(v, t)
 	switch {
 	case isString(b) && quoted:
-		return "sn_quote(" + v + ")", true
+		return e.quotedString(v, false, pos), true
 	case isString(b):
 		return v, false
 	case b.Kind() == types.Bool:

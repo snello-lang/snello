@@ -39,6 +39,35 @@ const (
 	HandleBoth = HandleSend | HandleRecv
 )
 
+// The quoting the backends write for %q and for a string inside a value
+// printed as it would be written: the functions of fmt that do it,
+// written in Snello in std/fmt, a string as %q writes one and an
+// integer as a rune; the helper a backend writes once to quote an
+// owned string and drop it; and what a backend reports for a program
+// without fmt, which the checker loads into every program.
+const (
+	quoteStringFunc = "quoteString"
+	quoteRuneFunc   = "quoteRune"
+	QuotedOwned     = "sn_quoted_owned"
+	NoQuoteString   = "quoting a string in a program without fmt"
+	NoQuoteRune     = "quoting a rune in a program without fmt"
+)
+
+// The fields of fmt.State as std/fmt declares them, which a backend
+// fills before it calls a Format and reads after: the text written,
+// the verb's width and precision, each an int?, and its flags.
+const (
+	StateOut       = "out"
+	StateWidth     = "width"
+	StatePrecision = "precision"
+	StateMinus     = "minus"
+	StateZero      = "zero"
+)
+
+// PlainVerb is %v with no width, precision or flag: how Println, Sprint
+// and a value inside a composite print.
+var PlainVerb = types.FormatPiece{Verb: 'v', Width: -1, Prec: -1}
+
 // A Library is a package written in Snello that the program imports, as
 // the importer loaded it: its import path, its source file and its
 // syntax, checked into the program's Info, and the .c and .h files of
@@ -736,6 +765,85 @@ func FloatBits(key string) (width int, toBits bool, ok bool) {
 	}
 
 	return 0, false, false
+}
+
+// FormatState returns the fmt.State type the Format of t writes into,
+// read from the method's own signature: t is a declared type listing
+// fmt.Formatter or a trait refining it.
+func FormatState(t types.Type) types.Type {
+	var fn *types.Func
+	switch u := t.(type) {
+	case *types.Trait:
+		fn = u.Method("Format")
+	case *types.Named:
+		fn = u.Method("Format")
+	}
+
+	return fn.Type().(*types.Signature).Params()[0].Type().(*types.Ref).Elem()
+}
+
+// QuoteFuncs returns the symbols of fmt's quoteString and quoteRune
+// among the libraries of the program, which the checker loads fmt into,
+// or empty strings for a program without fmt, which prints nothing.
+func QuoteFuncs(info *types.Info, libraries []Library) (quoteString, quoteRune string) {
+	for _, lib := range libraries {
+		if lib.Path != "fmt" {
+			continue
+		}
+
+		for _, d := range lib.Syntax.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil {
+				continue
+			}
+
+			switch fd.Name.Name {
+			case quoteStringFunc:
+				quoteString = ObjName(info.Defs[fd.Name])
+			case quoteRuneFunc:
+				quoteRune = ObjName(info.Defs[fd.Name])
+			}
+		}
+	}
+
+	return quoteString, quoteRune
+}
+
+// Temporary reports whether x, of type t, is an owned value no place
+// holds: a call's result or a literal, and not a borrow. A conversion
+// of such a value may take its memory, where one of a place copies,
+// since the place keeps its value: string(take(mut b)) moves the bytes
+// of b into the string, and string(b) copies them.
+func Temporary(x ast.Expr, t types.Type) bool {
+	if _, borrow := t.(*types.Ref); borrow {
+		return false
+	}
+
+	for {
+		p, ok := x.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+
+		x = p.X
+	}
+
+	switch x.(type) {
+	case *ast.CallExpr, *ast.CompositeLit:
+		return true
+	}
+
+	return false
+}
+
+// SelfFormatted reports whether the verb p prints a value of type t
+// through the type's own Format: t lists fmt.Formatter, or is a trait
+// value of it, and the verb is not %+v, an error's chain, which fmt
+// prints itself through Error and Source. The Format is given the
+// verb, its width, precision and flags, and the backend pads nothing
+// it writes.
+func SelfFormatted(p types.FormatPiece, t types.Type) bool {
+	return types.IsFormatter(t) && !(p.Verb == 'v' && p.Plus)
 }
 
 // HasSymbol reports whether fn is a function the program may name

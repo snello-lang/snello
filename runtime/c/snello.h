@@ -659,9 +659,6 @@ sn_string sn_hex(sn_string s, bool upper, bool owned);
 sn_string sn_hex_bytes(sn_slice b, bool upper);
 sn_string sn_pad_zero(sn_string s, int64_t width, bool owned);
 sn_string sn_bool_to_string(bool v);
-sn_string sn_quote(sn_string s);
-sn_string sn_quote_owned(sn_string s);
-sn_string sn_quote_rune(int64_t r);
 sn_string sn_pad(sn_string s, int64_t width, bool left, bool owned);
 sn_string sn_int_digits(sn_string s, int64_t prec);
 sn_string sn_truncate(sn_string s, int64_t prec, bool owned);
@@ -675,6 +672,8 @@ bool sn_isprint(int32_t r); // a letter, mark, number, punctuation or symbol, or
 static inline SN_NODEBUG sn_string sn_bytes_to_string(sn_slice_u8 b) {
     return sn_string_clone((sn_string){ b.ptr, b.len, 0 });
 }
+
+sn_string sn_bytes_into_string(sn_slice_u8 b); // the owned bytes as the string they are, the buffer moved, not copied; a block of no bytes freed
 
 static inline SN_NODEBUG sn_slice_u8 sn_string_to_bytes(sn_string s) {
     sn_string c = sn_string_clone(s);
@@ -774,7 +773,6 @@ extern sn_slice sn_os_Args; // the command line, as a slice of sn_string
 int64_t sn_os_open(sn_string path, int64_t *fd);
 int64_t sn_os_create(sn_string path, int64_t *fd);
 int64_t sn_os_readToString(sn_string path, sn_string *out, int64_t *inRead);
-int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op);
 int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op);
 int64_t sn_os_remove(sn_string path);
 int64_t sn_os_Cores(void);
@@ -810,6 +808,20 @@ int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at);
 int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead);
 int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec,
                    uint64_t *dev, uint64_t *ino);
+int64_t sn_os_fstat(int64_t fd, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec, uint64_t *dev,
+                    uint64_t *ino);
+int64_t sn_os_chmod(sn_string path, uint32_t mode);
+int64_t sn_os_chtimes(sn_string path, bool setAccess, int64_t asec, int64_t ansec, bool setChange, int64_t msec,
+                      int64_t mnsec);
+int64_t sn_os_truncate(sn_string path, int64_t size);
+int64_t sn_os_ftruncate(int64_t fd, int64_t size);
+int64_t sn_os_link(sn_string from, sn_string to);
+int64_t sn_os_symlink(sn_string target, sn_string link);
+int64_t sn_os_readlink(sn_string path, sn_string *out);
+int64_t sn_os_executable(sn_string *out);
+int64_t sn_os_Getppid(void);
+int64_t sn_os_getuid(void); // Unix alone
+int64_t sn_os_getgid(void); // Unix alone
 int64_t sn_os_mkdir(sn_string path, uint32_t perm);
 int64_t sn_os_rename(sn_string from, sn_string to);
 int64_t sn_os_chdir(sn_string path);
@@ -823,11 +835,10 @@ int64_t sn_os_setenv(sn_string key, sn_string value);
 void sn_os_Unsetenv(sn_string key);
 sn_string sn_os_TempDir(void);
 void sn_os_environ(void *out); // a []string that holds nothing
-void sn_os_env_free(void);     // the copy of the environment, released at the end of a debug build
+void sn_os_env_free(void);     // the copies kept for the program's life, the environment and its own path, released at the end of a debug build
 void sn_io_reserve(sn_slice_u8 *buf, int64_t n);
 int64_t sn_strconv_parseFloat(sn_string s, double *out);
 int64_t sn_strconv_parseFloat32(sn_string s, float *out);
-sn_string sn_strconv_unquote(sn_string s, bool *ok);
 sn_string sn_strconv_formatBits(uint64_t u, int64_t base, bool neg);
 sn_string sn_strconv_formatFixed(double v, int64_t prec);
 void sn_strconv_appendBits(sn_slice_u8 *b, uint64_t u, int64_t base, bool neg);
@@ -1052,6 +1063,9 @@ void sn_time_startTimer(sn_chan *ch, int64_t d, int64_t every);
 // sending end and offers it each signal of mask, the bit of each
 // Signal's value, as it comes.
 void sn_os__signal_notify(sn_chan *ch, int64_t mask);
+void sn_os__signal_ignore(int64_t mask);
+void sn_os__signal_reset(int64_t mask);
+void sn_os__signal_stop(sn_chan *ch);
 
 // Package exec's runtime calls, process.c's: a child started, waited
 // for, signalled, let go and freed, and its pipes read, written and

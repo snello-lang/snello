@@ -220,36 +220,52 @@ func basicOperator(b *Basic, trait *Trait) bool {
 // that lists fmt's Stringer trait after impl, or a trait refining it, a
 // type parameter bounded by one, or a trait value of one.
 func IsStringer(t Type) bool {
+	return listsFmtTrait(t, "Stringer")
+}
+
+// IsFormatter reports whether fmt prints a value of type t through its
+// Format method, given the verb and a fmt.State: a declared type that
+// lists fmt's Formatter trait after impl, or a trait refining it, a
+// type parameter bounded by one, or a trait value of one. Format is
+// called ahead of String or Error, whichever else the type lists.
+func IsFormatter(t Type) bool {
+	return listsFmtTrait(t, "Formatter")
+}
+
+// listsFmtTrait reports whether t lists, is bounded by or is the trait
+// of fmt's named name, or one refining it.
+func listsFmtTrait(t Type, name string) bool {
 	switch t := t.(type) {
 	case *Named:
 		for _, tr := range t.Origin().impls {
-			if tr != nil && refinesStringer(tr) {
+			if tr != nil && refinesFmtTrait(tr, name) {
 				return true
 			}
 		}
 	case *TypeParam:
 		for _, b := range t.bounds {
-			if b != nil && refinesStringer(b) {
+			if b != nil && refinesFmtTrait(b, name) {
 				return true
 			}
 		}
 	case *Trait:
-		return refinesStringer(t)
+		return refinesFmtTrait(t, name)
 	}
 
 	return false
 }
 
-// refinesStringer reports whether t is fmt's Stringer or refines it.
-// Stringer is declared by the library, so it is known by its name and
-// package, not as a predeclared trait.
-func refinesStringer(t *Trait) bool {
-	if t.obj != nil && t.obj.name == "Stringer" && t.obj.pkg != nil && t.obj.pkg.path == "fmt" {
+// refinesFmtTrait reports whether t is fmt's trait of the given name,
+// Stringer or Formatter, or refines it. The traits are declared by the
+// library, so each is known by its name and package, not as a
+// predeclared trait.
+func refinesFmtTrait(t *Trait, name string) bool {
+	if t.obj != nil && t.obj.name == name && t.obj.pkg != nil && t.obj.pkg.path == "fmt" {
 		return true
 	}
 
 	for _, r := range t.refines {
-		if r != nil && refinesStringer(r) {
+		if r != nil && refinesFmtTrait(r, name) {
 			return true
 		}
 	}
@@ -484,9 +500,10 @@ func unprintable(n *Named) string {
 }
 
 // printable reports whether fmt prints a value of type t: anything but
-// a function, a channel, or a trait value of a trait that is neither
-// Error nor fmt.Stringer, looking through composites and declared
-// types; seen cuts a type that holds itself through a pointer. A type
+// a function, a channel, or a trait value of a trait that is none of
+// Error, fmt.Stringer and fmt.Formatter, looking through composites and
+// declared types; seen cuts a type that holds itself through a
+// pointer. A type
 // parameter is printable here: the declaration is checked once, not
 // its instances, so an instance over a function or a channel is
 // refused by the backend when it prints, not by the checker.
@@ -495,7 +512,7 @@ func printable(t Type, seen map[*Named]bool) bool {
 	case *Signature, *Chan:
 		return false
 	case *Trait:
-		return u.Refines(ErrorTrait) || refinesStringer(u)
+		return u.Refines(ErrorTrait) || IsStringer(u) || IsFormatter(u)
 	case *Pointer:
 		return printable(u.elem, seen)
 	case *Ref:
@@ -517,7 +534,7 @@ func printable(t Type, seen map[*Named]bool) bool {
 			}
 		}
 	case *Named:
-		if seen[u] || u.Implements(ErrorTrait) || IsStringer(u) {
+		if seen[u] || u.Implements(ErrorTrait) || IsStringer(u) || IsFormatter(u) {
 			return true
 		}
 

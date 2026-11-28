@@ -4,7 +4,7 @@
 
 package os_test
 
-import ("expect"; "fmt"; "io"; "os"; "testing")
+import ("expect"; "fmt"; "io"; "os"; "path/filepath"; "strings"; "testing")
 
 // TestStatWindows checks what a stat says on Windows: a directory's
 // permissions are made from its read-only flag, as Windows keeps none,
@@ -60,4 +60,52 @@ func TestTempDir() {
 		Some(dir) => expect.IsOk(os.Setenv("TMP", ref dir)),
 		None => os.Unsetenv("TMP"),
 	}
+}
+
+// TestChmodWindows reads back what Windows keeps of a mode: the
+// owner's write bit alone, as the read-only flag.
+func TestChmodWindows() {
+	dir := testing.TempDir()
+	path := dir.Join("mode.txt")
+	expect.IsOk(os.WriteFile(ref path, ref []byte("x"), 0o644))
+	expect.IsOk(os.Chmod(ref path, 0o444))
+	expect.Equal(ref expect.IsOk(os.Stat(ref path)).Mode().Perm(), ref os.FileMode(0o444))
+	expect.IsOk(os.Chmod(ref path, 0o600))
+	expect.Equal(ref expect.IsOk(os.Stat(ref path)).Mode().Perm(), ref os.FileMode(0o666))
+}
+
+// TestUserDirsWindows checks the directories against the environment.
+func TestUserDirsWindows() {
+	expect.Equal(ref expect.IsOk(os.UserHomeDir()), ref os.Getenv("USERPROFILE"))
+	expect.Equal(ref expect.IsOk(os.UserConfigDir()), ref os.Getenv("AppData"))
+	expect.Equal(ref expect.IsOk(os.UserCacheDir()), ref os.Getenv("LocalAppData"))
+	expect.IsNone(os.Getuid())
+	expect.IsNone(os.Getgid())
+}
+
+// TestAbsWindows resolves a path against the current directory by the
+// drive's rules: a rooted path takes the current drive, and a path on
+// another drive without a root is refused.
+func TestAbsWindows() {
+	wd := expect.IsOk(os.Getwd())
+	volume := filepath.VolumeName(ref wd)
+	expect.Equal(ref expect.IsOk(os.Abs("\\tmp\\x")), ref (volume + "\\tmp\\x"))
+	expect.Equal(ref expect.IsOk(os.Abs("docs\\x")), ref filepath.Join(ref wd, "docs\\x"))
+	expect.Equal(ref expect.IsOk(os.Abs("")), ref wd)
+	other := "D:"
+	if strings.EqualIgnoreCase(volume, other) {
+		other = "E:"
+	}
+
+	expect.Equal(ref expect.IsErr(os.Abs(ref (other + "notes.txt"))).Error(), ref ("abs " + other + "notes.txt: invalid argument"))
+}
+
+// TestGlobWindows keeps the drive in a pattern's directory and in its
+// matches.
+func TestGlobWindows() {
+	dir := testing.TempDir()
+	expect.IsOk(os.WriteString(ref dir.Join("a.txt"), "."))
+	expect.IsOk(os.WriteString(ref dir.Join("b.log"), "."))
+	expect.EqualSlice(ref expect.IsOk(os.Glob(ref dir.Join("*.txt"))), ref []string{dir.Join("a.txt")})
+	expect.True(filepath.VolumeName(ref expect.IsOk(os.Glob(ref dir.Join("*.txt")))[0]).Len() > 0) // the drive stays in front
 }

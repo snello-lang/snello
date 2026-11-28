@@ -1308,7 +1308,8 @@ func (e *Emitter) builtinCall(x *ast.CallExpr, b *types.Builtin) string {
 // conversion writes T(x): a C cast between numbers, or between a
 // string and its bytes a copy, since the checker reads the operand and
 // leaves it to its owner; a temporary built for it is dropped with the
-// statement. A borrow seen as another type is the borrow itself, the
+// statement, but for the bytes of one converted to a string, which
+// move into the string, since no place keeps them. A borrow seen as another type is the borrow itself, the
 // same words under the other type's name.
 func (e *Emitter) conversion(x ast.Expr, to types.Type) string {
 	if _, view := to.(*types.Ref); view {
@@ -1320,6 +1321,10 @@ func (e *Emitter) conversion(x ast.Expr, to types.Type) string {
 	case isString(from) && isByteSlice(to):
 		return "sn_string_to_bytes(" + e.looked(x, from) + ")"
 	case isByteSlice(from) && isString(to):
+		if lower.Temporary(x, e.typeOf(x)) { // a value no place holds moves into the string, nothing copied
+			return "sn_bytes_into_string(" + e.operands([]ast.Expr{x}, []types.Type{from})[0] + ")"
+		}
+
 		return "sn_bytes_to_string(" + e.looked(x, from) + ")"
 	case isRuneSlice(from) && isString(to):
 		t := e.spill(e.looked(x, from), from, x.Pos())

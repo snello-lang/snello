@@ -5,6 +5,7 @@
 package types
 
 import (
+	"errors"
 	"path/filepath"
 	"strconv"
 
@@ -30,6 +31,11 @@ type Package struct {
 type Importer interface {
 	Import(path string) (*Package, error)
 }
+
+// ErrNoPackage is what an Importer's error wraps for a path that names
+// no package it has, as against a package it has that does not
+// compile; the checker's own load of fmt passes the first over.
+var ErrNoPackage = errors.New("no such package")
 
 // An ImporterFrom is an Importer that resolves a path from the
 // directory of the file importing it, so that a package of the
@@ -294,6 +300,12 @@ func (conf *Config) CheckFiles(path string, files []*token.File, fs []*ast.File,
 
 	if info.Instances == nil {
 		info.Instances = make(map[*ast.Ident]Instance)
+	}
+
+	if conf.Importer != nil && !conf.Standard { // fmt is the compiler's: what it writes for printing a value calls fmt's own code, so every program has the package; a library without it, a test's, is passed over, and a fmt that does not compile is reported
+		if _, err := conf.Importer.Import(fmtPath); err != nil && !errors.Is(err, ErrNoPackage) {
+			return nil, err
+		}
 	}
 
 	if info.Captures == nil {

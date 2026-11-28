@@ -8,7 +8,7 @@
 // rune's UTF-8, an integer's decimal digits, a write of every byte to a
 // descriptor, a random number per thread, and the queues a task waits
 // on for a channel or a lock. Each part of the library's runtime has a
-// file of its own: slice.c, sort.c, string.c, format.c, quote.c,
+// file of its own: slice.c, sort.c, string.c, format.c,
 // parse.c, map.c, bufio.c, os.c, print.c, math.c, time.c, chan.c and
 // sync.c.
 

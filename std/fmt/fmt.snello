@@ -17,7 +17,10 @@
 // against the arguments then, so a verb that does not fit its argument
 // is a compile error and nothing is formatted at run time. The
 // functions are declared here without bodies; the compiler provides
-// them.
+// them, and the code it writes for printing a value calls this
+// package's own functions for what is written in Snello here, the
+// quoting of %q among them, so the compiler loads fmt into every
+// program, imported or not.
 //
 // A format is text with verbs, each taking the next argument: %v prints
 // any value as Println does; %d an integer, and %x, %X, %o and %b the
@@ -50,6 +53,11 @@
 //
 //	fmt.Printf("%-8s %6.2f\n", name, price) // "apple      1.50"
 //
+// A type prints as its own text by listing Stringer, whose String
+// gives the text, or Formatter, whose Format is given the verb, its
+// width, precision and flags, and writes the text itself; Format is
+// called ahead of String or Error.
+//
 // Every argument is lent for the call: printing a value leaves it with
 // its owner, and nothing of it is kept. A function that returns text
 // allocates the string it returns, which the caller owns; one that
@@ -57,7 +65,26 @@
 // lines of two tasks printing at once never mix.
 package fmt
 
-import "io"
+import (
+	"io"
+	"unicode"
+	"unicode/utf8"
+)
+
+// The bytes a quoted string or rune is written with: its quote marks,
+// the backslash that starts an escape, and the digits of a hexadecimal
+// escape.
+const doubleQuote byte = '"'
+const singleQuote byte = '\''
+const backslash byte = '\\'
+const hexDigits = "0123456789abcdef"
+
+// escapeMost is the most bytes one byte of a string takes quoted, \xNN,
+// and runeQuotedMost the most a quoted rune takes, '\U0010ffff';
+// asciiDelete is the one ASCII byte above the space that does not print.
+const escapeMost = 4
+const runeQuotedMost = 12
+const asciiDelete byte = 0x7F
 
 // A Stringer is a type that prints as its own text: Println, Sprint and
 // the verbs %v, %s and %q print a value of a type that lists Stringer
@@ -72,6 +99,138 @@ import "io"
 //	func (p ref Point) String() string { return fmt.Sprintf("(%d, %d)", p.x, p.y) }
 trait Stringer {
 	func (s ref Self) String() string
+}
+
+// A Formatter is a type that formats itself: every verb, and Println,
+// Sprint and the functions writing as they do, print a value of a type
+// that lists Formatter after impl as what its Format writes into the
+// State it is given, which holds the verb's width, precision and
+// flags; Println and Sprint print as %v with none. Format is called
+// ahead of String or Error, whichever else the type lists, so the
+// verb is the type's to read, and so is the width: fmt pads nothing a
+// Format writes, and a Format honours the width with Pad or PadNumber
+// or leaves it unread. The compiler checks that the format reads one
+// argument per verb, as for any type; which verbs the type honours
+// is the type's own. The type's Format is given the value lent.
+//
+//	struct Money impl fmt.Formatter {
+//		cents int
+//	}
+//
+//	func (m ref Money) Format(f mut fmt.State, verb rune) {
+//		if verb == 'd' {
+//			f.PadNumber(ref strconv.Itoa(m.cents))
+//			return
+//		}
+//
+//		f.Pad(ref fmt.Sprintf("$%d.%02d", m.cents/100, m.cents%100))
+//	}
+//
+// fmt.Sprintf("[%8v] [%-8v] [%d]", m, m, m) is then "[   $1.50] [$1.50   ] [150]".
+trait Formatter {
+	func (s ref Self) Format(f mut State, verb rune)
+}
+
+// A State is what a Format writes into: the width, the precision and
+// the flags of the verb that reached it, and the text written, which
+// is what the verb prints. It is an io.Writer, so a Format may write
+// into it with Fprintf, and Pad and PadNumber write a text with the
+// width applied.
+struct State impl io.Writer {
+	out       []byte
+	width     int?
+	precision int?
+	minus     bool
+	zero      bool
+}
+
+// Width returns the width the verb gave, 8 for %8v, or None.
+func (f ref State) Width() int? {
+	return f.width
+}
+
+// Precision returns the precision the verb gave, 2 for %.2v, or None.
+func (f ref State) Precision() int? {
+	return f.precision
+}
+
+// Minus reports the minus flag, %-8v: a width pads on the right.
+func (f ref State) Minus() bool {
+	return f.minus
+}
+
+// Zero reports the zero flag, %08v: a width pads a number with zeros
+// after its sign, which PadNumber does. A minus flag overrides it, and
+// so does a precision with %d, %x, %X, %o or %b, whose digits the
+// precision makes up, as for a number; Zero is then false.
+func (f ref State) Zero() bool {
+	return f.zero
+}
+
+// Write adds p to the text, whole; it never fails.
+func (f mut State) Write(p ref []byte) Result<int, io.Error> {
+	f.out.Extend(p)
+	return Ok(len(p))
+}
+
+// WriteString adds s to the text.
+func (f mut State) WriteString(s ref string) {
+	f.out.Extend(s.Bytes())
+}
+
+// WriteByte adds one byte to the text.
+func (f mut State) WriteByte(c byte) {
+	f.out.Push(c)
+}
+
+// WriteRune adds the UTF-8 of r to the text.
+func (f mut State) WriteRune(r rune) {
+	utf8.AppendRune(mut f.out, r)
+}
+
+// Pad adds s as %s prints a string under the verb's width, precision
+// and minus flag: its first characters, as many as the precision,
+// padded with spaces to the width, counted in characters, on the left,
+// or on the right after a minus; a text already as wide is added
+// whole.
+func (f mut State) Pad(s ref string) {
+	text := s
+	count := utf8.RuneCountInString(s)
+	if limit := f.precision {
+		if limit < count {
+			text = s[:runeOffset(s, limit)]
+			count = limit
+		}
+	}
+
+	f.padded(text, count)
+}
+
+// PadNumber adds s, the text of a number, under the verb's width and
+// flags: padded with spaces to the width, counted in characters, on
+// the left, or on the right after a minus, or with zeros after its
+// sign, a leading minus or plus, when the zero flag is set; the
+// precision is not read, since a number's precision is its digits,
+// which the Format writes. A text already as wide is added whole.
+func (f mut State) PadNumber(s ref string) {
+	count := utf8.RuneCountInString(s)
+	if f.zero {
+		if width := f.width {
+			if count < width {
+				digits := s
+				if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
+					f.out.Push(s[0])
+					digits = s[1:]
+				}
+
+				f.fill('0', width-count)
+				f.out.Extend(digits.Bytes())
+				return
+			}
+		}
+	}
+
+	f.padded(s, count)
 }
 
 // Println prints its arguments to the standard output, separated by
@@ -128,3 +287,140 @@ func Fprintln<W: io.Writer>(w mut W, args ...ref any)
 //
 //	fmt.Fprintf(mut os.Stderr(), "%s: %v\n", path, e)
 func Fprintf<W: io.Writer>(w mut W, format ref string, args ...ref any)
+
+// padded adds s, of count characters, padded with spaces to the width
+// on the side the minus flag says.
+func (f mut State) padded(s ref string, count int) {
+	if w := f.width {
+		if f.minus {
+			f.out.Extend(s.Bytes())
+			f.fill(' ', w-count)
+			return
+		}
+
+		f.fill(' ', w-count)
+	}
+
+	f.out.Extend(s.Bytes())
+}
+
+// fill adds n copies of c, none when n is not above zero.
+func (f mut State) fill(c byte, n int) {
+	for i := 0; i < n; i++ {
+		f.out.Push(c)
+	}
+}
+
+// runeOffset returns the byte offset in s where its n-th character
+// starts, n below the count of them.
+func runeOffset(s ref string, n int) int {
+	for i, _ := range s {
+		if n == 0 {
+			return i
+		}
+
+		n--
+	}
+
+	return len(s)
+}
+
+// quoteString writes s as %q and strconv.Quote write a string: in
+// double quotes, a quote and a backslash escaped, a character that
+// prints as itself, the seven short escapes, a control byte as \xNN,
+// any other character as \u or \U with its hexadecimal digits, and a
+// byte that starts no character as \xNN. The compiler calls it for
+// %q, and for a string inside a value printed as it would be written,
+// Some("x"); strconv.Quote is %q.
+func quoteString(s ref string) string {
+	out := make([]byte, 0, s.Len()*escapeMost+2) // room for every byte escaped, and the quotes
+	out.Push(doubleQuote)
+	for i := 0; i < s.Len(); {
+		c := s[i]
+		if c >= ' ' && c < asciiDelete && c != doubleQuote && c != backslash { // a printable ASCII byte is itself: most of most strings
+			out.Push(c)
+			i++
+			continue
+		}
+
+		r, width := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && width == 1 { // a byte that starts no character, told from a written U+FFFD by its width
+			hexEscape(mut out, 'x', int(s[i]), 2)
+		} else {
+			escapeRune(mut out, r, doubleQuote)
+		}
+
+		i += width
+	}
+
+	out.Push(doubleQuote)
+	return string(take(mut out)) // the bytes move into the string
+}
+
+// quoteRune writes r as %q writes a rune: in single quotes, escaped as
+// quoteString escapes a character; a value that is no rune, past the
+// last one or a surrogate, is written as U+FFFD. The compiler calls it
+// for %q of an integer.
+func quoteRune(r int) string {
+	c := rune(utf8.RuneError)
+	if r >= 0 && r <= int(utf8.MaxRune) && utf8.ValidRune(rune(r)) {
+		c = rune(r)
+	}
+
+	out := make([]byte, 0, runeQuotedMost)
+	out.Push(singleQuote)
+	escapeRune(mut out, c, singleQuote)
+	out.Push(singleQuote)
+	return string(take(mut out))
+}
+
+// escapeRune adds r to out as it is written between the quote marks
+// given: the quote and a backslash escaped, a printable character as
+// itself, the seven short escapes, a control byte as \xNN, and any
+// other character as \u or \U with its hexadecimal digits.
+func escapeRune(out mut []byte, r rune, quote byte) {
+	if r == rune(quote) || r == rune(backslash) {
+		out.Push(backslash)
+		out.Push(byte(r))
+		return
+	}
+
+	if unicode.IsPrint(r) {
+		utf8.AppendRune(mut out, r)
+		return
+	}
+
+	short := match r {
+		'\a' => 'a',
+		'\b' => 'b',
+		'\f' => 'f',
+		'\n' => 'n',
+		'\r' => 'r',
+		'\t' => 't',
+		'\v' => 'v',
+		_ => rune(0),
+	}
+	if short != 0 {
+		out.Push(backslash)
+		out.Push(byte(short))
+		return
+	}
+
+	if r < ' ' || r == rune(asciiDelete) {
+		hexEscape(mut out, 'x', int(r), 2)
+	} else if r < 0x10000 {
+		hexEscape(mut out, 'u', int(r), 4)
+	} else {
+		hexEscape(mut out, 'U', int(r), 8)
+	}
+}
+
+// hexEscape adds a backslash, the letter of the escape and v in digits
+// hexadecimal digits, the high ones first.
+func hexEscape(out mut []byte, letter byte, v int, digits int) {
+	out.Push(backslash)
+	out.Push(letter)
+	for shift := (digits - 1) * 4; shift >= 0; shift -= 4 {
+		out.Push(hexDigits[(v>>shift)&0xF])
+	}
+}

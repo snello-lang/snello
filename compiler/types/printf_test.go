@@ -78,10 +78,16 @@ func TestPrintf(t *testing.T) {
 		{`fmt.Printf("%s %v %q", e, e, e)`, ""}, // an Error type prints as its message
 		{`fmt.Printf("%s %q %v", c, c, c)`, ""}, // a Stringer prints as its String
 		{`fmt.Printf("%s", p)`, `fmt.Printf format %s takes a string, not Plain`},
-		{`fmt.Printf("%s %q %v", er, er, er)`, ""}, // the predeclared error prints as its message
-		{`fmt.Printf("%s %q %v", t, t, t)`, ""},    // a type parameter bounded by Stringer
-		{`fmt.Printf("%s %q %v", u, u, u)`, ""},    // or by Error
-		{`fmt.Printf("%v", v)`, ""},                // any type parameter prints with %v
+		{`fmt.Printf("%v %d %x %s %q %f %t %c %8.2v %05d %-6s %.3q", m, m, m, m, m, m, m, m, m, m, m, m)`, ""}, // a Formatter takes every verb, with any width, precision and flag: its Format is given them
+		{`fmt.Printf("%+v", m)`, `fmt.Printf format %+v takes an error, not Money`},                            // but the + flag stays an error's
+		{`fmt.Printf("%+v %v %08d", fm, fm, fm)`, ""},                                                          // a Formatter that is an error prints its chain with %+v, its Format otherwise
+		{`fmt.Printf("%d %x %05v", pr, pr, pr)`, ""},                                                           // a trait value whose trait refines Formatter
+		{`fmt.Printf("%05s", m)`, `fmt takes the 0 flag on a number only, not with %s`},                        // the grammar's rule on the flag holds for every type
+		{`fmt.Printf("%d %05v", fp, fp)`, ""},                                                                  // a type parameter bounded by Formatter
+		{`fmt.Printf("%s %q %v", er, er, er)`, ""},                                                             // the predeclared error prints as its message
+		{`fmt.Printf("%s %q %v", t, t, t)`, ""},                                                                // a type parameter bounded by Stringer
+		{`fmt.Printf("%s %q %v", u, u, u)`, ""},                                                                // or by Error
+		{`fmt.Printf("%v", v)`, ""},                                                                            // any type parameter prints with %v
 		{`fmt.Printf("%s", v)`, `fmt.Printf format %s takes a string, not V`},
 		{`fmt.Printf("%s %q", sh, fa)`, ""},                                     // a trait value whose trait refines Stringer or Error
 		{`fmt.Printf("%s", n)`, `fmt.Printf format %s takes a string, not int`}, // the verb sees through a borrow
@@ -105,7 +111,10 @@ func TestPrintf(t *testing.T) {
 			"type Name string\n" +
 			"type Level int impl fmt.Stringer\nfunc (l ref Level) String() string { return \"low\" }\n" +
 			"type Celsius f64 impl fmt.Stringer\nfunc (c ref Celsius) String() string { return \"hot\" }\n" +
-			"func f<T: fmt.Stringer, U: Error, V>(w W, e E, c Color, p Plain, er error, t T, u U, v V, sh ref Shape, fa ref Fault, n ref int, q *int, bs []u8, ns []int, name Name, lv Level, cel Celsius) { " + tt.src + " }\n"
+			"struct Money impl fmt.Formatter { cents int }\nfunc (m ref Money) Format(f mut fmt.State, verb rune) { f.WriteString(\"$\") }\n" +
+			"struct Fail impl Error, fmt.Formatter { code int }\nfunc (e ref Fail) Format(f mut fmt.State, verb rune) { f.WriteString(\"fail\") }\n" +
+			"trait Pretty: fmt.Formatter { func (p ref Self) Width() int }\n" +
+			"func f<T: fmt.Stringer, U: Error, V, F: fmt.Formatter>(w W, e E, c Color, p Plain, er error, t T, u U, v V, sh ref Shape, fa ref Fault, n ref int, q *int, bs []u8, ns []int, name Name, lv Level, cel Celsius, m Money, fm Fail, pr ref Pretty, fp F) { " + tt.src + " }\n"
 		got := checkErrors(t, src)
 		switch {
 		case tt.want == "" && len(got) > 0:

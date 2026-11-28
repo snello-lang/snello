@@ -13,14 +13,28 @@
 // argument.
 package os
 
-import ("fmt"; "io"; "path/filepath"; "time")
+import ("fmt"; "io"; "math/rand"; "path/filepath"; "time")
 
 // The error numbers the package reports of its own accord, where the
 // system was not asked: each is the same number on every system Snello
 // runs on.
 const eexist int = 17  // file exists
+const enoent int = 2   // no such file or directory
 const enotdir int = 20 // not a directory
 const einval int = 22  // invalid argument
+
+// tempTries is how many names MkdirTemp and CreateTemp try before giving
+// up on a directory where every name drawn is taken.
+const tempTries = 10000
+
+// maxLinks is how many symbolic links EvalSymlinks follows in one path
+// before it gives up on a chain that may loop: a bound above any
+// system's own, which is 40 on Linux and 32 on macOS.
+const maxLinks = 255
+
+// globMeta are the bytes that make an element of a pattern a pattern,
+// which Glob matches against a directory's names.
+const globMeta = "*?["
 
 // The flags of OpenFile: one of O_RDONLY, O_WRONLY and O_RDWR says how
 // the file is opened, and the rest are added to it with |. The numbers
@@ -191,6 +205,25 @@ struct OpenOptions {
 	Perm      FileMode = 0o666 // the permissions of a file it makes
 }
 
+// A Walk is what a function given to WalkDir answers after each file:
+// go on, skip the directory just given, or the rest of the one holding
+// the file given, skip everything left, or stop with an error, which
+// WalkDir returns.
+enum Walk {
+	// Continue goes on to the next file.
+	Continue
+
+	// SkipDir leaves out the directory just given, or, after a file, the
+	// files left in its directory.
+	SkipDir
+
+	// SkipAll leaves out every file left; WalkDir then returns Ok.
+	SkipAll
+
+	// Stop ends the walk, and WalkDir returns the error.
+	Stop(io.Error)
+}
+
 // Exit ends the program at once with code as its status, 0 for success
 // and anything else, 1 by custom, for a failure the shell sees. Nothing
 // after the call runs, no Drop and no deferred call, and the compiler
@@ -272,10 +305,11 @@ func Open(path ref string) Result<File, io.Error> {
 	return Ok(File{fd: fd, name: path.Clone(), stream: false, appending: false})
 }
 
-// Create opens the file path names for writing and returns it, a File
-// the caller owns. A file that does not exist is made, with
-// permissions 0666 before the umask; one that does is emptied first.
-// path is only read; the File keeps a copy of it.
+// Create opens the file path names for writing, and for reading back
+// what was written, and returns it, a File the caller owns. A file
+// that does not exist is made, with permissions 0666 before the umask;
+// one that does is emptied first. path is only read; the File keeps a
+// copy of it.
 //
 //	f := os.Create(ref out)?
 //	f.WriteString("hello\n")?
@@ -409,14 +443,21 @@ func MkdirTemp(dir ref string, pattern ref string) Result<string, io.Error> {
 		return Err(io.NewError("mkdirtemp", pattern.Clone(), "pattern contains path separator", io.Other))
 	}
 
-	path := ""
-	op := ""
-	code := mkdirTemp(dir, pattern, mut path, mut op)
-	if code != 0 {
-		return Err(io.Errno(op, path, code))
+	under := tempUnder(dir)
+	prefix, suffix := tempParts(ref under, pattern)
+	for try := 0; try < tempTries; try++ {
+		name := tempName(ref prefix, ref suffix)
+		code := mkdir(ref name, 0o700)
+		if code == 0 {
+			return Ok(name)
+		}
+
+		if code != eexist {
+			return Err(tempFailed("mkdirtemp", ref under, ref prefix, ref suffix, code))
+		}
 	}
 
-	return Ok(path)
+	return Err(tempFailed("mkdirtemp", ref under, ref prefix, ref suffix, eexist))
 }
 
 // Remove removes the file path names, or the directory when it is
@@ -632,6 +673,444 @@ func Rename(from ref string, to ref string) Result<(), io.Error> {
 	return Ok(())
 }
 
+// Chmod sets the permissions of the file path names to mode's: its
+// nine permission bits, and ModeSetuid, ModeSetgid and ModeSticky
+// where the system keeps them; the bits of the file's kind are not
+// read. path is only read; a symbolic link is followed.
+//
+//	os.Chmod(ref script, 0o755)?
+//
+// On Windows, which keeps no permissions, the owner's write bit alone
+// counts: a mode without it makes the file read-only, one with it
+// writable, as FileMode says. A path that names nothing is an Error of
+// Kind io.NotExist, "chmod /x: no such file or directory".
+func Chmod(path ref string, mode FileMode) Result<(), io.Error> {
+	code := chmod(path, u32(mode))
+	if code != 0 {
+		return Err(io.Errno("chmod", path, code))
+	}
+
+	return Ok(())
+}
+
+// Chtimes sets the time the file path names was last read, atime, and
+// last changed, mtime; a time given as None is left as it is, so a
+// program sets one without reading the other first. The system keeps
+// a time to the precision it has, nanoseconds on Linux and macOS and
+// hundreds of nanoseconds on Windows, and Stat reads back what it
+// kept. path is only read; a symbolic link is followed.
+//
+//	os.Chtimes(ref path, None, Some(time.Now()))? // touch
+//
+// A path that names nothing is an Error of Kind io.NotExist, "chtimes
+// /x: no such file or directory".
+func Chtimes(path ref string, atime time.Time?, mtime time.Time?) Result<(), io.Error> {
+	var asec i64 = 0
+	var ansec i64 = 0
+	var msec i64 = 0
+	var mnsec i64 = 0
+	if a := atime {
+		asec = a.Unix()
+		ansec = i64(a.Nanosecond())
+	}
+
+	if m := mtime {
+		msec = m.Unix()
+		mnsec = i64(m.Nanosecond())
+	}
+
+	code := chtimes(path, atime.IsSome(), asec, ansec, mtime.IsSome(), msec, mnsec)
+	if code != 0 {
+		return Err(io.Errno("chtimes", path, code))
+	}
+
+	return Ok(())
+}
+
+// Truncate sets the size of the file path names to size bytes: a
+// longer file loses its end, a shorter one grows with zero bytes.
+// path is only read. A size below zero is refused as an invalid
+// argument before the system is asked.
+//
+//	os.Truncate(ref log, 0)? // empty it
+//
+// A path that names nothing is an Error of Kind io.NotExist,
+// "truncate /x: no such file or directory".
+func Truncate(path ref string, size i64) Result<(), io.Error> {
+	if size < 0 {
+		return Err(io.Errno("truncate", path, einval))
+	}
+
+	code := truncate(path, size)
+	if code != 0 {
+		return Err(io.Errno("truncate", path, code))
+	}
+
+	return Ok(())
+}
+
+// Link makes newname a hard link to the file oldname names: a second
+// name for the same file, which lives while either name does. Both
+// are only read. A directory cannot be linked.
+//
+//	os.Link(ref data, ref backup)?
+//
+// A newname taken already is an Error of Kind io.Exists, "link OLD
+// NEW: file exists", and an oldname that names nothing one of Kind
+// io.NotExist.
+func Link(oldname ref string, newname ref string) Result<(), io.Error> {
+	code := link(oldname, newname)
+	if code != 0 {
+		return Err(io.Errno("link", ref (oldname + " " + newname), code))
+	}
+
+	return Ok(())
+}
+
+// Symlink makes newname a symbolic link to oldname: a file that holds
+// the text oldname, which Open and Stat follow and Lstat and Readlink
+// do not. oldname need not exist, and is kept as written, relative to
+// the link's own directory when it is relative. Both are only read.
+//
+//	os.Symlink("current.log", ref link)?
+//
+// On Windows a link to a directory is made as a directory link, which
+// takes the target to exist when the link is made, and making a link
+// takes the user's right to, which developer mode gives. A newname
+// taken already is an Error of Kind io.Exists, "symlink OLD NEW: file
+// exists".
+func Symlink(oldname ref string, newname ref string) Result<(), io.Error> {
+	code := symlink(oldname, newname)
+	if code != 0 {
+		return Err(io.Errno("symlink", ref (oldname + " " + newname), code))
+	}
+
+	return Ok(())
+}
+
+// Readlink returns the text the symbolic link path names holds, as
+// Symlink wrote it, in a string of its own; path is only read. A path
+// that is no symbolic link is refused as an invalid argument,
+// "readlink /x: invalid argument", and one that names nothing is an
+// Error of Kind io.NotExist.
+//
+//	target := os.Readlink(ref link)?
+func Readlink(path ref string) Result<string, io.Error> {
+	target := ""
+	code := readlink(path, mut target)
+	if code != 0 {
+		return Err(io.Errno("readlink", path, code))
+	}
+
+	return Ok(target)
+}
+
+// Abs returns the absolute form of path, a new string: path itself
+// cleaned when it is absolute, and otherwise the current directory
+// with path joined to it, as filepath.Join joins and cleans; no link
+// is followed, and the file need not exist; an empty path is the
+// current directory. On Windows a path that starts at a root with no
+// drive, \tmp, is on the current directory's drive, and one on another
+// drive without a root,
+// "D:notes.txt", is refused as an invalid argument, since that drive's
+// current directory is the system's alone. path is only read.
+//
+//	full := os.Abs("docs/notes.txt")?
+//
+// It fails when the current directory cannot be read, as Getwd fails.
+func Abs(path ref string) Result<string, io.Error> {
+	if filepath.IsAbs(path) {
+		return Ok(filepath.Clean(path))
+	}
+
+	wd := Getwd()?
+	if path.Len() == 0 { // the current directory itself
+		return Ok(wd)
+	}
+
+	return abs(path, ref wd)
+}
+
+// EvalSymlinks returns the path with every symbolic link in it
+// followed, a new string: what the file system reaches when it reads
+// path, element by element, a link's text spliced in where the link is,
+// an absolute link starting the path over; the result is clean, and
+// relative when path is and no link made it absolute. Every element
+// must exist. path is only read.
+//
+//	real := os.EvalSymlinks(ref link)?
+//
+// A path that names nothing is an Error of Kind io.NotExist, as Lstat
+// reports it, and a chain of more than 255 links an Error, "evalsymlinks
+// PATH: too many links".
+func EvalSymlinks(path ref string) Result<string, io.Error> {
+	if path.Len() == 0 {
+		return Ok(path.Clone())
+	}
+
+	// The path is read element by element into dest, the volume and the
+	// root, when the path starts at one, first; a link replaces what is
+	// left of the path with its text and the rest, and the reading goes
+	// on from there.
+	rest := path.Clone()
+	volLen := filepath.VolumeName(ref rest).Len()
+	if volLen < rest.Len() && filepath.IsSeparator(rest[volLen]) {
+		volLen++
+	}
+
+	dest := rest[0:volLen].Clone()
+	links := 0
+	start := volLen
+	for start < rest.Len() {
+		for start < rest.Len() && filepath.IsSeparator(rest[start]) {
+			start++
+		}
+
+		end := start
+		for end < rest.Len() && !filepath.IsSeparator(rest[end]) {
+			end++
+		}
+
+		if end == start { // separators alone are left
+			break
+		}
+
+		if end-start == 1 && rest[start] == dotByte {
+			start = end
+			continue
+		}
+
+		if end-start == 2 && rest[start] == dotByte && rest[start+1] == dotByte {
+			// Back up to the element before, which is no link, having
+			// been followed already; with nothing before, or a ".." kept
+			// before, this ".." is kept too.
+			r := dest.Len() - 1
+			for r >= volLen && !filepath.IsSeparator(dest[r]) {
+				r--
+			}
+
+			kept := r < volLen || (dest.Len()-(r+1) == 2 && dest[r+1] == dotByte && dest[r+2] == dotByte)
+			if kept {
+				if dest.Len() > volLen {
+					dest = dest + string(filepath.Separator)
+				}
+
+				dest = dest + ".."
+			} else {
+				dest = dest[0:r].Clone()
+			}
+
+			start = end
+			continue
+		}
+
+		if dest.Len() > volLen && !filepath.IsSeparator(dest[dest.Len()-1]) {
+			dest = dest + string(filepath.Separator)
+		}
+
+		dest = dest + rest[start:end]
+		fi := Lstat(ref dest)?
+		if fi.Mode()&ModeSymlink == 0 {
+			if !fi.Mode().IsDir() && end < rest.Len() {
+				return Err(io.Errno("evalsymlinks", path, enotdir))
+			}
+
+			start = end
+			continue
+		}
+
+		links++
+		if links > maxLinks {
+			return Err(io.NewError("evalsymlinks", path.Clone(), "too many links", io.Other))
+		}
+
+		link := Readlink(ref dest)?
+		after := rest[end:].Clone()
+		rest = link + after
+		linkVolLen := filepath.VolumeName(ref link).Len()
+		if linkVolLen > 0 { // a link to a path with a volume starts over there
+			if linkVolLen < link.Len() && filepath.IsSeparator(link[linkVolLen]) {
+				linkVolLen++
+			}
+
+			volLen = linkVolLen
+			dest = link[0:volLen].Clone()
+			start = volLen
+		} else if link.Len() > 0 && filepath.IsSeparator(link[0]) { // a link to an absolute path starts over at the root
+			volLen = 1
+			dest = link[0:1].Clone()
+			start = 1
+		} else { // a link to a relative path is read where the link is: its element goes
+			r := dest.Len() - 1
+			for r >= volLen && !filepath.IsSeparator(dest[r]) {
+				r--
+			}
+
+			if r < volLen {
+				dest = dest[0:volLen].Clone()
+			} else {
+				dest = dest[0:r].Clone()
+			}
+
+			start = 0
+		}
+	}
+
+	return Ok(filepath.Clean(ref dest))
+}
+
+// WalkDir walks the tree under root, giving each file and directory to
+// visit, the directory before what it holds and the entries of a
+// directory in the order of their names: the root first, by its Lstat,
+// then each entry as ReadDir lists it, with no link followed. visit is
+// given the path, root with the elements under it joined on, and the
+// entry, or the error that stopped the walk from reading a directory,
+// and answers how to go on, a Walk; a directory it cannot read is given
+// a second time with the error, after its own visit, and left out when
+// visit answers Continue. The walk is done once, each directory read
+// once, and stops at Stop, whose error it returns.
+//
+//	os.WalkDir(ref root, func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+//		match found {
+//			Ok(e) => {
+//				if e.IsDir() && e.Name() == ".git" {
+//					return os.SkipDir
+//				}
+//
+//				fmt.Println(path)
+//			},
+//			Err(e) => fmt.Println("unreadable:", e),
+//		}
+//
+//		return os.Continue
+//	})?
+//
+// A root that names nothing is given to visit with its error, and the
+// walk ends as visit answers: Continue returns Ok.
+func WalkDir(root ref string, visit func(path ref string, found Result<ref DirEntry, io.Error>) Walk) Result<(), io.Error> {
+	match Lstat(root) {
+		Ok(fi) => {
+			entry := DirEntry{name: fi.name.Clone(), typ: fi.mode.Type()}
+			_ = walk(root, ref entry, visit)?
+			return Ok(())
+		},
+		Err(e) => {
+			match visit(root, Err(e)) {
+				Stop(failure) => return Err(failure),
+				_ => return Ok(()),
+			}
+		},
+	}
+}
+
+// Glob returns the paths of the files that fit pattern, as
+// filepath.Match fits a name, in the order of their names, each a new
+// string: the elements up to the first with a *, ? or [ name the
+// directory to start in, and each element from there is matched
+// against the names of the directories reached so far, so
+// "src/*/main.snello" lists each package's main file. No file fitting
+// is an empty slice, and a directory that cannot be read is skipped, as
+// a shell skips it; a pattern that cannot be read is an error, as Match
+// reports it. The pattern is read in one pass, however many elements it
+// has. pattern is only read.
+//
+//	for _, name := range ref os.Glob("*.log")? {
+//		os.Remove(ref name)?
+//	}
+func Glob(pattern ref string) Result<[]string, io.Error> {
+	_ = filepath.Match(pattern, "")? // a bad pattern is reported whatever is on disk
+	volLen := filepath.VolumeName(pattern).Len()
+	first := firstMeta(pattern, volLen)
+	if first == pattern.Len() {
+		match Lstat(pattern) {
+			Ok(_) => return Ok([]string{pattern.Clone()}),
+			Err(_) => return Ok([]string{}),
+		}
+	}
+
+	dirs := []string{cleanGlobDir(pattern[0:first])}
+	start := first
+	for start <= pattern.Len() && len(dirs) > 0 {
+		end := start
+		for end < pattern.Len() && !filepath.IsSeparator(pattern[end]) {
+			end++
+		}
+
+		found := []string{}
+		for _, d := range ref dirs {
+			found = glob(d, pattern[start:end], found)?
+		}
+
+		dirs = found
+		start = end + 1
+	}
+
+	return Ok(dirs)
+}
+
+// CreateTemp makes a new file under dir, or the system's temporary
+// directory when dir is empty, open for reading and writing, with
+// permissions 0600, named by pattern: the pattern with its last *
+// replaced by a random number, or followed by one when it has none,
+// so the name is one no file had. The caller removes the file when it
+// is done with it; Name gives its path. dir and pattern are only
+// read.
+//
+//	f := os.CreateTemp("", "upload-*.bin")?
+//	defer os.Remove(f.Name())
+//
+// A pattern holding a separator is refused, "createtemp up/*: pattern
+// contains path separator", and a dir that does not exist is reported
+// by its stat, "stat /tmp/gone: no such file or directory".
+func CreateTemp(dir ref string, pattern ref string) Result<File, io.Error> {
+	if hasSeparator(pattern) {
+		return Err(io.NewError("createtemp", pattern.Clone(), "pattern contains path separator", io.Other))
+	}
+
+	under := tempUnder(dir)
+	prefix, suffix := tempParts(ref under, pattern)
+	for try := 0; try < tempTries; try++ {
+		name := tempName(ref prefix, ref suffix)
+		fd := 0
+		code := openFile(ref name, O_RDWR|O_CREATE|O_EXCL, 0o600, mut fd)
+		if code == 0 {
+			return Ok(File{fd: fd, name: name, stream: false, appending: false})
+		}
+
+		if code != eexist {
+			return Err(tempFailed("open", ref under, ref prefix, ref suffix, code))
+		}
+	}
+
+	return Err(tempFailed("open", ref under, ref prefix, ref suffix, eexist))
+}
+
+// Executable returns the path of the running program's file, absolute:
+// what the system says started the program, not the name it was
+// started by, so a program finds the files beside itself with
+// filepath.Dir. On Linux and macOS a link to the program is resolved;
+// on Windows the path is the one the program was started by, made
+// absolute. The system is asked once, on
+// the first call, since the program's file does not change while it
+// runs, and the path is kept for the program's life: the string
+// returned is lent from that block, with nothing copied, as a string
+// literal is.
+//
+//	exe := os.Executable()?
+//	assets := filepath.Join(filepath.Dir(ref exe), "assets")
+//
+// It fails when the system cannot say, "executable: ...", which no
+// supported system does for a program started from a file.
+func Executable() Result<string, io.Error> {
+	path := ""
+	code := executable(mut path)
+	if code != 0 {
+		return Err(syscallError("executable", code))
+	}
+
+	return Ok(path)
+}
+
 // Getwd returns the path of the current directory, a string of its
 // own: the PWD of the environment when it is an absolute path that
 // names the current directory, which is the path the user came by,
@@ -699,6 +1178,10 @@ func Hostname() Result<string, io.Error> {
 // Getpid returns the number of the program's process, the one ps and
 // kill know it by, and Task Manager on Windows. The runtime provides it.
 func Getpid() int
+
+// Getppid returns the process id of the program's parent, the shell or
+// the program that started it. The runtime provides it.
+func Getppid() int
 
 // TempDir returns the directory for temporary files: the TMPDIR of the
 // environment, or /tmp when it is unset or empty, and on Windows the
@@ -920,6 +1403,47 @@ func (f mut File) Sync() Result<(), io.Error> {
 	return Ok(())
 }
 
+// Stat returns what the system says of the open file, a FileInfo whose
+// Name is the last element of the path the file was opened by: its
+// size now, which a write through another File changes too. The
+// receiver is lent.
+//
+//	size := f.Stat()?.Size()
+func (f ref File) Stat() Result<FileInfo, io.Error> {
+	var size i64 = 0
+	var mode u32 = 0
+	var sec i64 = 0
+	var nsec i64 = 0
+	var dev u64 = 0
+	var ino u64 = 0
+	code := fstat(f.fd, mut size, mut mode, mut sec, mut nsec, mut dev, mut ino)
+	if code != 0 {
+		return Err(io.Errno("stat", ref f.name, code))
+	}
+
+	return Ok(fileInfo(ref f.name, size, mode, sec, nsec, dev, ino))
+}
+
+// Truncate sets the size of the open file to size bytes, as
+// os.Truncate does by a path: a longer file loses its end, a shorter
+// one grows with zero bytes; the position for the next Read or Write
+// does not move. The file must be open for writing. A size below zero
+// is refused as an invalid argument before the system is asked.
+//
+//	f.Truncate(0)?
+func (f mut File) Truncate(size i64) Result<(), io.Error> {
+	if size < 0 {
+		return Err(io.Errno("truncate", ref f.name, einval))
+	}
+
+	code := ftruncate(f.fd, size)
+	if code != 0 {
+		return Err(io.Errno("truncate", ref f.name, code))
+	}
+
+	return Ok(())
+}
+
 // Close takes the file, closes it, and reports a failure to: on some
 // file systems a write's failure shows only then. A closed file cannot
 // be used again: the compiler refuses a use after Close as a use of a
@@ -1103,15 +1627,187 @@ func statInto(path ref string, follow bool, fi mut FileInfo) int {
 	var ino u64 = 0
 	code := stat(path, follow, mut size, mut mode, mut sec, mut nsec, mut dev, mut ino)
 	if code == 0 {
-		fi.name = filepath.Base(path).Clone()
-		fi.size = size
-		fi.mode = FileMode(mode)
-		fi.modTime = time.Unix(sec, nsec)
-		fi.dev = dev
-		fi.ino = ino
+		*fi = fileInfo(path, size, mode, sec, nsec, dev, ino)
 	}
 
 	return code
+}
+
+// fileInfo is the FileInfo of what the system said of the file at path,
+// named by the last element of the path.
+func fileInfo(path ref string, size i64, mode u32, sec i64, nsec i64, dev u64, ino u64) FileInfo {
+	return FileInfo{name: filepath.Base(path).Clone(), size: size, mode: FileMode(mode), modTime: time.Unix(sec, nsec), dev: dev, ino: ino}
+}
+
+// walk gives the entry at path to visit and, for a directory it may
+// enter, the entries under it, each walked in turn; it answers for the
+// directory holding the entry: Continue, SkipDir when visit asked for
+// the rest of that directory to be left out, or SkipAll, and a Stop's
+// error as its own. A directory that cannot be read is given to visit
+// a second time, with the error, and left out when visit answers
+// Continue or SkipDir.
+func walk(path ref string, entry ref DirEntry, visit func(path ref string, found Result<ref DirEntry, io.Error>) Walk) Result<Walk, io.Error> {
+	match visit(path, Ok(entry)) {
+		Continue => {},
+		SkipDir => {
+			if entry.IsDir() { // the directory just given is left out, and its siblings go on
+				return Ok(Continue)
+			}
+
+			return Ok(SkipDir) // after a file: the rest of its directory
+		},
+		SkipAll => return Ok(SkipAll),
+		Stop(failure) => return Err(failure),
+	}
+
+	if !entry.IsDir() {
+		return Ok(Continue)
+	}
+
+	entries := []DirEntry{}
+	match ReadDir(path) {
+		Ok(listed) => entries = listed,
+		Err(e) => {
+			match visit(path, Err(e)) {
+				SkipAll => return Ok(SkipAll),
+				Stop(failure) => return Err(failure),
+				_ => return Ok(Continue),
+			}
+		},
+	}
+
+	for _, e := range ref entries {
+		under := filepath.Join(path, e.Name())
+		match walk(ref under, e, visit)? {
+			Continue => {},
+			SkipDir => break,
+			_ => return Ok(SkipAll),
+		}
+	}
+
+	return Ok(Continue)
+}
+
+// glob adds to matches the files in dir whose names fit pattern, in the
+// order ReadDir lists them, joined to dir; a dir that cannot be read or
+// is no directory adds nothing.
+func glob(dir ref string, pattern ref string, matches []string) Result<[]string, io.Error> {
+	out := matches
+	match Stat(dir) {
+		Ok(fi) => {
+			if !fi.IsDir() {
+				return Ok(out)
+			}
+		},
+		Err(_) => return Ok(out),
+	}
+
+	match ReadDir(dir) {
+		Ok(entries) => {
+			for _, e := range ref entries {
+				if filepath.Match(pattern, e.Name())? {
+					out.Push(filepath.Join(dir, e.Name()))
+				}
+			}
+		},
+		Err(_) => {},
+	}
+
+	return Ok(out)
+}
+
+// firstMeta returns where the first element of the pattern that holds
+// a *, ? or [ starts, past the volume, or the pattern's length when
+// none does.
+func firstMeta(pattern ref string, volLen int) int {
+	for i := volLen; i < pattern.Len(); i++ {
+		if globMeta.IndexByte(pattern[i]).IsSome() {
+			for i > volLen && !filepath.IsSeparator(pattern[i-1]) {
+				i--
+			}
+
+			return i
+		}
+	}
+
+	return pattern.Len()
+}
+
+// cleanGlobDir is the part of a pattern before its first element with a
+// metacharacter, as Glob starts from it: the current directory for
+// none, a root as it is, "/" and on Windows "C:\\", a drive alone as
+// its current directory, "C:.", and any other without the separator it
+// ends in, so that the matches are joined to it as written.
+func cleanGlobDir(dir ref string) string {
+	volLen := filepath.VolumeName(dir).Len()
+	if dir.Len() == 0 {
+		return ".".Clone()
+	}
+
+	if volLen+1 == dir.Len() && filepath.IsSeparator(dir[dir.Len()-1]) { // a root, with or without its drive
+		return dir.Clone()
+	}
+
+	if volLen == dir.Len() { // a drive alone
+		return dir + "."
+	}
+
+	return dir[0 : dir.Len()-1].Clone()
+}
+
+// tempUnder is the directory a temporary name is made under: dir, or
+// the system's temporary directory when dir is empty.
+func tempUnder(dir ref string) string {
+	if dir.Len() == 0 {
+		return TempDir()
+	}
+
+	return dir.Clone()
+}
+
+// tempParts splits a pattern into the prefix a temporary name starts
+// with, the directory and the pattern up to its last *, joined with a
+// separator unless the directory ends in one, and the suffix after the
+// *, empty when the pattern has none; both are new strings.
+func tempParts(under ref string, pattern ref string) (string, string) {
+	star := pattern.Len()
+	if i := pattern.LastIndexByte('*') {
+		star = i
+	}
+
+	prefix := under.Clone()
+	if under.Len() > 0 && !filepath.IsSeparator(under[under.Len()-1]) {
+		prefix = prefix + string(filepath.Separator)
+	}
+
+	suffix := ""
+	if star < pattern.Len() {
+		suffix = pattern[star+1:].Clone()
+	}
+
+	return (prefix + pattern[0:star], suffix)
+}
+
+// tempName is one name to try: the prefix, a random number and the
+// suffix.
+func tempName(prefix ref string, suffix ref string) string {
+	return prefix + fmt.Sprint(rand.Int()) + suffix
+}
+
+// tempFailed is the error of a temporary name that could not be made,
+// with the error number code: a directory that is missing is reported
+// by its stat, since the parent may be what is missing, and anything
+// else by the pattern of the names tried, "open /tmp/up-*.bin: file
+// exists".
+func tempFailed(op string, under ref string, prefix ref string, suffix ref string, code int) io.Error {
+	if code == enoent {
+		var fi FileInfo
+		if statInto(under, true, mut fi) == enoent {
+			return io.Errno("stat", under, enoent)
+		}
+	}
+
+	return io.Errno(op, ref (prefix + "*" + suffix), code)
 }
 
 // hasSeparator reports whether p holds a separator of the system's.
@@ -1146,19 +1842,14 @@ func syscallError(op string, code int) io.Error {
 // and stores its results through its last parameters.
 func open(path ref string, fd mut int) int
 
-// create opens path for writing, made 0666 before the umask when it
-// does not exist and emptied when it does, and stores its descriptor
-// in fd.
+// create opens path for reading and writing, made 0666 before the
+// umask when it does not exist and emptied when it does, and stores
+// its descriptor in fd.
 func create(path ref string, fd mut int) int
 
 // readToString reads the file path whole into out, storing in inRead
 // failedInRead when the read failed and 0 when the open did.
 func readToString(path ref string, out mut string, inRead mut int) int
-
-// mkdirTemp makes a directory named after pattern under dir and
-// stores its path in out; on a failure, out holds the path the error
-// is about and op the call that failed.
-func mkdirTemp(dir ref string, pattern ref string, out mut string, op mut string) int
 
 // removeAll removes path and all it holds; on a failure, failed holds
 // the entry it failed on and op the call that failed.
@@ -1242,3 +1933,33 @@ func setenv(key ref string, value ref string) int
 // environ fills out, a slice that holds nothing, with every variable
 // of the environment as KEY=value.
 func environ(out mut []string)
+
+// chmod sets the mode of the file at path, its permission, setuid,
+// setgid and sticky bits.
+func chmod(path ref string, mode u32) int
+
+// chtimes sets the time last read and the time last changed of the file
+// at path, each when its flag is set, from seconds and nanoseconds
+// since 1970.
+func chtimes(path ref string, setAccess bool, asec i64, ansec i64, setChange bool, msec i64, mnsec i64) int
+
+// truncate sets the size of the file at path, and ftruncate of the open
+// file fd.
+func truncate(path ref string, size i64) int
+
+func ftruncate(fd int, size i64) int
+
+// link makes to a hard link to from, and symlink makes link a symbolic
+// link holding target.
+func link(from ref string, to ref string) int
+
+func symlink(target ref string, link ref string) int
+
+// readlink stores the text of the symbolic link at path in out.
+func readlink(path ref string, out mut string) int
+
+// executable stores the path of the running program's file in out.
+func executable(out mut string) int
+
+// fstat is stat of the open file fd.
+func fstat(fd int, size mut i64, mode mut u32, sec mut i64, nsec mut i64, dev mut u64, ino mut u64) int

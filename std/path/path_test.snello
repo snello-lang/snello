@@ -4,7 +4,7 @@
 
 package path_test
 
-import ("expect"; "path"; "testing")
+import ("expect"; "fmt"; "path"; "testing")
 
 // The cases hold each function to its rules at their edges: the empty
 // path, the root, slashes in a row and at the end, and elements of one
@@ -200,5 +200,64 @@ func BenchmarkJoin() {
 	n := 0
 	for testing.Loop() {
 		n += path.Join("/usr/local/lib/snello", "std/path.snello").Len()
+	}
+}
+
+// TestMatch holds Match to the reference tables: each pattern against a
+// name, with the stars that stop at a slash, the classes, their ranges
+// and negations, the quoted bytes, and the patterns that cannot be
+// read, which are reported whatever the name.
+func TestMatch() {
+	fits := [][]string{
+		[]string{"abc", "abc"}, []string{"*", "abc"}, []string{"*c", "abc"}, []string{"a*", "a"}, []string{"a*", "abc"},
+		[]string{"a*/b", "abc/b"}, []string{"a*b*c*d*e*/f", "axbxcxdxe/f"}, []string{"a*b*c*d*e*/f", "axbxcxdxexxx/f"}, []string{"a*b*c*d*e*/f", "axbxcxdxe/xxx/f"}, []string{"a*b*c*d*e*/f", "axbxcxdxexxx/fff"},
+		[]string{"a*b?c*x", "abxbbxdbxebxczzx"}, []string{"ab[c]", "abc"}, []string{"ab[b-d]", "abc"}, []string{"ab[^e-g]", "abc"},
+		[]string{"a?b", "a☺b"}, []string{"a[^a]b", "a☺b"}, []string{"a???b", "a☺b"}, []string{"a[^a][^a][^a]b", "a☺b"},
+		[]string{"[a-ζ]*", "α"}, []string{"*[a-ζ]", "A"}, []string{"a?b", "a/b"}, []string{"a*b", "a/b"},
+		[]string{"[\\]a]", "]"}, []string{"[\\-]", "-"}, []string{"[x\\-]", "x"}, []string{"[x\\-]", "-"}, []string{"[x\\-]", "z"},
+		[]string{"[\\-x]", "x"}, []string{"[\\-x]", "-"}, []string{"[\\-x]", "a"}, []string{"*x", "xxx"}, []string{"[", "a"},
+		[]string{"[^", "a"}, []string{"[^bc", "a"}, []string{"a[", "a"}, []string{"a[", "ab"}, []string{"a[", "x"},
+		[]string{"a/b[", "x"}, []string{"[a-b-c]", "a"}, []string{"\\", "a"}, []string{"*", ""}, []string{"a", ""},
+		[]string{"[-]", "-"}, []string{"[x-]", "x"}, []string{"[x-]", "-"}, []string{"[x-]", "z"}, []string{"[-x]", "x"},
+		[]string{"[-x]", "-"}, []string{"[-x]", "a"}, []string{"[z-a]", "a"}, []string{"[z-a]x", "x"},
+	}
+	want := []string{
+		"true", "true", "true", "true", "true",
+		"true", "true", "true", "false", "false",
+		"true", "true", "true", "true",
+		"true", "true", "false", "false",
+		"true", "false", "false", "false",
+		"true", "true", "true", "true", "false",
+		"true", "true", "false", "true", "bad",
+		"bad", "bad", "bad", "bad", "bad",
+		"bad", "bad", "bad", "true", "false",
+		"bad", "bad", "bad", "bad", "bad",
+		"bad", "bad", "false", "false",
+	}
+	for i, pair := range ref fits {
+		got := ""
+		match path.Match(ref pair[0], ref pair[1]) {
+			Ok(fitted) => got = fmt.Sprint(fitted),
+			Err(e) => {
+				got = "bad".Clone()
+				expect.Equal(ref e.Error(), ref ("match " + pair[0] + ": syntax error in pattern"))
+			},
+		}
+
+		if got != want[i] {
+			expect.Failf("Match(%q, %q) = %s, want %s", pair[0], pair[1], got, want[i])
+		}
+	}
+}
+
+// Match of four patterns in turn, a star, a class with a range and a ?,
+// several stars, and a class alone.
+func BenchmarkMatch() {
+	patterns := []string{"*.txt".Clone(), "f[0-9]*.t?t".Clone(), "a*b*c*d*e*/f".Clone(), "[a-c]?".Clone()}
+	names := []string{"f12.txt".Clone(), "f12.txt".Clone(), "axbxcxdxexxx/f".Clone(), "bz".Clone()}
+	i := 0
+	for testing.Loop() {
+		_ = path.Match(ref patterns[i&3], ref names[i&3])
+		i++
 	}
 }

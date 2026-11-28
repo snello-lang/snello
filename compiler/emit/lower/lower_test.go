@@ -386,3 +386,52 @@ func TestTaken(t *testing.T) {
 		}
 	}
 }
+
+// TestSelfFormatted sends a verb to a type's own Format when the type
+// lists fmt.Formatter, or is a trait value of it, for every verb but
+// %+v, an error's chain, which fmt prints itself; a type that lists
+// Stringer or Error alone, or nothing, is printed by the backend.
+func TestSelfFormatted(t *testing.T) {
+	f, info := checkSource(t, `package main
+import "fmt"
+struct Money impl fmt.Formatter { cents int }
+func (m ref Money) Format(f mut fmt.State, verb rune) { f.Pad("$") }
+struct Fail impl Error, fmt.Formatter { code int }
+func (e ref Fail) Format(f mut fmt.State, verb rune) { f.WriteString("fail") }
+struct Point impl fmt.Stringer { x int }
+func (p ref Point) String() string { return "p" }
+func main() {
+	var tv fmt.Formatter = Money{cents: 2}
+	m, e, p, n := Money{cents: 1}, Fail{code: 3}, Point{x: 1}, 7
+	_ = m
+	_ = e
+	_ = p
+	_ = n
+	_ = tv
+}`)
+	body := f.Decls[len(f.Decls)-1].(*ast.FuncDecl).Body.List
+	plain := types.FormatPiece{Verb: 'v', Width: -1, Prec: -1}
+	chain := types.FormatPiece{Verb: 'v', Plus: true, Width: -1, Prec: -1}
+	hex := types.FormatPiece{Verb: 'x', Width: 8, Prec: -1}
+	tests := []struct {
+		at    int
+		piece types.FormatPiece
+		want  bool
+	}{
+		{2, plain, true},  // a Formatter, %v
+		{2, hex, true},    // and every other verb, with a width
+		{3, plain, true},  // a Formatter that is an error, %v
+		{3, chain, false}, // but %+v is the chain
+		{4, plain, false}, // a Stringer
+		{4, hex, false},
+		{5, plain, false}, // an int
+		{6, plain, true},  // a trait value of Formatter
+		{6, hex, true},
+	}
+	for _, tt := range tests {
+		x := body[tt.at].(*ast.AssignStmt).Rhs[0]
+		if got := SelfFormatted(tt.piece, info.Types[x]); got != tt.want {
+			t.Errorf("SelfFormatted(%%%c, %s) = %v, want %v", tt.piece.Verb, info.Types[x], got, tt.want)
+		}
+	}
+}

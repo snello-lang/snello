@@ -28,7 +28,7 @@ A few library functions are not written in Snello: the runtime provides them in 
 
 | Package | What it has |
 |---|---|
-| `fmt` | `Println`, `Printf`, `Sprintf`, `Sprint`, and `Fprint`, `Fprintln` and `Fprintf` writing to a `mut io.Writer`, and the `Stringer` trait. A format knows `%v`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%s`, `%q`, `%f`, `%e`, `%g`, `%t` and `%%`, a precision, `%.2f`, `%.3d`, `%.2s`, a width before the verb, `%6d`, or `%-6s` to pad on the right, and a zero before the width to pad a number with zeros, `%05d` and `%02x`; it is checked against its arguments when the program is compiled |
+| `fmt` | `Println`, `Printf`, `Sprintf`, `Sprint`, and `Fprint`, `Fprintln` and `Fprintf` writing to a `mut io.Writer`, and the `Stringer` and `Formatter` traits with `State`. A format knows `%v`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%s`, `%q`, `%f`, `%e`, `%g`, `%t` and `%%`, a precision, `%.2f`, `%.3d`, `%.2s`, a width before the verb, `%6d`, or `%-6s` to pad on the right, and a zero before the width to pad a number with zeros, `%05d` and `%02x`; it is checked against its arguments when the program is compiled |
 | `io` | `Error` with `Error()`, `Kind()` and `Written()`, the bytes a write took before it failed, `NewError` for the errors a program's own reader or writer reports and `WithWritten` for one that fails partway, the `Kind` enum, the `Reader`, `Writer`, `Seeker`, `ReaderAt` and `WriterAt` traits and `SeekFrom`, `Copy`, `CopyN`, `ReadAll`, `ReadFull`, `WriteString`, `LimitReader`, `ChainReader`, `Discard` |
 | `os` | `Args`, `Stdin()`, `Stdout()`, `Stderr()`, `File` with `Name`, `Read`, `Write`, `WriteString`, `ReadAt`, `WriteAt`, `Seek`, `Sync` and `Close`, `Open`, `Create`, `ReadToString`, `WriteString`, `MkdirTemp`, `Remove`, `RemoveAll`, `Exit`, `Cores`, the processors the runtime runs tasks on, for sizing a pool of workers; `OpenFile` with the flags `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_APPEND`, `O_CREATE`, `O_EXCL`, `O_SYNC` and `O_TRUNC`, `OpenOptions` with `Open`, `ReadFile` and `WriteFile` for bytes; `Stat` and `Lstat` returning a `FileInfo` with `Name`, `Size`, `Mode`, `ModTime` and `IsDir`, `FileMode` with `IsDir`, `IsRegular`, `Perm` and `Type`, `ReadDir` returning `DirEntry` values with `Name`, `IsDir` and `Type`, `Mkdir`, `MkdirAll`, `Rename`, `Getwd`, `Chdir`; the environment, `Getenv`, `LookupEnv`, `Setenv`, `Unsetenv` and `Environ`; `TempDir`, `Getpid` and `Hostname` |
 | `encoding/json` | `Marshal` and `Unmarshal` of any type, with no code written for it, over reflection at compile time (chapter 24); `Error` with `Offset` |
@@ -178,6 +178,18 @@ The environment a program reads is a copy the runtime makes, the first time it i
 
 `os.TempDir()` is the directory for temporary files: `TMPDIR`, or `/tmp`, on Linux and macOS, and on Windows the system's, from `TMP`, `TEMP` or the user's profile. `os.Getpid()` is the number of the process, and `os.Hostname()` the machine's name.
 
+### Links, times, sizes and temporary files
+
+A file's permissions, times and size are set by path: `os.Chmod(ref path, 0o755)` sets the permission bits, and the setuid, setgid and sticky bits where the system keeps them; `os.Chtimes(ref path, None, Some(time.Now()))` sets the time last changed and leaves the time last read as it is, each time an option so that a program sets one without reading the other first; `os.Truncate(ref path, 0)` empties a file, and a size past the end grows it with zero bytes. `os.Link(ref old, ref new)` makes a second name for a file, which lives while either name does, and `os.Symlink("current.log", ref link)` a symbolic link holding a path as written, relative to the link's own directory when relative; `os.Readlink(ref link)` reads that text back, `Lstat` sees the link and `Stat` what it points at. `os.CreateTemp("", "upload-*.bin")` makes and opens a new file under the system's temporary directory, 0600, its name the pattern with a random number for its `*`; the caller removes it when done, `defer os.Remove(f.Name())` with the name taken first. An open `File` answers `Stat`, what the system says of it now, its name the last element of the path it was opened by, and `Truncate`, which does not move the position of the next read or write.
+
+On Windows, which keeps no permissions, `Chmod` sets or clears the read-only flag from the owner's write bit; a symbolic link to a directory is made as a directory link, which takes the target to exist, and making a link takes the right developer mode gives; `Readlink` reads a link or a junction. Every function reports as the rest of the package does: `chmod /x: no such file or directory`, `link OLD NEW: file exists`, `readlink /x: invalid argument` for a file that is no link.
+
+`os.Abs(ref path)` is the path made absolute against the current directory and cleaned, and `os.EvalSymlinks(ref path)` is where the file system arrives when it reads the path, every link followed, element by element, as a path a program shows a user or compares with another; a chain of more than 255 links is an error, as a loop would be.
+
+### The program and its user
+
+`os.Executable()` is the absolute path of the running program's file, what the system says started it, so a program finds the files beside itself with `filepath.Dir`; the system is asked once, and the string is lent from a block kept for the program's life, as `Getenv`'s are. `os.UserHomeDir()` is the home, `HOME` or `USERPROFILE`; `os.UserConfigDir()` and `os.UserCacheDir()` are where a program keeps its configuration and its cache, under a directory named for it: `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` on Linux, with `.config` and `.cache` under the home as the defaults, `Library/Application Support` and `Library/Caches` on macOS, `AppData` and `LocalAppData` on Windows. A home not defined is an error, and so is a relative `$XDG_CONFIG_HOME`; nothing is made or checked to exist. `os.Getppid()` is the parent's process id, and `os.Getuid()` and `os.Getgid()` the user's and the group's, `int?` that is `None` on Windows, which has no such ids.
+
 ## bytes
 
 `bytes.Buffer` is a run of bytes written at its end and read from its front: what an encoder writes into and a decoder reads from. It is an `io.Writer`, an `io.Reader` and a `fmt.Stringer`, so `fmt.Fprintf` writes into it, `io.Copy` and `io.ReadAll` read from it, and `fmt.Println` prints what it holds. Its zero value is ready, `var b bytes.Buffer`, and `NewBuffer(b)` takes a slice to read, `NewBufferString(s)` a copy of a string.
@@ -208,7 +220,27 @@ path.Base("/usr/lib/snello")        // "snello"
 path.Ext("notes.tar.gz")            // ".gz"
 dir, file := path.Split("a/b/c.txt") // "a/b/" and "c.txt"
 path.IsAbs("/usr")                  // true
+path.Match("*.txt", "notes.txt")    // Ok(true): the shell's patterns, * and ? stopping at a slash, [a-z] a class
 ```
+
+`filepath` is the same for the system's own paths, a backslash on Windows, and adds `Match` with the system's separator, `SplitList` for a list such as `PATH`, `ToSlash` and `FromSlash` for a path that crosses systems, and `IsLocal`, which says whether a name stays under the current directory, the check a program makes before joining a name it was given to a directory of its own. All of them read strings and ask the system nothing; what asks the system of a path is `os`'s: `os.Abs` makes a path absolute against the current directory, `os.EvalSymlinks` follows every link in it, `os.WalkDir` walks a tree, and `os.Glob` lists the files fitting a pattern, an element at a time:
+
+```go
+for _, name := range ref os.Glob("logs/*.log")? {
+	os.Remove(ref name)?
+}
+
+os.WalkDir(ref root, func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+	match found {
+		Ok(e) => fmt.Println(path, e.IsDir()), // the entry, as its directory listed it
+		Err(e) => fmt.Println("unreadable:", e), // the error that stopped a directory from being read
+	}
+
+	return os.Continue // or os.SkipDir, os.SkipAll, os.Stop(err)
+})?
+```
+
+`WalkDir` gives the directory before what it holds, the entries in the order of their names, each directory read once, and follows no link; its function answers with a `Walk`: `Continue`, `SkipDir` for the directory just given or, after a file, the rest of its directory, `SkipAll`, or `Stop` with an error, which `WalkDir` returns.
 
 `Clean` applies four rules until none applies: several slashes become one, an element that is a single dot is dropped, an element that is two dots is dropped with the element before it, and two dots at the start of a path that starts with a slash are dropped. So a path a user typed that climbs out of where it started shows it after `Clean`, by starting with two dots, which `examples/paths/paths.snello` uses to refuse one.
 
@@ -304,7 +336,7 @@ fmt.Println(strconv.Quote("a\tb"), strconv.Unquote("\"a\\tb\""), strconv.Unquote
 // "a\tb" Ok("a\tb") Ok("x") Err("strconv.Unquote: parsing \"\\\"open\": invalid syntax")
 ```
 
-*For maintainers.* The integer and bool functions are written in Snello, `ParseUint` after Go's. The float reader and `Unquote` are the runtime's, `runtime/c/parse.c` and `runtime/c/quote.c`. A float is read as Go 1.27 reads one: the digits into an integer of at most nineteen and a power of ten; a number both of whose parts a float holds exactly by one multiplication or division; any other by unrounded scaling, one 128-bit multiplication by the power of ten from the table floats are printed with; and a number of more digits than nineteen, when the digits left out could change the rounding, by exact decimal arithmetic. Nothing is allocated and nothing is asked of the C library, whose `strtod` reads by the program's locale: a C library a program binds may set the locale to one that writes a comma for the point, and `ParseFloat("1.5")` then failed. Writing is the same: a float asked for with more digits than seventeen is written from every digit it has, `runtime/c/decimal.c`, Go's exact decimal arithmetic, which the reader shares, and never by `printf`. Sixteen million calls on eight texts take 0.36 s on an eight-core arm64 laptop, against 0.52 s for Go's and 0.83 s for the `strtod` it replaced. `runtime/runtime_test.go` holds the readers and the writers to Go's `strconv` and `fmt` on generated texts, the ties between two floats written out in full among them, and `std/std_test.go` has a fuzz test for each of `ParseFloat`, `Atoi` and `Unquote`, which asks a Snello program for the library's answer and holds it to Go's: `go test ./std -run '^$' -fuzz FuzzParseFloat -fuzztime 10m`. An input the fuzzer finds is fixed and kept as a seed of the fuzz test and as a case of the package's own tests.
+*For maintainers.* The integer and bool functions are written in Snello, `ParseUint` after Go's. The float reader is the runtime's, `runtime/c/parse.c`; `Quote` is `fmt`'s `%q` and `Unquote` is Snello, both in the library. A float is read as Go 1.27 reads one: the digits into an integer of at most nineteen and a power of ten; a number both of whose parts a float holds exactly by one multiplication or division; any other by unrounded scaling, one 128-bit multiplication by the power of ten from the table floats are printed with; and a number of more digits than nineteen, when the digits left out could change the rounding, by exact decimal arithmetic. Nothing is allocated and nothing is asked of the C library, whose `strtod` reads by the program's locale: a C library a program binds may set the locale to one that writes a comma for the point, and `ParseFloat("1.5")` then failed. Writing is the same: a float asked for with more digits than seventeen is written from every digit it has, `runtime/c/decimal.c`, Go's exact decimal arithmetic, which the reader shares, and never by `printf`. Sixteen million calls on eight texts take 0.36 s on an eight-core arm64 laptop, against 0.52 s for Go's and 0.83 s for the `strtod` it replaced. `runtime/runtime_test.go` holds the readers and the writers to Go's `strconv` and `fmt` on generated texts, the ties between two floats written out in full among them, and `std/std_test.go` has a fuzz test for each of `ParseFloat`, `Atoi` and `Unquote`, which asks a Snello program for the library's answer and holds it to Go's: `go test ./std -run '^$' -fuzz FuzzParseFloat -fuzztime 10m`. An input the fuzzer finds is fixed and kept as a seed of the fuzz test and as a case of the package's own tests.
 
 ## fmt
 
@@ -346,6 +378,25 @@ func (c ref Celsius) String() string { return fmt.Sprintf("%.1f°C", c.deg) }
 ```
 
 `fmt.Println(c, Reading{place: "attic", temp: Celsius{deg: -3}})` then prints `21.5°C {attic -3.0°C}`. The trait is named, as every Snello trait is: a type with a `String` method that does not list `fmt.Stringer` prints as its fields, or, declared over a number, as its number; `time.Duration` lists it, `type Duration i64 impl fmt.Stringer`, and prints as `1h30m0s`. The samples are from `compiler/emit/internal/backendtest/testdata/formats.snello`.
+
+A `String` gives one text, whatever the verb. A type that wants to honour the verb, the width, the precision and the flags lists `fmt.Formatter` instead and writes `Format`, which is given the verb and a `fmt.State`: the State holds the verb's width and precision as `Width()` and `Precision()`, each `int?`, its flags as `Minus()` and `Zero()`, and takes the text, as an `io.Writer` that `Fprintf` writes into, or through `Pad`, which adds a text as `%s` would under the width, the precision and the minus flag, and `PadNumber`, which adds a number's text as `%d` would, zeros after its sign with the zero flag. `fmt` pads nothing a `Format` writes, so a `Format` that only writes ignores the width:
+
+```go
+struct Money impl fmt.Formatter {
+	cents int
+}
+
+func (m ref Money) Format(f mut fmt.State, verb rune) {
+	if verb == 'd' {
+		f.PadNumber(ref strconv.Itoa(m.cents))
+		return
+	}
+
+	f.Pad(ref fmt.Sprintf("$%d.%02d", m.cents/100, m.cents%100))
+}
+```
+
+`fmt.Printf("[%8v] [%-8v] [%d] [%08d]", m, m, m, m)` prints `[   $1.50] [$1.50   ] [150] [00000150]`. `Format` is called ahead of `String` or `Error`, for every verb, and the compiler, which checks a format against its arguments, lets a `Formatter` take any verb, since the type decides what each prints; the count of arguments is checked as for any type, and `%+v` stays an error's chain. `Println`, `Sprint` and a value inside a struct, a slice or an option call `Format` with `v` and no width. A trait value of `fmt.Formatter` prints through its table, as one of `fmt.Stringer` does. There is one `Format` for every verb, as Go's `Formatter` has, where Rust has a trait per verb, `Display`, `LowerHex` and the rest.
 
 ## sort and time
 

@@ -1849,6 +1849,68 @@ func main() {
 				"outer: load app.conf: strconv.Atoi: parsing \"x\": invalid syntax|outer|outer|\"outer\"\nouter\nsource: load app.conf\nP3 [P4] Some(\"P3\")\n",
 		},
 		{
+			Name: "bytes-into-string", // string(b) of a temporary, take's result or a literal, moves the bytes into the string; of a place it copies, and the place keeps its bytes
+			Src: `package main
+import "fmt"
+func built() []byte { return []byte("built") }
+func main() {
+	b := []byte("abc")
+	s := string(take(mut b))
+	fmt.Println(s, len(b))
+	c := []byte("xy")
+	t := string(c)
+	c.Push('z')
+	fmt.Println(t, string(c), string(built()), string([]byte{'o', 'k'}))
+}`,
+			Out: "abc 0\nxy xyz built ok\n",
+		},
+		{
+			Name: "formatter", // a type listing fmt.Formatter prints what its Format writes, given the verb and a State with the width, precision and flags, which fmt pads no further: Pad and PadNumber honour them, a Format that writes ignores them; Format is called ahead of String, inside a composite with %v and none, through a trait value, through a type parameter bounded by it, for a derived Error and for %+v's message, and a State is an io.Writer
+			Src: `package main
+import ("fmt"; "strconv"; "strings")
+struct Money impl fmt.Formatter { cents int }
+func (m ref Money) Format(f mut fmt.State, verb rune) {
+	if verb == 'd' {
+		f.PadNumber(ref strconv.Itoa(m.cents))
+		return
+	}
+
+	f.Pad(ref fmt.Sprintf("$%d.%02d", m.cents/100, m.cents%100))
+}
+type Tag string impl fmt.Formatter, fmt.Stringer
+func (t ref Tag) Format(f mut fmt.State, verb rune) {
+	fmt.Fprintf(mut f, "<%c:%s>", verb, string(t))
+	if w := f.Width() { fmt.Fprintf(mut f, "w%d", w) }
+	if p := f.Precision() { fmt.Fprintf(mut f, "p%d", p) }
+	if f.Minus() { f.WriteString("-") }
+	if f.Zero() { f.WriteRune('0') }
+}
+func (t ref Tag) String() string { return "never" }
+struct Fail impl Error, fmt.Formatter { code int }
+func (e ref Fail) Format(f mut fmt.State, verb rune) { f.WriteString("fail "); f.WriteString(ref strconv.Itoa(e.code)) }
+func show<T: fmt.Formatter>(v ref T) string { return fmt.Sprintf("[%5v]", v) }
+func main() {
+	m := Money{cents: 150}
+	fmt.Println(show(ref m), show(ref Fail{code: 9}))
+	fmt.Printf("[%8v] [%-8v] [%d] [%08d] [%.3v] [%v]\n", m, m, m, m, m, m)
+	fmt.Println(m, Some(m), []Money{m, Money{cents: 5}})
+	fmt.Println(fmt.Sprint(m, m))
+	t := Tag("x")
+	fmt.Printf("%v|%s|%6.2x|%-3q|%08d|%v\n", t, t, t, t, t, []Tag{t})
+	var tv fmt.Formatter = Money{cents: 7}
+	fmt.Printf("[%6v]\n", tv)
+	fmt.Println(tv, Some(tv))
+	e := Fail{code: 3}
+	fmt.Printf("%v|%+v|%s\n", e, e, e)
+	var b strings.Builder
+	fmt.Fprintf(mut b, "%5v;", m)
+	fmt.Println(b.String())
+	fmt.Printf("[%-6d] [%06d] [%6d]\n", Money{cents: -5}, Money{cents: -5}, Money{cents: -5})
+}`,
+			Out: "[$1.50] [fail 9]\n[   $1.50] [$1.50   ] [150] [00000150] [$1.] [$1.50]\n$1.50 Some(\"$1.50\") [$1.50 $0.05]\n$1.50 $1.50\n" +
+				"<v:x>|<s:x>|<x:x>w6p2|<q:x>w3-|<d:x>w80|[<v:x>]\n[ $0.07]\n$0.07 Some(\"$0.07\")\nfail 3|fail 3|fail 3\n$1.50;\n[-5    ] [-00005] [    -5]\n",
+		},
+		{
 			Name: "error-pass", // ? passes an error into the one variant holding its type, into a trait value when the function returns Result<T, Error>, and as it is when the types match
 			Src: `package main
 import ("fmt"; "io"; "os"; "strconv")

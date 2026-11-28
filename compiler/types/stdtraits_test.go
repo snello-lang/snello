@@ -11,15 +11,22 @@ import (
 )
 
 // What a derived Error() can print: anything but a function, a channel
-// or a trait value of a trait that is neither Error nor fmt.Stringer,
-// through composites and declared types, with a type that holds itself
-// through a pointer cut short.
+// or a trait value of a trait that is none of Error, fmt.Stringer and
+// fmt.Formatter, through composites and declared types, with a type
+// that holds itself through a pointer cut short. A type that lists
+// Formatter prints whatever it holds, since its Format writes the text.
 func TestPrintable(t *testing.T) {
 	shape := NewTrait(NewTypeName(token.NoPos, "Shape", nil))
 	fn := NewSignature(nil, nil, Unit)
 	node := NewNamed(NewTypeName(token.NoPos, "Node", nil), nil, nil)
 	node.SetUnderlying(NewStruct([]*Var{NewField(token.NoPos, "next", NewOption(NewPointer(node)))}))
 	job := NewNamed(NewTypeName(token.NoPos, "Job", nil), NewStruct([]*Var{NewField(token.NoPos, "run", fn)}), nil)
+	formatter := NewTrait(NewTypeName(token.NoPos, "Formatter", nil))
+	formatter.obj.pkg = &Package{name: "fmt", path: "fmt"} // the trait is known by its name and package
+	pretty := NewTrait(NewTypeName(token.NoPos, "Pretty", nil))
+	pretty.refines = []*Trait{formatter}
+	task := NewNamed(NewTypeName(token.NoPos, "Task", nil), NewStruct([]*Var{NewField(token.NoPos, "run", fn)}), nil)
+	task.impls = []*Trait{formatter}
 	tests := []struct {
 		typ  Type
 		want bool
@@ -40,6 +47,10 @@ func TestPrintable(t *testing.T) {
 		{node, true},
 		{job, false},
 		{NewPointer(job), false},
+		{formatter, true},
+		{pretty, true},
+		{task, true},
+		{NewSlice(task), true},
 	}
 	for _, tt := range tests {
 		if got := printable(tt.typ, nil); got != tt.want {

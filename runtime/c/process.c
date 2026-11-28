@@ -86,6 +86,7 @@ static int notified, notify_room;
 // interrupted is the signal that cancelled the program, 0 while none
 // has: the first signal no channel takes cancels, the second ends.
 static _Atomic int interrupted;
+static _Atomic int64_t ignored;  // the signals the program ignores, a bit a value of Signal, as Ignore sets them
 
 // A child is a program this one started: its process number; on Linux
 // its pidfd, readable once it has ended, and on macOS the poller's
@@ -184,11 +185,12 @@ SN_HELD_STATIC static _Noreturn void end_now(int64_t v) {
 #endif
 }
 
-// arrived is what the thread that caught the signal does with it: the
-// channels that asked for it take it; a signal none takes cancels the
-// program's scope the first time, and ends the program the second.
+// arrived is what the thread that caught the signal does with it: one
+// the program ignores is dropped; the channels that asked for it take
+// it; a signal none takes cancels the program's scope the first time,
+// and ends the program the second.
 SN_HELD_STATIC static void arrived(int64_t v) {
-    if (deliver(v)) {
+    if ((atomic_load(&ignored) & ((int64_t)1 << v)) != 0 || deliver(v)) {
         return;
     }
 
@@ -358,6 +360,62 @@ SN_HELD void sn_os__signal_notify(sn_chan *ch, int64_t mask) {
 
     notifiers[notified++] = (notifier){ ch, mask };
     sn_outside(1);
+    sn_mutex_unlock(&notify_mu);
+}
+
+// forget takes the signals of mask away from every channel that asked
+// for them, what signal's Ignore and Reset undo of Notify, and lets go
+// of a channel whose receiving end the program dropped, as a delivery
+// does, since an ignored signal reaches no delivery.
+SN_HELD_STATIC static void forget(int64_t mask) {
+    sn_mutex_lock(&notify_mu);
+    for (int i = 0; i < notified;) {
+        notifier *n = &notifiers[i];
+        if (!sn_chan_open(n->ch)) {
+            sn_chan_drop(&n->ch, SN_CHAN_SEND);
+            sn_outside(-1);
+            notifiers[i] = notifiers[--notified];
+            continue;
+        }
+
+        n->mask &= ~mask;
+        i++;
+    }
+
+    sn_mutex_unlock(&notify_mu);
+}
+
+// sn_os__signal_ignore is signal's ignore: the signals of mask are
+// dropped as they arrive, and no channel gets them any more.
+SN_HELD void sn_os__signal_ignore(int64_t mask) {
+    atomic_fetch_or(&ignored, mask);
+    forget(mask);
+}
+
+// sn_os__signal_reset is signal's reset: the signals of mask are neither
+// ignored nor any channel's, so one that arrives cancels the program as
+// one the program never asked for does.
+SN_HELD void sn_os__signal_reset(int64_t mask) {
+    atomic_fetch_and(&ignored, ~mask);
+    forget(mask);
+}
+
+// sn_os__signal_stop is signal's stop: the channel gets no signal any
+// more, and the runtime lets its sending end go; the program keeps the
+// receiving end, with the signal it may still hold.
+SN_HELD void sn_os__signal_stop(sn_chan *ch) {
+    sn_mutex_lock(&notify_mu);
+    for (int i = 0; i < notified;) {
+        if (notifiers[i].ch == ch) {
+            sn_chan_drop(&notifiers[i].ch, SN_CHAN_SEND);
+            sn_outside(-1);
+            notifiers[i] = notifiers[--notified];
+            continue;
+        }
+
+        i++;
+    }
+
     sn_mutex_unlock(&notify_mu);
 }
 

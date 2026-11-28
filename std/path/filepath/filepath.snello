@@ -11,14 +11,24 @@
 // separator is a slash everywhere.
 //
 // Its functions read and build strings and ask the system nothing: a
-// path is cleaned or split as written, whether or not it names a file.
-// Base, Ext, Split and VolumeName lend parts of the path they are
-// given, with nothing copied; Clean, Join and Dir return a new string.
+// path is cleaned or split as written, whether or not it names a file;
+// what asks the system of a path, its absolute form, its links
+// resolved, the files under it or the files fitting a pattern, is
+// package os's, Abs, EvalSymlinks, WalkDir and Glob. Base, Ext, Split
+// and VolumeName lend parts of the path they are given, with nothing
+// copied; Clean, Join, Dir, ToSlash and FromSlash return a new string.
 package filepath
+
+import "io"
 
 // Separator is what the system puts between the elements of a path: a
 // slash, and on Windows a backslash.
 const Separator rune = separatorRune
+
+// ListSeparator is what the system puts between the paths of a list,
+// the PATH of the environment: a colon, and on Windows a semicolon.
+const ListSeparator rune = listSeparatorRune
+
 
 // Clean returns the shortest path that names what p names, read as
 // written, with no link followed: several separators in a row become
@@ -110,4 +120,86 @@ func VolumeName(p ref string) ref string {
 // path: a slash, and on Windows a backslash too.
 func IsSeparator(c byte) bool {
 	return isSeparator(c)
+}
+
+// Match reports whether name fits pattern, read as a shell reads one:
+// a * stands for any run of characters but a separator, including
+// none, a ? for any one character but a separator, a class in brackets
+// for one of the characters listed or in a range, [a-c] for a, b or c,
+// with a ^ after the bracket for one not listed; on Linux and macOS a
+// backslash quotes
+// the byte after it, so \* is a star, and on Windows, where a backslash
+// separates, nothing quotes. The whole name must fit; a separator in
+// the name fits only one in the pattern. Both are only read. A pattern
+// that cannot be read, a class left open or a range with no end, is an
+// error, "match a[: syntax error in pattern", whatever the name.
+//
+//	filepath.Match("*.go", "main.go")       // Ok(true)
+//	filepath.Match("src/*", "src/a/b.go")   // Ok(false): the star stops at a separator
+func Match(pattern ref string, name ref string) Result<bool, io.Error> {
+	return matchPattern(pattern, name)
+}
+
+// SplitList splits a list of paths joined by ListSeparator, the PATH of
+// the environment, into its paths, each a new string; an empty list is
+// no paths, and an empty path in the list is kept, as the shell keeps
+// it for the current directory. On Windows a path in double quotes may
+// hold a semicolon, and loses the quotes. list is only read.
+//
+//	for _, dir := range ref filepath.SplitList(ref os.Getenv("PATH")) { ... }
+func SplitList(list ref string) []string {
+	return splitList(list)
+}
+
+// ToSlash returns p with every separator replaced by a slash, a new
+// string; on Linux and macOS, whose separator is the slash, a copy of
+// p. FromSlash is its inverse. Both are for a path that crosses
+// systems, in a file or a message.
+//
+//	filepath.ToSlash("a\\b") // "a/b" on Windows
+func ToSlash(p ref string) string {
+	return replaced(p, byte(Separator), slash)
+}
+
+// FromSlash returns p with every slash replaced by the system's
+// separator, a new string; on Linux and macOS a copy of p.
+//
+//	filepath.FromSlash("a/b") // "a\\b" on Windows
+func FromSlash(p ref string) string {
+	return replaced(p, slash, byte(Separator))
+}
+
+// IsLocal reports whether p names a file under the current directory
+// alone, however it is read: it is not empty, not absolute, has no
+// volume, and reaches no parent of the current directory through "..",
+// read as Clean reads it, so "a/../b" is local and "a/../../b" is
+// not; on Windows a path with a name the system reserves, "NUL" or
+// "COM1", or with a colon, which names a stream, is not local either.
+// p is only read. A program that joins a name it was given to a
+// directory of its own checks it with IsLocal first.
+//
+//	filepath.IsLocal("docs/a.txt") // true
+//	filepath.IsLocal("../secret")  // false
+func IsLocal(p ref string) bool {
+	return isLocal(p)
+}
+
+// replaced returns a copy of p with every byte that is from made to.
+func replaced(p ref string, from byte, to byte) string {
+	buf := make([]byte, p.Len())
+	for i := 0; i < p.Len(); i++ {
+		buf[i] = p[i]
+		if buf[i] == from {
+			buf[i] = to
+		}
+	}
+
+	return string(buf)
+}
+
+// escapes reports whether the cleaned relative path p reaches above the
+// current directory: whether it is "..", or starts with "../", the
+// first element of a cleaned path being the only place ".." remains.
+func escapes(cleaned ref string) bool {
+	return cleaned == ".." || (cleaned.Len() > 2 && cleaned[0] == '.' && cleaned[1] == '.' && isSeparator(cleaned[2]))
 }

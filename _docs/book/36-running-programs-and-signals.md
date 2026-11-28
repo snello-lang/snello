@@ -106,6 +106,8 @@ for {
 }
 ```
 
+`signal.Ignore(signal.Interrupt)` has the program drop the interrupt from then on: it cancels nothing and reaches no channel, those `Notify` gave it before included, for the time a program must not be interrupted. `signal.Reset` gives a signal back its first meaning, neither ignored nor any channel's, so one that arrives stops the program as before `Notify`. `signal.Stop(ref stop)` ends the delivery to one channel, which the program keeps: the runtime lets its sending end go, so a receive gives the one signal the channel may still hold and `None` after, as from any channel whose senders are gone; dropping the channel ends the delivery too.
+
 The channel holds one signal: one that arrives while the last is still unread is dropped, so a program slow to read sees that a signal came and not how many. Dropping the channel stops the delivery; the next of those signals is one the program did not ask for, and does what the next section says. A program that asked for a signal is not cancelled by it: the signal is its to answer.
 
 ## An interrupt is a cancel

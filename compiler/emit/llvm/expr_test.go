@@ -56,3 +56,22 @@ func main() {
 		}
 	}
 }
+
+// A conversion of a []byte to a string copies the bytes of a place,
+// which keeps them, and moves the bytes of a temporary, a call's result
+// or a literal, into the string.
+func TestBytesIntoString(t *testing.T) {
+	out := emitSource(t, `package main
+func built() []byte { return []byte("built") }
+func main() {
+	b := []byte("abc")
+	s := string(take(mut b))
+	u := string(b)
+	v := string(built())
+	print(s, u, v)
+}`)
+	body := irFunction(t, out, "sn_main")
+	if strings.Count(body, "@sn_bytes_into_string(") != 2 || strings.Count(body, "@sn_string_clone(") < 1 {
+		t.Errorf("the temporaries do not move and the place does not copy:\n%s", body)
+	}
+}

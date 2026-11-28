@@ -463,7 +463,8 @@ func (e *Emitter) packageOf(x ast.Expr) *types.PkgName {
 // conversion writes T(x): between number types a change of width
 // extends by the source's sign or truncates and a change of kind
 // rounds toward zero or converts exactly as the IR defines; between a
-// string and its bytes a copy through the runtime. A borrow seen as
+// string and its bytes a copy through the runtime, but for the bytes
+// of a temporary, which move into the string. A borrow seen as
 // another type is the borrow itself, the same words under the other
 // type's name.
 func (e *Emitter) conversion(x ast.Expr, to types.Type) value {
@@ -476,6 +477,10 @@ func (e *Emitter) conversion(x ast.Expr, to types.Type) value {
 	case isString(from) && isByteSlice(to):
 		return e.stringToBytes(e.looked(x, from))
 	case isByteSlice(from) && isString(to):
+		if lower.Temporary(x, e.typeOf(x)) { // a value no place holds moves into the string, nothing copied
+			return e.rt("sn_bytes_into_string", "%sn_string", e.operands([]ast.Expr{x}, []types.Type{from})[0])
+		}
+
 		return e.bytesToString(e.looked(x, from))
 	case isRuneSlice(from) && isString(to):
 		return e.rt("sn_string_from_runes", "%sn_string", e.looked(x, from))

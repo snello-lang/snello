@@ -1,6 +1,6 @@
 # 11. Traits
 
-A trait value of `Error` or `fmt.Stringer` prints as its message; any other trait value does not print yet. The samples are cut from `compiler/emit/internal/backendtest/testdata/traits.snello` and `examples/traits/traits.snello`.
+A trait value of `Error` or `fmt.Stringer` prints as its message, and one of `fmt.Formatter` as its `Format` writes; any other trait value does not print yet. The samples are cut from `compiler/emit/internal/backendtest/testdata/traits.snello` and `examples/traits/traits.snello`.
 
 A trait is a set of methods a type promises to have. A type declares which traits it implements, and the compiler checks the promise. A trait is also what a generic function asks of its type parameters: `T: Shape` means any `T` that implements `Shape`, and inside the function `T` has `Shape`'s methods.
 

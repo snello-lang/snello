@@ -4,7 +4,7 @@
 
 package os_test
 
-import ("expect"; "fmt"; "os"; "testing")
+import ("expect"; "fmt"; "io"; "os"; "path/filepath"; "testing"; "time")
 
 // TestStatUnix checks what a stat says on Linux and macOS alone: a
 // temporary directory is its owner's alone, and the root is named "/".
@@ -63,4 +63,95 @@ func TestModesUnix() {
 	sticky := dir.Join("sticky")
 	expect.IsOk(os.Mkdir(ref sticky, os.ModeSticky | 0o700)) // a bit above the nine, which some systems drop from a new directory's mode
 	expect.Equal(ref fmt.Sprint(expect.IsOk(os.Stat(ref sticky)).Mode()), "dtrwx------")
+}
+
+// TestChmodUnix reads back the exact permission bits Chmod set, which
+// Linux and macOS keep whole.
+func TestChmodUnix() {
+	dir := testing.TempDir()
+	path := dir.Join("mode.txt")
+	expect.IsOk(os.WriteFile(ref path, ref []byte("x"), 0o644))
+	expect.IsOk(os.Chmod(ref path, 0o600))
+	expect.Equal(ref expect.IsOk(os.Stat(ref path)).Mode().Perm(), ref os.FileMode(0o600))
+	expect.IsOk(os.Chmod(ref path, 0o755))
+	expect.Equal(ref expect.IsOk(os.Stat(ref path)).Mode().Perm(), ref os.FileMode(0o755))
+	f := expect.IsOk(os.CreateTemp(dir.Path(), "t-*"))
+	expect.Equal(ref expect.IsOk(f.Stat()).Mode().Perm(), ref os.FileMode(0o600)) // a temporary file is its owner's alone
+}
+
+// TestUserHomeUnix checks the home against the environment, and the
+// error of a HOME unset.
+func TestUserHomeUnix() {
+	key := "HOME"
+	saved := os.LookupEnv(ref key)
+	defer restore(ref key, saved)
+	expect.Equal(ref expect.IsOk(os.UserHomeDir()), ref os.Getenv(ref key))
+	os.Unsetenv(ref key)
+	expect.Equal(ref expect.IsErr(os.UserHomeDir()).Error(), "userdir: $HOME is not defined")
+	expect.Equal(ref expect.IsErr(os.UserConfigDir()).Error(), "userdir: $HOME is not defined") // the default under the home needs it
+}
+
+// TestChmodSticky sets and clears a directory's sticky bit, which Linux
+// and macOS keep.
+func TestChmodSticky() {
+	dir := testing.TempDir()
+	path := dir.Join("shared")
+	expect.IsOk(os.Mkdir(ref path, 0o755))
+	expect.IsOk(os.Chmod(ref path, os.ModeSticky|0o777))
+	expect.True(expect.IsOk(os.Stat(ref path)).Mode()&os.ModeSticky != 0)
+	expect.IsOk(os.Chmod(ref path, 0o755))
+	expect.True(expect.IsOk(os.Stat(ref path)).Mode()&os.ModeSticky == 0)
+}
+
+// TestChtimesUnix reads back the nanoseconds Chtimes set, which Linux
+// and macOS keep whole.
+func TestChtimesUnix() {
+	dir := testing.TempDir()
+	path := dir.Join("ns.txt")
+	expect.IsOk(os.WriteString(ref path, "x"))
+	expect.IsOk(os.Chtimes(ref path, None, Some(time.Unix(1700000000, 123456789))))
+	expect.Equal(ref expect.IsOk(os.Stat(ref path)).ModTime().Nanosecond(), ref 123456789)
+}
+
+// restore puts an environment variable back as it was.
+func restore(key ref string, saved string?) {
+	if value := saved {
+		expect.IsOk(os.Setenv(key, ref value))
+	} else {
+		os.Unsetenv(key)
+	}
+}
+
+// TestUnreadableDirectory walks and globs over a directory the program
+// may not read: WalkDir gives it a second time with the error, and
+// leaves it out on Continue; Glob skips it. The root reads anything, so
+// the test is for every other user.
+func TestUnreadableDirectory() {
+	if uid := os.Getuid() {
+		if uid == 0 {
+			return
+		}
+	}
+
+	dir := testing.TempDir()
+	expect.IsOk(os.MkdirAll(ref dir.Join("open/x"), 0o755))
+	expect.IsOk(os.Mkdir(ref dir.Join("shut"), 0o755))
+	expect.IsOk(os.WriteString(ref dir.Join("shut/hidden.txt"), "."))
+	shut := dir.Join("shut")
+	expect.IsOk(os.Chmod(ref shut, 0o000))
+	defer os.Chmod(ref shut, 0o755) // so that the temporary directory can be removed
+	visits := []string{}
+	expect.IsOk(os.WalkDir(dir.Path(), func(path ref string, found Result<ref os.DirEntry, io.Error>) os.Walk {
+		match found {
+			Ok(e) => visits.Push(e.Name().Clone()),
+			Err(e) => {
+				expect.True(e.Kind() == io.Permission)
+				visits.Push("error ".Clone() + filepath.Base(path))
+			},
+		}
+
+		return os.Continue
+	}))
+	expect.EqualSlice(ref visits, ref []string{filepath.Base(dir.Path()).Clone(), "open".Clone(), "x".Clone(), "shut".Clone(), "error shut".Clone()})
+	expect.EqualSlice(ref expect.IsOk(os.Glob(ref dir.Join("*/*"))), ref []string{dir.Join("open/x")}) // the shut directory is skipped
 }

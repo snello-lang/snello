@@ -43,6 +43,43 @@ func TestOnlyAskedFor() {
 	}
 }
 
+// TestIgnore drops an ignored signal: it reaches no channel, the one
+// that asked for it before included, and cancels nothing; Reset gives
+// it back, so a channel asking after gets it.
+func TestIgnore() {
+	stop := signal.Notify(signal.Interrupt)
+	signal.Ignore(signal.Interrupt)
+	send("INT")
+	select {
+	case <-stop:
+		expect.Fail("an ignored interrupt reached a channel")
+	default:
+	}
+
+	expect.False(task.Cancelled())
+	signal.Reset(signal.Interrupt)
+	again := signal.Notify(signal.Interrupt)
+	send("INT")
+	expect.Equal(ref expect.IsSome(<-again), ref signal.Interrupt)
+	select {
+	case <-stop:
+		expect.Fail("a channel Ignore undid got the interrupt back")
+	default:
+	}
+}
+
+// TestStop ends a channel's delivery: the signal goes to the others
+// that asked for it, and the stopped channel, its senders gone, reads
+// as None.
+func TestStop() {
+	stopped := signal.Notify(signal.Interrupt)
+	kept := signal.Notify(signal.Interrupt)
+	signal.Stop(ref stopped)
+	send("INT")
+	expect.Equal(ref expect.IsSome(<-kept), ref signal.Interrupt)
+	expect.IsNone(<-stopped)
+}
+
 // send sends this program the signal, by name, through kill.
 func send(name ref string) {
 	expect.IsOk(exec.Command("kill", "-".Clone() + name, strconv.Itoa(os.Getpid())).Run())

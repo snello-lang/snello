@@ -63,11 +63,12 @@ func TestLoopScopeOneRange(t *testing.T) {
 	}
 
 	var locations []string
-	for _, m := range jumpToCond.FindAllStringSubmatch(ir, -1) {
+	body := irFunction(t, ir, "sn_main") // the program's loops; the library's have scopes of their own
+	for _, m := range jumpToCond.FindAllStringSubmatch(body, -1) {
 		locations = append(locations, m[1])
 	}
 
-	for _, block := range condBlock.FindAllStringSubmatch(ir, -1) {
+	for _, block := range condBlock.FindAllStringSubmatch(body, -1) {
 		for _, m := range dbgOf.FindAllStringSubmatch(block[1], -1) {
 			locations = append(locations, m[1])
 		}

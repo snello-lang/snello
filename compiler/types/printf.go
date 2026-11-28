@@ -115,7 +115,10 @@ func (c *Checker) named(e ast.Expr) Object {
 // number, an integer or a float, printed as one: not with %v, %x or %X
 // of a number whose type prints as its String or Error method. Those
 // three verbs, %s and %q print through the methods, the verbs a string
-// takes; every other verb prints the value itself.
+// takes; every other verb prints the value itself. A type that lists
+// fmt.Formatter takes every verb, with any width, precision and flag,
+// since its Format is given them and prints the value as it sees fit;
+// the + flag stays an error's, read by fmt itself.
 func verbFits(p FormatPiece, t Type) string {
 	for {
 		switch u := t.(type) {
@@ -130,6 +133,18 @@ func verbFits(p FormatPiece, t Type) string {
 		break
 	}
 
+	if p.Plus && !isErrorType(t) {
+		return "%+v takes an error, not " + t.String()
+	}
+
+	if p.Plus && p.Prec >= 0 {
+		return "%+v takes no precision"
+	}
+
+	if IsFormatter(t) {
+		return ""
+	}
+
 	b, _ := t.Underlying().(*Basic)
 	is := func(info BasicInfo) bool { return b != nil && b.info&info != 0 }
 	text := is(IsString) || PrintsAsText(t)
@@ -137,14 +152,6 @@ func verbFits(p FormatPiece, t Type) string {
 	what := ""
 	switch p.Verb {
 	case 'v':
-		if p.Plus && !isErrorType(t) {
-			return "%+v takes an error, not " + t.String()
-		}
-
-		if p.Plus && p.Prec >= 0 {
-			return "%+v takes no precision"
-		}
-
 		if p.Prec >= 0 && !is(IsString) && !is(IsFloat) {
 			return "%." + strconv.Itoa(p.Prec) + "v takes a precision on a string or a float, not on " + t.String()
 		}
