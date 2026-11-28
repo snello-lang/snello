@@ -84,62 +84,63 @@ type Config struct {
 // written out before the program's functions: the IR reads a module
 // in any order, a reader does not.
 type Emitter struct {
-	cfg        Config
-	abi        abi
-	section    string // after a function's attributes: the code section of the target's system, quoted
-	info       *types.Info
-	file       *token.File
-	types      bytes.Buffer                    // the named types of the module
-	consts     bytes.Buffer                    // string literals and tables, as private constants
-	decls      map[string]string               // the runtime functions and globals used, by name, each declared once
-	helpers    bytes.Buffer                    // generated functions: droppers, printers, comparers, adapters
-	funcs      bytes.Buffer                    // the program's function definitions
-	globalDefs bytes.Buffer                    // the program's top-level variables
-	globals    map[*types.Var]bool             // the top-level variables, reached as globals
-	localConst map[*types.Const]string         // the constants declared in a function, each a global of its own
-	fn         *function                       // the function being written
-	strs       int                             // string constants written so far
-	meta       bytes.Buffer                    // the metadata nodes of the line tables: the unit, the files, each function and each location
-	nmeta      int                             // metadata nodes written so far
-	unit       int                             // the compile unit's node
-	dfiles     map[*token.File]int             // each source file's node, the generated file's under nil
-	mainAt     token.Position                  // where the program declares main, which the entry is written at
-	mainFile   *token.File                     // and the file it is in
-	dlocs      map[dloc]int                    // each location's node
-	ownFiles   map[*token.File]bool            // the program's own files, whose functions a debug build leaves unoptimized
-	stdFiles   map[*token.File]string          // the standard library's files, named under lower.SourceName's directory
-	dir        string                          // the directory a debug build runs in, which the line tables' relative names are from
-	dtypes     map[string]int                  // each type's node in a debug build, by the type (debug.go)
-	cnodes     map[string]int                  // each C type's node, by its C name (debug.go)
-	within     string                          // the name the program gives the function being written, for its closures' names
-	nclosure   int                             // closures of the function being written, counted for their names
-	traced     []lower.TraceName               // every function written, its symbol and the name the program gives it
-	constants  map[string]value                // the constant written for each constant value lent, by its text: its type and its global
-	closures   int                             // closures written so far, numbering their functions
-	seq        int                             // values and deferred calls registered so far, ordering what a return releases
-	tasks      int                             // spawn statements written so far, numbering their trampolines
-	boxWords   int                             // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
-	boxNeed    int                             // the words a closure of copies written in this pass needed beyond boxWords, which the next pass gives every box
-	state      map[string]bool                 // the named types and helpers written so far
-	seen       map[string]bool                 // the unsupported constructs reported so far
-	used       map[types.Object]bool           // the objects the program refers to
-	guards     map[*types.Named]bool           // whether dropping a value of a declared type runs a Drop method (drop.go)
-	subst      map[*types.TypeParam]types.Type // the type arguments of the instance being written (mono.go)
-	partCopy   map[*types.Part]lower.PartCopy  // the copy of each loop over a type's parts being written, its field (stmt.go)
-	generics   map[*types.Func]*ast.FuncDecl   // the generic functions and methods, written per instance
-	files      map[*ast.FuncDecl]*token.File   // the source file of each generic declaration, for the positions in an instance's errors
-	external   map[*types.Var]bool             // the library variables the runtime defines
-	runtime    map[string]bool                 // the library functions the runtime defines, by name, called under its convention
-	statics    []owned                         // the top-level variables owning something, dropped when main returns
-	lazy       map[*types.Var]bool             // the top-level variables made on first use, since their initializer is a call; reached through a getter
-	lazies     []owned                         // the lazy variables owning something, dropped when main returns if they were made
-	making     *types.Var                      // the lazy variable whose initializer is being written, which names the cell itself
-	done       map[string]bool                 // the instances asked for, by name
-	work       []instance                      // the instances still to write
-	registers  []string                        // the register names written so far, %t1 at 1, each made once for every function that numbers that far
-	slots      []string                        // the slot names, %s1 at 1, the same way
-	spare      []*function                     // the records of functions written, kept for the next ones with their buffers and tables
-	errors     []string
+	quoteString, quoteRune string // fmt's own quoting, which %q and a string inside a printed value call: the symbols, or "" when the program has no fmt
+	cfg                    Config
+	abi                    abi
+	section                string // after a function's attributes: the code section of the target's system, quoted
+	info                   *types.Info
+	file                   *token.File
+	types                  bytes.Buffer                    // the named types of the module
+	consts                 bytes.Buffer                    // string literals and tables, as private constants
+	decls                  map[string]string               // the runtime functions and globals used, by name, each declared once
+	helpers                bytes.Buffer                    // generated functions: droppers, printers, comparers, adapters
+	funcs                  bytes.Buffer                    // the program's function definitions
+	globalDefs             bytes.Buffer                    // the program's top-level variables
+	globals                map[*types.Var]bool             // the top-level variables, reached as globals
+	localConst             map[*types.Const]string         // the constants declared in a function, each a global of its own
+	fn                     *function                       // the function being written
+	strs                   int                             // string constants written so far
+	meta                   bytes.Buffer                    // the metadata nodes of the line tables: the unit, the files, each function and each location
+	nmeta                  int                             // metadata nodes written so far
+	unit                   int                             // the compile unit's node
+	dfiles                 map[*token.File]int             // each source file's node, the generated file's under nil
+	mainAt                 token.Position                  // where the program declares main, which the entry is written at
+	mainFile               *token.File                     // and the file it is in
+	dlocs                  map[dloc]int                    // each location's node
+	ownFiles               map[*token.File]bool            // the program's own files, whose functions a debug build leaves unoptimized
+	stdFiles               map[*token.File]string          // the standard library's files, named under lower.SourceName's directory
+	dir                    string                          // the directory a debug build runs in, which the line tables' relative names are from
+	dtypes                 map[string]int                  // each type's node in a debug build, by the type (debug.go)
+	cnodes                 map[string]int                  // each C type's node, by its C name (debug.go)
+	within                 string                          // the name the program gives the function being written, for its closures' names
+	nclosure               int                             // closures of the function being written, counted for their names
+	traced                 []lower.TraceName               // every function written, its symbol and the name the program gives it
+	constants              map[string]value                // the constant written for each constant value lent, by its text: its type and its global
+	closures               int                             // closures written so far, numbering their functions
+	seq                    int                             // values and deferred calls registered so far, ordering what a return releases
+	tasks                  int                             // spawn statements written so far, numbering their trampolines
+	boxWords               int                             // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
+	boxNeed                int                             // the words a closure of copies written in this pass needed beyond boxWords, which the next pass gives every box
+	state                  map[string]bool                 // the named types and helpers written so far
+	seen                   map[string]bool                 // the unsupported constructs reported so far
+	used                   map[types.Object]bool           // the objects the program refers to
+	guards                 map[*types.Named]bool           // whether dropping a value of a declared type runs a Drop method (drop.go)
+	subst                  map[*types.TypeParam]types.Type // the type arguments of the instance being written (mono.go)
+	partCopy               map[*types.Part]lower.PartCopy  // the copy of each loop over a type's parts being written, its field (stmt.go)
+	generics               map[*types.Func]*ast.FuncDecl   // the generic functions and methods, written per instance
+	files                  map[*ast.FuncDecl]*token.File   // the source file of each generic declaration, for the positions in an instance's errors
+	external               map[*types.Var]bool             // the library variables the runtime defines
+	runtime                map[string]bool                 // the library functions the runtime defines, by name, called under its convention
+	statics                []owned                         // the top-level variables owning something, dropped when main returns
+	lazy                   map[*types.Var]bool             // the top-level variables made on first use, since their initializer is a call; reached through a getter
+	lazies                 []owned                         // the lazy variables owning something, dropped when main returns if they were made
+	making                 *types.Var                      // the lazy variable whose initializer is being written, which names the cell itself
+	done                   map[string]bool                 // the instances asked for, by name
+	work                   []instance                      // the instances still to write
+	registers              []string                        // the register names written so far, %t1 at 1, each made once for every function that numbers that far
+	slots                  []string                        // the slot names, %s1 at 1, the same way
+	spare                  []*function                     // the records of functions written, kept for the next ones with their buffers and tables
+	errors                 []string
 }
 
 // A function being written: its instructions; the allocas of its
@@ -240,28 +241,31 @@ func EmitFiles(cfg Config, files []*token.File, fs []*ast.File, info *types.Info
 // returns it with the larger size a closure needed, or zero when every
 // closure fit.
 func emitPass(cfg Config, target abi, words int, files []*token.File, fs []*ast.File, info *types.Info, libraries []lower.Library) ([]byte, int, error) {
+	quoteString, quoteRune := lower.QuoteFuncs(info, libraries)
 	e := &Emitter{
-		cfg:        cfg,
-		abi:        target,
-		section:    sectionOf(cfg.OS),
-		info:       info,
-		file:       files[0],
-		dfiles:     make(map[*token.File]int),
-		dlocs:      make(map[dloc]int),
-		decls:      make(map[string]string),
-		state:      make(map[string]bool),
-		seen:       make(map[string]bool),
-		used:       make(map[types.Object]bool, len(info.Uses)),
-		guards:     make(map[*types.Named]bool),
-		generics:   make(map[*types.Func]*ast.FuncDecl),
-		files:      make(map[*ast.FuncDecl]*token.File),
-		external:   make(map[*types.Var]bool),
-		runtime:    make(map[string]bool),
-		done:       make(map[string]bool),
-		globals:    make(map[*types.Var]bool),
-		lazy:       make(map[*types.Var]bool),
-		localConst: make(map[*types.Const]string),
-		boxWords:   words,
+		quoteString: quoteString,
+		quoteRune:   quoteRune,
+		cfg:         cfg,
+		abi:         target,
+		section:     sectionOf(cfg.OS),
+		info:        info,
+		file:        files[0],
+		dfiles:      make(map[*token.File]int),
+		dlocs:       make(map[dloc]int),
+		decls:       make(map[string]string),
+		state:       make(map[string]bool),
+		seen:        make(map[string]bool),
+		used:        make(map[types.Object]bool, len(info.Uses)),
+		guards:      make(map[*types.Named]bool),
+		generics:    make(map[*types.Func]*ast.FuncDecl),
+		files:       make(map[*ast.FuncDecl]*token.File),
+		external:    make(map[*types.Var]bool),
+		runtime:     make(map[string]bool),
+		done:        make(map[string]bool),
+		globals:     make(map[*types.Var]bool),
+		lazy:        make(map[*types.Var]bool),
+		localConst:  make(map[*types.Const]string),
+		boxWords:    words,
 	}
 	if cfg.Debug { // what a debug build alone describes and marks (debug.go)
 		e.dir, _ = os.Getwd() // the compile directory, as a C compiler records its own, none when it cannot be read: a release build records none, so that the linker writes no map of the objects into its binary

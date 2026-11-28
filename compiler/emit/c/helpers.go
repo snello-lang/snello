@@ -92,6 +92,42 @@ func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 	return name
 }
 
+// quotedString writes the expression quoting the C string v as %q writes
+// a string, and as a string inside a value printed as it would be
+// written is quoted, Some("x"): fmt's own quoteString, written in
+// Snello, which every program has since the checker loads fmt. owned
+// says v is built here, so a helper drops it once quoted.
+func (e *Emitter) quotedString(v string, owned bool, pos token.Pos) string {
+	if e.quoteString == "" {
+		e.unsupported(pos, lower.NoQuoteString)
+		return literal("?")
+	}
+
+	if !owned {
+		return e.quoteString + "(" + v + ")"
+	}
+
+	name := lower.QuotedOwned
+	if e.state[name] == undeclared {
+		e.state[name] = defined
+		put(&e.helpers, "static sn_string ", name, "(sn_string s) {\n\tsn_string q = ", e.quoteString, "(s);\n\tsn_string_drop(&s);\n\treturn q;\n}\n\n")
+	}
+
+	return name + "(" + v + ")"
+}
+
+// quotedRune writes the expression quoting the C integer v as %q writes
+// a rune, fmt's own quoteRune, which takes any integer and writes one
+// that is no rune as U+FFFD.
+func (e *Emitter) quotedRune(v string, pos token.Pos) string {
+	if e.quoteRune == "" {
+		e.unsupported(pos, lower.NoQuoteRune)
+		return literal("?")
+	}
+
+	return e.quoteRune + "(" + v + ")"
+}
+
 // formatter returns the name of the function printing a value of type
 // t, a declared type listing fmt.Formatter or a trait value of a trait
 // refining it, through its Format, writing it on first use. The
@@ -235,7 +271,7 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (st
 	if types.IsFormatter(lower.ValueType(t)) { // a Formatter prints what its Format writes, given %v with no width, precision or flag
 		msg := e.formatted(v, t, lower.PlainVerb, pos)
 		if quoted {
-			return "sn_quote_owned(" + msg + ")", true
+			return e.quotedString(msg, true, pos), true
 		}
 
 		return msg, true
@@ -244,7 +280,7 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (st
 	if tr, ok := lower.ValueType(t).(*types.Trait); ok && printsAsMessage(tr) { // a trait value of Error or fmt.Stringer prints through its table
 		msg := e.traitText(tr, pos) + "(" + deref(v, t) + ")"
 		if quoted {
-			return "sn_quote_owned(" + msg + ")", true
+			return e.quotedString(msg, true, pos), true
 		}
 
 		return msg, true
@@ -259,7 +295,7 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (st
 		name, _ := e.methodNameOf(nil, n, method, pos)
 		msg := name + "(" + deref(v, t) + ")"
 		if quoted {
-			return "sn_quote_owned(" + msg + ")", true
+			return e.quotedString(msg, true, pos), true
 		}
 
 		return msg, true
@@ -273,7 +309,7 @@ func (e *Emitter) toText(v string, t types.Type, pos token.Pos, quoted bool) (st
 	v = deref(v, t)
 	switch {
 	case isString(b) && quoted:
-		return "sn_quote(" + v + ")", true
+		return e.quotedString(v, false, pos), true
 	case isString(b):
 		return v, false
 	case b.Kind() == types.Bool:

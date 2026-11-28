@@ -17,7 +17,10 @@
 // against the arguments then, so a verb that does not fit its argument
 // is a compile error and nothing is formatted at run time. The
 // functions are declared here without bodies; the compiler provides
-// them.
+// them, and the code it writes for printing a value calls this
+// package's own functions for what is written in Snello here, the
+// quoting of %q among them, so the compiler loads fmt into every
+// program, imported or not.
 //
 // A format is text with verbs, each taking the next argument: %v prints
 // any value as Println does; %d an integer, and %x, %X, %o and %b the
@@ -64,8 +67,24 @@ package fmt
 
 import (
 	"io"
+	"unicode"
 	"unicode/utf8"
 )
+
+// The bytes a quoted string or rune is written with: its quote marks,
+// the backslash that starts an escape, and the digits of a hexadecimal
+// escape.
+const doubleQuote byte = '"'
+const singleQuote byte = '\''
+const backslash byte = '\\'
+const hexDigits = "0123456789abcdef"
+
+// escapeMost is the most bytes one byte of a string takes quoted, \xNN,
+// and runeQuotedMost the most a quoted rune takes, '\U0010ffff';
+// asciiDelete is the one ASCII byte above the space that does not print.
+const escapeMost = 4
+const runeQuotedMost = 12
+const asciiDelete byte = 0x7F
 
 // A Stringer is a type that prints as its own text: Println, Sprint and
 // the verbs %v, %s and %q print a value of a type that lists Stringer
@@ -304,4 +323,104 @@ func runeOffset(s ref string, n int) int {
 	}
 
 	return len(s)
+}
+
+// quoteString writes s as %q and strconv.Quote write a string: in
+// double quotes, a quote and a backslash escaped, a character that
+// prints as itself, the seven short escapes, a control byte as \xNN,
+// any other character as \u or \U with its hexadecimal digits, and a
+// byte that starts no character as \xNN. The compiler calls it for
+// %q, and for a string inside a value printed as it would be written,
+// Some("x"); strconv.Quote is %q.
+func quoteString(s ref string) string {
+	out := make([]byte, 0, s.Len()*escapeMost+2) // room for every byte escaped, and the quotes
+	out.Push(doubleQuote)
+	for i := 0; i < s.Len(); {
+		c := s[i]
+		if c >= ' ' && c < asciiDelete && c != doubleQuote && c != backslash { // a printable ASCII byte is itself: most of most strings
+			out.Push(c)
+			i++
+			continue
+		}
+
+		r, width := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && width == 1 { // a byte that starts no character, told from a written U+FFFD by its width
+			hexEscape(mut out, 'x', int(s[i]), 2)
+		} else {
+			escapeRune(mut out, r, doubleQuote)
+		}
+
+		i += width
+	}
+
+	out.Push(doubleQuote)
+	return string(take(mut out)) // the bytes move into the string
+}
+
+// quoteRune writes r as %q writes a rune: in single quotes, escaped as
+// quoteString escapes a character; a value that is no rune, past the
+// last one or a surrogate, is written as U+FFFD. The compiler calls it
+// for %q of an integer.
+func quoteRune(r int) string {
+	c := rune(utf8.RuneError)
+	if r >= 0 && r <= int(utf8.MaxRune) && utf8.ValidRune(rune(r)) {
+		c = rune(r)
+	}
+
+	out := make([]byte, 0, runeQuotedMost)
+	out.Push(singleQuote)
+	escapeRune(mut out, c, singleQuote)
+	out.Push(singleQuote)
+	return string(take(mut out))
+}
+
+// escapeRune adds r to out as it is written between the quote marks
+// given: the quote and a backslash escaped, a printable character as
+// itself, the seven short escapes, a control byte as \xNN, and any
+// other character as \u or \U with its hexadecimal digits.
+func escapeRune(out mut []byte, r rune, quote byte) {
+	if r == rune(quote) || r == rune(backslash) {
+		out.Push(backslash)
+		out.Push(byte(r))
+		return
+	}
+
+	if unicode.IsPrint(r) {
+		utf8.AppendRune(mut out, r)
+		return
+	}
+
+	short := match r {
+		'\a' => 'a',
+		'\b' => 'b',
+		'\f' => 'f',
+		'\n' => 'n',
+		'\r' => 'r',
+		'\t' => 't',
+		'\v' => 'v',
+		_ => rune(0),
+	}
+	if short != 0 {
+		out.Push(backslash)
+		out.Push(byte(short))
+		return
+	}
+
+	if r < ' ' || r == rune(asciiDelete) {
+		hexEscape(mut out, 'x', int(r), 2)
+	} else if r < 0x10000 {
+		hexEscape(mut out, 'u', int(r), 4)
+	} else {
+		hexEscape(mut out, 'U', int(r), 8)
+	}
+}
+
+// hexEscape adds a backslash, the letter of the escape and v in digits
+// hexadecimal digits, the high ones first.
+func hexEscape(out mut []byte, letter byte, v int, digits int) {
+	out.Push(backslash)
+	out.Push(letter)
+	for shift := (digits - 1) * 4; shift >= 0; shift -= 4 {
+		out.Push(hexDigits[(v>>shift)&0xF])
+	}
 }

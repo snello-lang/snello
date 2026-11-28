@@ -659,9 +659,6 @@ sn_string sn_hex(sn_string s, bool upper, bool owned);
 sn_string sn_hex_bytes(sn_slice b, bool upper);
 sn_string sn_pad_zero(sn_string s, int64_t width, bool owned);
 sn_string sn_bool_to_string(bool v);
-sn_string sn_quote(sn_string s);
-sn_string sn_quote_owned(sn_string s);
-sn_string sn_quote_rune(int64_t r);
 sn_string sn_pad(sn_string s, int64_t width, bool left, bool owned);
 sn_string sn_int_digits(sn_string s, int64_t prec);
 sn_string sn_truncate(sn_string s, int64_t prec, bool owned);
@@ -842,7 +839,6 @@ void sn_os_env_free(void);     // the copies kept for the program's life, the en
 void sn_io_reserve(sn_slice_u8 *buf, int64_t n);
 int64_t sn_strconv_parseFloat(sn_string s, double *out);
 int64_t sn_strconv_parseFloat32(sn_string s, float *out);
-sn_string sn_strconv_unquote(sn_string s, bool *ok);
 sn_string sn_strconv_formatBits(uint64_t u, int64_t base, bool neg);
 sn_string sn_strconv_formatFixed(double v, int64_t prec);
 void sn_strconv_appendBits(sn_slice_u8 *b, uint64_t u, int64_t base, bool neg);

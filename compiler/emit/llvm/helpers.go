@@ -227,7 +227,7 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 	if types.IsFormatter(t) { // a Formatter prints what its Format writes, given %v with no width, precision or flag
 		msg := e.formatted(p, t, lower.PlainVerb, pos)
 		if quoted {
-			return text{e.rt("sn_quote_owned", "%sn_string", msg), true}
+			return text{e.quotedString(msg, true, pos), true}
 		}
 
 		return text{msg, true}
@@ -236,7 +236,7 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 	if tr, ok := t.(*types.Trait); ok && printsAsMessage(tr) { // a trait value of Error or fmt.Stringer prints through its table
 		msg := e.traitMessage(p, tr)
 		if quoted {
-			return text{e.rt("sn_quote_owned", "%sn_string", msg), true}
+			return text{e.quotedString(msg, true, pos), true}
 		}
 
 		return text{msg, true}
@@ -251,7 +251,7 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 		name, _ := e.methodNameOf(nil, n, method, pos)
 		msg := e.op("call %sn_string @"+name+"("+e.argsTo(n, method, pos, p)+")", "%sn_string")
 		if quoted {
-			return text{e.rt("sn_quote_owned", "%sn_string", msg), true}
+			return text{e.quotedString(msg, true, pos), true}
 		}
 
 		return text{msg, true}
@@ -266,7 +266,7 @@ func (e *Emitter) textAt(p string, t types.Type, pos token.Pos, quoted bool) tex
 	v := e.load(ir, p)
 	switch {
 	case isString(b) && quoted:
-		return text{e.rt("sn_quote", "%sn_string", v), true}
+		return text{e.quotedString(v, false, pos), true}
 	case isString(b):
 		return text{v, false}
 	case b.Kind() == types.Bool:
@@ -299,13 +299,47 @@ func (e *Emitter) widen(v value, signed bool) value {
 	return e.op("zext "+v.typed()+" to i64", "i64")
 }
 
-// stringer returns the name of the function that turns a value of a
-// composite type into text, writing it on first use: a struct as
-// {field field}, or its name when it has no fields; an enum as
-// Name(field, field); an option as Some(x) or None; a Result as Ok(x)
-// or Err(e); a tuple as (a, b); a slice as [a b]; a map as map[k:v].
-// A string inside a constructor is quoted, so the text reads as the
-// value would be written; inside a struct, tuple or slice it is not.
+// quotedString writes the call quoting the string v as %q writes a
+// string, and as a string inside a value printed as it would be
+// written is quoted, Some("x"): fmt's own quoteString, written in
+// Snello, which every program has since the checker loads fmt; the
+// string is given as its three words, as a ref string is. owned says v
+// is built here, so a helper drops it once quoted.
+func (e *Emitter) quotedString(v value, owned bool, pos token.Pos) value {
+	if e.quoteString == "" {
+		e.unsupported(pos, lower.NoQuoteString)
+		return e.constString("?")
+	}
+
+	if !owned {
+		return e.op("call %sn_string @"+e.quoteString+"("+v.typed()+")", "%sn_string")
+	}
+
+	name := lower.QuotedOwned
+	if !e.state[name] {
+		e.state[name] = true
+		e.helper(name, "%sn_string", []string{"%sn_string %s"}, func() {
+			q := e.op("call %sn_string @"+e.quoteString+"(%sn_string %s)", "%sn_string")
+			e.dropOf(e.spill(value{"%sn_string", "%s"}), types.Typ[types.String], pos)
+			e.ret(text{q, true})
+		})
+	}
+
+	return e.op("call %sn_string @"+name+"("+v.typed()+")", "%sn_string")
+}
+
+// quotedRune writes the call quoting the integer v, an i64, as %q
+// writes a rune: fmt's own quoteRune, which writes one that is no rune
+// as U+FFFD.
+func (e *Emitter) quotedRune(v value, pos token.Pos) value {
+	if e.quoteRune == "" {
+		e.unsupported(pos, lower.NoQuoteRune)
+		return e.constString("?")
+	}
+
+	return e.op("call %sn_string @"+e.quoteRune+"("+v.typed()+")", "%sn_string")
+}
+
 // formatter returns the name of the function printing a value of type
 // t, a declared type listing fmt.Formatter or a trait value of a trait
 // refining it, through its Format, writing it on first use. The
@@ -370,6 +404,13 @@ func (e *Emitter) formatted(p string, t types.Type, piece types.FormatPiece, pos
 	return e.op("call %sn_string @"+e.formatter(t, pos)+"("+args+")", "%sn_string")
 }
 
+// stringer returns the name of the function that turns a value of a
+// composite type into text, writing it on first use: a struct as
+// {field field}, or its name when it has no fields; an enum as
+// Name(field, field); an option as Some(x) or None; a Result as Ok(x)
+// or Err(e); a tuple as (a, b); a slice as [a b]; a map as map[k:v].
+// A string inside a constructor is quoted, so the text reads as the
+// value would be written; inside a struct, tuple or slice it is not.
 func (e *Emitter) stringer(t types.Type, pos token.Pos) string {
 	name := "sn_str_" + lower.Mangle(t)
 	if e.state[name] {

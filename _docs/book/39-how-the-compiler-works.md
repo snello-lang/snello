@@ -23,7 +23,7 @@ Nothing in the pipeline is a daemon or a server: `snello build` runs the steps o
 
 The importer finds the program's files and every package they import. A program is a file or a directory; the nearest `snello.mod` above it marks the module's root, and an import path names a directory under that root, a package the compiler ships, or a module a `require` line names, fetched by version into the module cache (chapter 35). The standard library is embedded in the compiler: `std/` is read from inside the binary, so a build needs no installation beside `snello` itself; only the library's own tests, run from a checkout, read it from disk. A file's name chooses its platform, as `poll_linux.snello` is built for Linux alone (chapter 34), and the loader keeps the files that match the target.
 
-Each package's files are scanned and parsed into a syntax tree, then checked as one package; a package imported is loaded and checked before the package that imports it, so that every name an import brings is known with its type. The loader's result is the program: its files, their trees, and the checker's tables.
+Each package's files are scanned and parsed into a syntax tree, then checked as one package; a package imported is loaded and checked before the package that imports it, so that every name an import brings is known with its type. `fmt` is loaded into every program whether or not a file imports it, since the code the backends write for printing a value calls fmt's own functions, the quoting of `%q` among them. The loader's result is the program: its files, their trees, and the checker's tables.
 
 ## The checker
 

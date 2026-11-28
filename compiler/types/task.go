@@ -16,6 +16,11 @@ const (
 	handleType  = "Handle"
 )
 
+// fmtPath is the package the compiler's printing is written against,
+// loaded into every program checked, since the code the backends write
+// for a value printed calls fmt's own functions.
+const fmtPath = "fmt"
+
 // The task boundary is crossed in three places: a spawn, for what the
 // task takes in, a send, for the value put on the channel, and a
 // receive, for the value taken off it. What crosses is moved, and its

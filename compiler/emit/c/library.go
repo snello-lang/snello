@@ -371,14 +371,10 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v string) text {
 	case p.Verb == 'c':
 		return text{"sn_char((int64_t)(" + deref(v, t) + "))", true}
 	case p.Verb == 'q' && info&types.IsInteger != 0:
-		return text{"sn_quote_rune((int64_t)(" + deref(v, t) + "))", true}
+		return text{e.quotedRune("(int64_t)("+deref(v, t)+")", a.Pos()), true}
 	case p.Verb == 'q':
 		s := truncated(e.text(v, a))
-		if s.owned {
-			return text{"sn_quote_owned(" + s.s + ")", true}
-		}
-
-		return text{"sn_quote(" + s.s + ")", true}
+		return text{e.quotedString(s.s, s.owned, a.Pos()), true}
 	case p.Verb == 'd':
 		if info&types.IsUnsigned != 0 {
 			return integer("sn_uint_to_string((uint64_t)(" + deref(v, t) + "))")

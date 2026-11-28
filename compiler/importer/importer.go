@@ -11,6 +11,7 @@ package importer
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -253,7 +254,7 @@ func (imp *Importer) resolveOwn(importPath, dir string) (canonical, pkgDir strin
 	}
 
 	if r == nil {
-		return "", "", nil, errors.New("package " + importPath + " is not in the standard library, and no snello.mod above the program marks a module")
+		return "", "", nil, fmt.Errorf("package %s is not in the standard library, and no snello.mod above the program marks a module: %w", importPath, types.ErrNoPackage)
 	}
 
 	pkgDir, req, err := r.module.Lookup(importPath)
@@ -262,7 +263,7 @@ func (imp *Importer) resolveOwn(importPath, dir string) (canonical, pkgDir strin
 	}
 
 	if pkgDir == "" {
-		return "", "", nil, errors.New("package " + importPath + " is not in the standard library, in the module's directories or in its require lines")
+		return "", "", nil, fmt.Errorf("package %s is not in the standard library, in the module's directories or in its require lines: %w", importPath, types.ErrNoPackage)
 	}
 
 	canonical = importPath

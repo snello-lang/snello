@@ -51,55 +51,56 @@ const (
 // declarations, type definitions, prototypes and helper functions go
 // into sections of their own, written out before the function bodies.
 type Emitter struct {
-	info      *types.Info
-	file      *token.File
-	stdFiles  map[*token.File]string // the standard library's files, which the line tables name under lower.SourceName's directory
-	quoted    map[*token.File]string // each file's name as the directives write it, quoted once a file
-	at        token.Pos              // the Snello position the lines being written are at, for the directive each line carries
-	statement ast.Expr               // the expression that is the statement being written, a call of which keeps no value
-	within    string                 // the name the program gives the function being written, for its closures' names
-	nclosure  int                    // closures of the function being written, counted for their names
-	traced    []lower.TraceName      // every function written, its symbol and the name the program gives it
-	mainAt    token.Position         // where the program declares main, which the entry is written at
-	mainFile  *token.File            // and the file it is in
-	decls     bytes.Buffer           // forward declarations of struct types
-	types     bytes.Buffer           // type definitions, each after the ones it holds by value
-	protos    bytes.Buffer           // function prototypes
-	helpers   bytes.Buffer           // generated functions, such as the printers of composite types
-	body      bytes.Buffer           // function definitions
-	scratch   []byte                 // the statements saveBefore holds aside, reused so that holding them allocates nothing
-	boxWords  int                    // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
-	tmp       int
-	used      map[types.Object]bool
-	state     map[string]int                  // of each C type and helper name: undeclared, declared, defining, defined
-	seen      map[string]bool                 // the unsupported constructs reported so far
-	result    types.Type                      // the result type of the function being emitted
-	loops     []string                        // the loops open at this point: the label continue jumps to, or empty for C's continue
-	jumped    map[string]bool                 // the labels a continue has jumped to, the ones written
-	lazy      map[*types.Var]bool             // the top-level variables made on first use, since their initializer is a call; reached through a getter
-	consts    map[*types.Const]string         // the constants declared in a function, each a static of the file under a name of its own
-	lazies    []owned                         // the lazy variables owning something, dropped when main returns if they were made
-	making    *types.Var                      // the lazy variable whose initializer is being written, which names the cell itself
-	captured  map[*types.Var]string           // inside a closure: how each captured variable is reached
-	names     naming                          // the C names of locals and parameters (locals.go)
-	closures  int                             // closures written so far, numbering their functions
-	tasks     int                             // spawn statements written so far, numbering their trampolines
-	prologue  []string                        // declarations to put at the top of the function being written
-	pre       map[ast.Expr]string             // expressions already evaluated into temporaries, for defer
-	defers    []deferred                      // the deferred calls of the function being written, in order
-	seq       int                             // values and deferred calls registered so far, ordering what a return releases
-	subst     map[*types.TypeParam]types.Type // the type arguments of the instance being written (mono.go)
-	partCopy  map[*types.Part]lower.PartCopy  // the copy of each loop over a type's parts being written, its field (stmt.go)
-	generics  map[*types.Func]*ast.FuncDecl   // the generic functions and methods, written per instance
-	files     map[*ast.FuncDecl]*token.File   // the source file of each generic declaration, for the positions in an instance's errors
-	external  map[*types.Var]bool             // the library variables the runtime defines, read through their runtime declaration
-	statics   []owned                         // the top-level variables owning something, dropped when main returns
-	done      map[string]bool                 // the instances asked for, by C name
-	work      []instance                      // the instances still to write
-	frames    []frame                         // the scopes open at this point, with the variables to drop at their end (drop.go)
-	temps     []owned                         // the temporaries of the statement being written, dropped at its end
-	guards    map[*types.Named]bool           // whether dropping a declared type runs a Drop method, which a panic must still run
-	errors    []string
+	quoteString, quoteRune string // fmt's own quoting, which %q and a string inside a printed value call: the symbols, or "" when the program has no fmt
+	info                   *types.Info
+	file                   *token.File
+	stdFiles               map[*token.File]string // the standard library's files, which the line tables name under lower.SourceName's directory
+	lineNames              map[*token.File]string // each file's name as the directives write it, quoted once a file
+	at                     token.Pos              // the Snello position the lines being written are at, for the directive each line carries
+	statement              ast.Expr               // the expression that is the statement being written, a call of which keeps no value
+	within                 string                 // the name the program gives the function being written, for its closures' names
+	nclosure               int                    // closures of the function being written, counted for their names
+	traced                 []lower.TraceName      // every function written, its symbol and the name the program gives it
+	mainAt                 token.Position         // where the program declares main, which the entry is written at
+	mainFile               *token.File            // and the file it is in
+	decls                  bytes.Buffer           // forward declarations of struct types
+	types                  bytes.Buffer           // type definitions, each after the ones it holds by value
+	protos                 bytes.Buffer           // function prototypes
+	helpers                bytes.Buffer           // generated functions, such as the printers of composite types
+	body                   bytes.Buffer           // function definitions
+	scratch                []byte                 // the statements saveBefore holds aside, reused so that holding them allocates nothing
+	boxWords               int                    // the words a function value's box has: the program's largest closure of copies, at least minBoxWords
+	tmp                    int
+	used                   map[types.Object]bool
+	state                  map[string]int                  // of each C type and helper name: undeclared, declared, defining, defined
+	seen                   map[string]bool                 // the unsupported constructs reported so far
+	result                 types.Type                      // the result type of the function being emitted
+	loops                  []string                        // the loops open at this point: the label continue jumps to, or empty for C's continue
+	jumped                 map[string]bool                 // the labels a continue has jumped to, the ones written
+	lazy                   map[*types.Var]bool             // the top-level variables made on first use, since their initializer is a call; reached through a getter
+	consts                 map[*types.Const]string         // the constants declared in a function, each a static of the file under a name of its own
+	lazies                 []owned                         // the lazy variables owning something, dropped when main returns if they were made
+	making                 *types.Var                      // the lazy variable whose initializer is being written, which names the cell itself
+	captured               map[*types.Var]string           // inside a closure: how each captured variable is reached
+	names                  naming                          // the C names of locals and parameters (locals.go)
+	closures               int                             // closures written so far, numbering their functions
+	tasks                  int                             // spawn statements written so far, numbering their trampolines
+	prologue               []string                        // declarations to put at the top of the function being written
+	pre                    map[ast.Expr]string             // expressions already evaluated into temporaries, for defer
+	defers                 []deferred                      // the deferred calls of the function being written, in order
+	seq                    int                             // values and deferred calls registered so far, ordering what a return releases
+	subst                  map[*types.TypeParam]types.Type // the type arguments of the instance being written (mono.go)
+	partCopy               map[*types.Part]lower.PartCopy  // the copy of each loop over a type's parts being written, its field (stmt.go)
+	generics               map[*types.Func]*ast.FuncDecl   // the generic functions and methods, written per instance
+	files                  map[*ast.FuncDecl]*token.File   // the source file of each generic declaration, for the positions in an instance's errors
+	external               map[*types.Var]bool             // the library variables the runtime defines, read through their runtime declaration
+	statics                []owned                         // the top-level variables owning something, dropped when main returns
+	done                   map[string]bool                 // the instances asked for, by C name
+	work                   []instance                      // the instances still to write
+	frames                 []frame                         // the scopes open at this point, with the variables to drop at their end (drop.go)
+	temps                  []owned                         // the temporaries of the statement being written, dropped at its end
+	guards                 map[*types.Named]bool           // whether dropping a declared type runs a Drop method, which a panic must still run
+	errors                 []string
 }
 
 // A deferred call is the record its defer statement saved into, whose
@@ -130,7 +131,8 @@ func EmitFiles(files []*token.File, fs []*ast.File, info *types.Info, libraries 
 	}
 
 	e := newEmitter(info, files[0], fs)
-	e.stdFiles, e.quoted = lower.StdFiles(libraries), make(map[*token.File]string)
+	e.stdFiles, e.lineNames = lower.StdFiles(libraries), make(map[*token.File]string)
+	e.quoteString, e.quoteRune = lower.QuoteFuncs(info, libraries)
 	for _, obj := range info.Uses {
 		e.used[obj] = true
 	}
@@ -496,10 +498,10 @@ func (e *Emitter) directiveName(f *token.File) string {
 		return cString(generated)
 	}
 
-	q, ok := e.quoted[f]
+	q, ok := e.lineNames[f]
 	if !ok {
 		q = cString(lower.SourceName(f.Name(), e.stdFiles[f]))
-		e.quoted[f] = q
+		e.lineNames[f] = q
 	}
 
 	return q

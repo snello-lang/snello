@@ -1849,6 +1849,22 @@ func main() {
 				"outer: load app.conf: strconv.Atoi: parsing \"x\": invalid syntax|outer|outer|\"outer\"\nouter\nsource: load app.conf\nP3 [P4] Some(\"P3\")\n",
 		},
 		{
+			Name: "bytes-into-string", // string(b) of a temporary, take's result or a literal, moves the bytes into the string; of a place it copies, and the place keeps its bytes
+			Src: `package main
+import "fmt"
+func built() []byte { return []byte("built") }
+func main() {
+	b := []byte("abc")
+	s := string(take(mut b))
+	fmt.Println(s, len(b))
+	c := []byte("xy")
+	t := string(c)
+	c.Push('z')
+	fmt.Println(t, string(c), string(built()), string([]byte{'o', 'k'}))
+}`,
+			Out: "abc 0\nxy xyz built ok\n",
+		},
+		{
 			Name: "formatter", // a type listing fmt.Formatter prints what its Format writes, given the verb and a State with the width, precision and flags, which fmt pads no further: Pad and PadNumber honour them, a Format that writes ignores them; Format is called ahead of String, inside a composite with %v and none, through a trait value, through a type parameter bounded by it, for a derived Error and for %+v's message, and a State is an io.Writer
 			Src: `package main
 import ("fmt"; "strconv"; "strings")

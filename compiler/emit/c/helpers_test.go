@@ -19,7 +19,7 @@ func TestTraitValueText(t *testing.T) {
 		t.Errorf("main does not print the Error value through sn_msg_Error:\n%s", body)
 	}
 
-	if !strings.Contains(out, "sn_quote_owned(sn_msg_Error(v.err))") {
+	if !strings.Contains(out, "sn_quoted_owned(sn_msg_Error(v.err))") {
 		t.Error("an Error value inside an Err(...) is not printed, quoted, through its table")
 	}
 }
@@ -71,7 +71,7 @@ func TestFormatter(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(out, "sn_quote_owned(sn_format_Money(") {
+	if !strings.Contains(out, "sn_quoted_owned(sn_format_Money(") {
 		t.Error("a Money inside an option is not printed, quoted, through its Format")
 	}
 

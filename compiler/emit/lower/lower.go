@@ -39,6 +39,20 @@ const (
 	HandleBoth = HandleSend | HandleRecv
 )
 
+// The quoting the backends write for %q and for a string inside a value
+// printed as it would be written: the functions of fmt that do it,
+// written in Snello in std/fmt, a string as %q writes one and an
+// integer as a rune; the helper a backend writes once to quote an
+// owned string and drop it; and what a backend reports for a program
+// without fmt, which the checker loads into every program.
+const (
+	quoteStringFunc = "quoteString"
+	quoteRuneFunc   = "quoteRune"
+	QuotedOwned     = "sn_quoted_owned"
+	NoQuoteString   = "quoting a string in a program without fmt"
+	NoQuoteRune     = "quoting a rune in a program without fmt"
+)
+
 // The fields of fmt.State as std/fmt declares them, which a backend
 // fills before it calls a Format and reads after: the text written,
 // the verb's width and precision, each an int?, and its flags.
@@ -766,6 +780,60 @@ func FormatState(t types.Type) types.Type {
 	}
 
 	return fn.Type().(*types.Signature).Params()[0].Type().(*types.Ref).Elem()
+}
+
+// QuoteFuncs returns the symbols of fmt's quoteString and quoteRune
+// among the libraries of the program, which the checker loads fmt into,
+// or empty strings for a program without fmt, which prints nothing.
+func QuoteFuncs(info *types.Info, libraries []Library) (quoteString, quoteRune string) {
+	for _, lib := range libraries {
+		if lib.Path != "fmt" {
+			continue
+		}
+
+		for _, d := range lib.Syntax.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil {
+				continue
+			}
+
+			switch fd.Name.Name {
+			case quoteStringFunc:
+				quoteString = ObjName(info.Defs[fd.Name])
+			case quoteRuneFunc:
+				quoteRune = ObjName(info.Defs[fd.Name])
+			}
+		}
+	}
+
+	return quoteString, quoteRune
+}
+
+// Temporary reports whether x, of type t, is an owned value no place
+// holds: a call's result or a literal, and not a borrow. A conversion
+// of such a value may take its memory, where one of a place copies,
+// since the place keeps its value: string(take(mut b)) moves the bytes
+// of b into the string, and string(b) copies them.
+func Temporary(x ast.Expr, t types.Type) bool {
+	if _, borrow := t.(*types.Ref); borrow {
+		return false
+	}
+
+	for {
+		p, ok := x.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+
+		x = p.X
+	}
+
+	switch x.(type) {
+	case *ast.CallExpr, *ast.CompositeLit:
+		return true
+	}
+
+	return false
 }
 
 // SelfFormatted reports whether the verb p prints a value of type t

@@ -371,14 +371,10 @@ func (e *Emitter) verb(p types.FormatPiece, a ast.Expr, v value) text {
 	case p.Verb == 'c':
 		return text{e.rt("sn_char", "%sn_string", e.widen(e.derefTo(v, t, vt), !isUnsigned(vt))), true}
 	case p.Verb == 'q' && isInteger(vt):
-		return text{e.rt("sn_quote_rune", "%sn_string", e.widen(e.derefTo(v, t, vt), !isUnsigned(vt))), true}
+		return text{e.quotedRune(e.widen(e.derefTo(v, t, vt), !isUnsigned(vt)), a.Pos()), true}
 	case p.Verb == 'q':
 		s := truncated(e.textOf(v, t, a.Pos()))
-		if s.owned {
-			return text{e.rt("sn_quote_owned", "%sn_string", s.v), true}
-		}
-
-		return text{e.rt("sn_quote", "%sn_string", s.v), true}
+		return text{e.quotedString(s.v, s.owned, a.Pos()), true}
 	case p.Verb == 'd':
 		toString, signed := "sn_int_to_string", true
 		if isUnsigned(vt) {

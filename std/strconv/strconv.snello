@@ -15,7 +15,7 @@
 // No function of the package panics on a text or a base it is given.
 package strconv
 
-import ("fmt"; "math")
+import ("fmt"; "math"; "unicode/utf8")
 
 // The reasons an Error gives in its Msg: a text that is not of the
 // kind asked for, a number its type does not hold, and a base that is
@@ -23,6 +23,16 @@ import ("fmt"; "math")
 const invalidSyntax string = "invalid syntax"
 const outOfRange string = "value out of range"
 const invalidBase string = "invalid base "
+
+// The bytes a literal is written with, which Unquote reads: the three
+// quote marks, the backslash that starts an escape, the newline no
+// quoted string holds bare and the carriage return a raw one drops.
+const doubleQuote byte = '"'
+const singleQuote byte = '\''
+const backQuote byte = '`'
+const backslash byte = '\\'
+const newline byte = '\n'
+const carriageReturn byte = '\r'
 
 // What readUnsigned, parseFloat and parseFloat32 return: parsed when
 // they read a number, and otherwise why they did not.
@@ -320,9 +330,7 @@ func AppendQuote(b mut []byte, s ref string) {
 //
 //	text := strconv.Unquote("\"a\\tb\"")?   // a, a tab, b
 func Unquote(s ref string) Result<string, Error> {
-	ok := false
-	text := unquote(s, mut ok)
-	if ok {
+	if text := unquoted(s) {
 		return Ok(text)
 	}
 
@@ -606,6 +614,191 @@ func hasWellPlacedUnderscores(s ref string) bool {
 	return !underscore
 }
 
+// unquoted returns the text the literal s stands for, or None when s
+// is no literal: a string in double quotes with a string literal's
+// escapes and no bare newline, one in back quotes taken as it is
+// without its carriage returns, or one character in single quotes; the
+// closing mark ends s, and an empty character literal is none.
+func unquoted(s ref string) string? {
+	if s.Len() < 2 {
+		return None
+	}
+
+	quote := s[0]
+	if (quote != doubleQuote && quote != singleQuote && quote != backQuote) || s[s.Len()-1] != quote {
+		return None
+	}
+
+	body := s[1 : s.Len()-1]
+	out := make([]byte, 0, body.Len()) // the text is no longer than the literal, but for a byte that starts no character, written as the three of U+FFFD, for which the slice grows
+	if quote == backQuote {
+		for i := 0; i < body.Len(); i++ {
+			if body[i] == backQuote {
+				return None
+			}
+
+			if body[i] != carriageReturn {
+				out.Push(body[i])
+			}
+		}
+
+		return Some(string(take(mut out)))
+	}
+
+	i := 0
+	for i < body.Len() {
+		c := body[i]
+		if c == quote || c == newline {
+			return None
+		}
+
+		if c != backslash && c < byte(utf8.RuneSelf) && quote != singleQuote { // a plain ASCII byte is itself: most of most literals
+			out.Push(c)
+			i++
+			continue
+		}
+
+		n := unquoteChar(body, i, quote, mut out)
+		if n == 0 {
+			return None
+		}
+
+		i += n
+		if quote == singleQuote {
+			break // one character
+		}
+	}
+
+	if i != body.Len() || (quote == singleQuote && body.Len() == 0) {
+		return None
+	}
+
+	return Some(string(take(mut out)))
+}
+
+// unquoteChar reads the character or escape of body at i, inside the
+// quote marks given, and adds what it stands for to out: a character as
+// its UTF-8, a byte that starts none as U+FFFD, a \x or octal escape as
+// its one byte, a \u or \U escape as the rune it names. It returns the
+// bytes read, or 0 for an escape a literal has none of, one cut short,
+// or one naming no rune.
+func unquoteChar(body ref string, i int, quote byte, out mut []byte) int {
+	c := body[i]
+	if c >= byte(utf8.RuneSelf) {
+		r, width := utf8.DecodeRuneInString(body[i:])
+		utf8.AppendRune(mut out, r)
+		return width
+	}
+
+	if c != backslash {
+		out.Push(c)
+		return 1
+	}
+
+	left := body.Len() - i
+	if left < 2 {
+		return 0
+	}
+
+	e := body[i+1]
+	short := match e {
+		'a' => '\a',
+		'b' => '\b',
+		'f' => '\f',
+		'n' => '\n',
+		'r' => '\r',
+		't' => '\t',
+		'v' => '\v',
+		'\\' => '\\',
+		_ => rune(0),
+	}
+	if short != 0 {
+		out.Push(byte(short))
+		return 2
+	}
+
+	if e == singleQuote || e == doubleQuote {
+		if e != quote {
+			return 0
+		}
+
+		out.Push(e)
+		return 2
+	}
+
+	if e == 'x' || e == 'u' || e == 'U' {
+		digits := 2
+		if e == 'u' {
+			digits = 4
+		} else if e == 'U' {
+			digits = 8
+		}
+
+		if left-2 < digits {
+			return 0
+		}
+
+		v := 0
+		for j := 0; j < digits; j++ {
+			d := hexValue(body[i+2+j])
+			if d < 0 {
+				return 0
+			}
+
+			v = v<<4 | d
+		}
+
+		if e == 'x' {
+			out.Push(byte(v))
+		} else if v > int(utf8.MaxRune) || !utf8.ValidRune(rune(v)) {
+			return 0 // no rune
+		} else {
+			utf8.AppendRune(mut out, rune(v))
+		}
+
+		return 2 + digits
+	}
+
+	if e >= '0' && e <= '7' {
+		if left-2 < 2 {
+			return 0
+		}
+
+		v := int(e - '0')
+		for j := 0; j < 2; j++ { // one digit read, and two more
+			d := body[i+2+j]
+			if d < '0' || d > '7' {
+				return 0
+			}
+
+			v = v<<3 | int(d-'0')
+		}
+
+		if v > 255 {
+			return 0
+		}
+
+		out.Push(byte(v))
+		return 4
+	}
+
+	return 0
+}
+
+// hexValue is the value of a hexadecimal digit, or -1 for another byte.
+func hexValue(c byte) int {
+	if c >= '0' && c <= '9' {
+		return int(c - '0')
+	}
+
+	folded := c | lowerCaseBit
+	if folded >= 'a' && folded <= 'f' {
+		return int(folded-'a') + 10
+	}
+
+	return -1
+}
+
 // parseFloat reads s into out and returns parsed, or badSyntax when s
 // is not a number and badRange when it does not fit an f64. The
 // runtime provides it.
@@ -614,10 +807,6 @@ func parseFloat(s ref string, out mut f64) int
 // parseFloat32 reads s into out as parseFloat does, the f32 nearest
 // the number. The runtime provides it.
 func parseFloat32(s ref string, out mut f32) int
-
-// unquote returns the text the literal s stands for and sets ok, or
-// clears it when s is no literal. The runtime provides it.
-func unquote(s ref string, ok mut bool) string
 
 // formatBits writes u in a base from 2 to 36, after a minus sign when
 // neg says so. The runtime provides it.
