@@ -750,6 +750,10 @@ int64_t sn_strconv_parseFloat32(sn_string s, float *out);
 sn_string sn_strconv_unquote(sn_string s, bool *ok);
 sn_string sn_strconv_formatBits(uint64_t u, int64_t base, bool neg);
 sn_string sn_strconv_formatFixed(double v, int64_t prec);
+void sn_strconv_appendBits(sn_slice_u8 *b, uint64_t u, int64_t base, bool neg);
+void sn_strconv_appendFloat(sn_slice_u8 *b, double v, bool single);
+void sn_strconv_appendFixed(sn_slice_u8 *b, double v, int64_t prec);
+void sn_strconv_appendString(sn_slice_u8 *b, sn_string s);
 int64_t sn_time_now(void);
 void sn_time_Sleep(int64_t d);
 
