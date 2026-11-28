@@ -1,0 +1,19 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package os_test
+
+import ("expect"; "os"; "testing")
+
+// TestUserDirsDarwin checks the configuration and cache directories on
+// macOS: under the Library, whatever the XDG variables say.
+func TestUserDirsDarwin() {
+	key := "XDG_CONFIG_HOME"
+	saved := os.LookupEnv(ref key)
+	defer restore(ref key, saved)
+	home := os.Getenv("HOME")
+	expect.IsOk(os.Setenv(ref key, "relative/config"))
+	expect.Equal(ref expect.IsOk(os.UserConfigDir()), ref (home + "/Library/Application Support"))
+	expect.Equal(ref expect.IsOk(os.UserCacheDir()), ref (home + "/Library/Caches"))
+}

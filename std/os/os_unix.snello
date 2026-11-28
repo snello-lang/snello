@@ -1,0 +1,67 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The user's directories and ids on Linux and macOS: the home from the
+// environment, and the user and group ids from the system.
+package os
+
+import ("io"; "path/filepath")
+
+// UserHomeDir returns the user's home directory, the HOME of the
+// environment, in a string of its own, and on Windows the USERPROFILE.
+// It fails when the variable is unset or empty, "userdir: $HOME is not
+// defined"; the directory is not checked to exist.
+//
+//	home := os.UserHomeDir()?
+func UserHomeDir() Result<string, io.Error> {
+	return homeDir("HOME")
+}
+
+// Getuid returns the id of the user the program runs as, and Getgid the
+// id of its group; on Windows, which has no such ids, each is None.
+func Getuid() int? {
+	return Some(getuid())
+}
+
+// Getgid returns the id of the group the program runs as; see Getuid.
+func Getgid() int? {
+	return Some(getgid())
+}
+
+// homeDir is the directory the environment variable key names, or the
+// error of one unset or empty.
+func homeDir(key ref string) Result<string, io.Error> {
+	if home := LookupEnv(key) {
+		if len(home) > 0 {
+			return Ok(home)
+		}
+	}
+
+	return Err(io.NewError("userdir", "", "$"+key+" is not defined", io.Other))
+}
+
+// xdgDir is the directory the environment variable key names when it
+// is set to an absolute path, the error of one set to a relative path,
+// "path in $XDG_CONFIG_HOME is relative", and otherwise the fallback
+// under the user's home.
+func xdgDir(key ref string, fallback ref string) Result<string, io.Error> {
+	if dir := LookupEnv(key) {
+		if len(dir) > 0 {
+			if !filepath.IsAbs(ref dir) {
+				return Err(io.NewError("userdir", "", "path in $"+key+" is relative", io.Other))
+			}
+
+			return Ok(dir)
+		}
+	}
+
+	home := UserHomeDir()?
+	return Ok(filepath.Join(ref home, fallback))
+}
+
+// getuid and getgid are the ids of the user and the group the program
+// runs as. The runtime provides them.
+func getuid() int
+
+func getgid() int

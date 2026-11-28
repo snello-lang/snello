@@ -1,0 +1,31 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package os_test
+
+import ("expect"; "os"; "testing")
+
+// TestUserDirsLinux checks the configuration and cache directories
+// against the XDG variables: one set to an absolute path is taken, one
+// set to a relative path is an error, and one unset gives the default
+// under the home.
+func TestUserDirsLinux() {
+	config := "XDG_CONFIG_HOME"
+	cache := "XDG_CACHE_HOME"
+	savedConfig := os.LookupEnv(ref config)
+	savedCache := os.LookupEnv(ref cache)
+	defer restore(ref config, savedConfig)
+	defer restore(ref cache, savedCache)
+	home := os.Getenv("HOME")
+	expect.IsOk(os.Setenv(ref config, "/etc/xdg"))
+	expect.Equal(ref expect.IsOk(os.UserConfigDir()), "/etc/xdg")
+	expect.IsOk(os.Setenv(ref config, "relative/config"))
+	expect.Equal(ref expect.IsErr(os.UserConfigDir()).Error(), "userdir: path in $XDG_CONFIG_HOME is relative")
+	os.Unsetenv(ref config)
+	expect.Equal(ref expect.IsOk(os.UserConfigDir()), ref (home + "/.config"))
+	os.Unsetenv(ref cache)
+	expect.Equal(ref expect.IsOk(os.UserCacheDir()), ref (home + "/.cache"))
+	expect.IsOk(os.Setenv(ref cache, "/var/cache/me"))
+	expect.Equal(ref expect.IsOk(os.UserCacheDir()), "/var/cache/me")
+}

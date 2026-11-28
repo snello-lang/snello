@@ -21,7 +21,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <tlhelp32.h> // the process list, for sn_os_Getppid
 #include <wchar.h>
+#include <winioctl.h> // FSCTL_GET_REPARSE_POINT, for sn_os_readlink
 
 // What a removal and a directory's read say failed, as the library's
 // errors name the call, and the separator a path's parts are joined
@@ -35,7 +37,7 @@
 // read by all, any other read and written by all, and a directory is
 // searched by all besides, as the os package reports a mode where the
 // system keeps none.
-enum { mode_read_only = 0444, mode_read_write = 0666, mode_search = 0111, mode_write = 0200 };
+enum { mode_read_only = 0444, mode_read_write = 0666, mode_owner = 0600, mode_search = 0111, mode_write = 0200 };
 
 // The shortest path the system's path calls refuse where long paths
 // are not enabled, a directory's limit, room left in MAX_PATH for a
@@ -686,7 +688,7 @@ SN_HELD int64_t sn_os_open(sn_string path, int64_t *fd) {
 }
 
 SN_HELD int64_t sn_os_create(sn_string path, int64_t *fd) {
-    int f = win_open(path, _O_WRONLY | _O_CREAT | _O_TRUNC, mode_read_write, false);
+    int f = win_open(path, _O_RDWR | _O_CREAT | _O_TRUNC, mode_read_write, false); // read-write, as os.Create says
     if (f < 0) {
         return errno;
     }
@@ -870,28 +872,31 @@ SN_HELD int64_t sn_os_mkdir(sn_string path, uint32_t perm) {
     return code;
 }
 
-// win_mkdir_temp makes a new directory under dir as os.MkdirTemp names it:
-// the pattern with its last * replaced by a random number, or followed
-// by one, another tried while the name is taken. out and op say what
+// win_dir_missing reports whether a temporary name that could not be
+// made, with the error number code, failed because dir itself is
+// missing.
+SN_HELD_STATIC static bool win_dir_missing(sn_string dir, int code) {
+    if (code != ENOENT) {
+        return false;
+    }
+
+    wchar_t *p = wpath(dir);
+    bool missing = p != NULL && GetFileAttributesW(p) == INVALID_FILE_ATTRIBUTES && last_errno() == ENOENT;
+    sn_free(p);
+    return missing;
+}
+
+// win_mkdir_temp makes a new directory under dir as os.MkdirTemp names it,
+// with the names os.c makes for both systems; out and op say what
 // failed, as os.c's does on the other systems.
 SN_HELD_STATIC static int64_t win_mkdir_temp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
     sn_string_drop(op);
     *op = SN_STR("mkdirtemp", 9);
-    int64_t star = pattern.len;
-    for (int64_t i = pattern.len - 1; i >= 0; i--) {
-        if (pattern.ptr[i] == '*') {
-            star = i;
-            break;
-        }
-    }
-
-    sn_string prefix = sn_join(sn_join(dir, SN_STR(SEPARATOR, sizeof SEPARATOR - 1), 0), SN_STR(pattern.ptr, star), 1);
-    sn_string suffix = star < pattern.len ? SN_STR(pattern.ptr + star + 1, pattern.len - star - 1) : SN_STR("", 0);
+    sn_string prefix, suffix;
+    sn_os_tempParts(dir, pattern, SEPARATOR[0], &prefix, &suffix);
     int code = EEXIST;
     for (int try = 0; try < 10000 && code == EEXIST; try++) {
-        char digits[24];
-        int n = snprintf(digits, sizeof digits, "%u", (unsigned)(sn_next_random() >> 32));
-        sn_string name = sn_join(sn_join(prefix, SN_STR(digits, n), 0), suffix, 1);
+        sn_string name = sn_os_tempName(prefix, suffix);
         wchar_t *p = wpath(name);
         code = p == NULL ? errno : make_dir(p);
         sn_free(p);
@@ -905,22 +910,7 @@ SN_HELD_STATIC static int64_t win_mkdir_temp(sn_string dir, sn_string pattern, s
         sn_string_free(name);
     }
 
-    if (code == ENOENT) {
-        wchar_t *p = wpath(dir);
-        bool missing = p != NULL && GetFileAttributesW(p) == INVALID_FILE_ATTRIBUTES && last_errno() == ENOENT;
-        sn_free(p);
-        if (missing) {
-            sn_string_free(prefix);
-            sn_string_drop(out);
-            *out = sn_string_clone(dir);
-            *op = SN_STR("stat", 4);
-            return ENOENT;
-        }
-    }
-
-    sn_string_drop(out);
-    *out = sn_join(sn_join(prefix, SN_STR("*", 1), 1), suffix, 1);
-    return code;
+    return sn_os_tempFailed(dir, prefix, suffix, code, win_dir_missing(dir, code), out, op);
 }
 
 SN_HELD int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
@@ -1440,6 +1430,407 @@ SN_HELD char **sn_os_environ_utf8(void) {
 
     FreeEnvironmentStringsW(block);
     return out;
+}
+
+// The file operations of os that came after the first ones: the modes,
+// the times, the sizes, the links, the temporary files, the program's
+// own path and its parent. Each takes paths through wpath and reports
+// the system's failure as an error number, as the functions above do.
+
+// file_time is the system's time for seconds and nanoseconds since
+// 1970, in its ticks of 100 ns since 1601, or false for a time the
+// system has no number for: before 1601, or past what its ticks count.
+SN_HELD_STATIC static bool file_time(int64_t sec, int64_t nsec, FILETIME *ft) {
+    int64_t ticks;
+    if (__builtin_mul_overflow(sec, (int64_t)ticks_per_s, &ticks) ||
+        __builtin_add_overflow(ticks, (int64_t)FILETIME_EPOCH + nsec / tick_ns, &ticks) || ticks < 0) {
+        return false;
+    }
+
+    ft->dwLowDateTime = (DWORD)(uint64_t)ticks;
+    ft->dwHighDateTime = (DWORD)((uint64_t)ticks >> 32);
+    return true;
+}
+
+// open_attributes opens the file at p for a change of its attributes or
+// its data with the access asked, a directory too, sharing it as every
+// Windows program expects; INVALID_HANDLE_VALUE with errno set on a
+// failure.
+SN_HELD_STATIC static HANDLE open_attributes(const wchar_t *p, DWORD access) {
+    HANDLE h = CreateFileW(p, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        (void)last_errno();
+    }
+
+    return h;
+}
+
+// sn_os_chmod is os.Chmod: the system keeps no permissions, so the
+// owner's write bit alone counts, a mode without it making the file
+// read-only and one with it writable, as os.FileMode says of Windows.
+SN_HELD int64_t sn_os_chmod(sn_string path, uint32_t mode) {
+    wchar_t *p = wpath(path);
+    if (p == NULL) {
+        return errno;
+    }
+
+    DWORD attrs = GetFileAttributesW(p);
+    int code = 0;
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        code = last_errno();
+    } else {
+        DWORD want = (mode & mode_write) == 0 ? attrs | FILE_ATTRIBUTE_READONLY : attrs & ~(DWORD)FILE_ATTRIBUTE_READONLY;
+        if (want != attrs && !SetFileAttributesW(p, want)) {
+            code = last_errno();
+        }
+    }
+
+    sn_free(p);
+    return code;
+}
+
+// sn_os_chtimes is os.Chtimes: the time last read and the time last
+// changed, each set when its flag says so and left as it is otherwise,
+// which the system takes as a time of NULL.
+SN_HELD int64_t sn_os_chtimes(sn_string path, bool setAccess, int64_t asec, int64_t ansec, bool setChange,
+                              int64_t msec, int64_t mnsec) {
+    FILETIME access, change;
+    if ((setAccess && !file_time(asec, ansec, &access)) || (setChange && !file_time(msec, mnsec, &change))) {
+        return EINVAL;
+    }
+
+    wchar_t *p = wpath(path);
+    if (p == NULL) {
+        return errno;
+    }
+
+    HANDLE h = open_attributes(p, FILE_WRITE_ATTRIBUTES);
+    int code = h == INVALID_HANDLE_VALUE ? errno : 0;
+    sn_free(p);
+    if (code != 0) {
+        return code;
+    }
+
+    code = SetFileTime(h, NULL, setAccess ? &access : NULL, setChange ? &change : NULL) ? 0 : last_errno();
+    CloseHandle(h);
+    return code;
+}
+
+// set_size sets the size of the open file h, cutting it or filling it
+// with zeros, in one call that moves no position.
+SN_HELD_STATIC static int set_size(HANDLE h, int64_t size) {
+    FILE_END_OF_FILE_INFO info;
+    info.EndOfFile.QuadPart = size;
+    return SetFileInformationByHandle(h, FileEndOfFileInfo, &info, sizeof info) ? 0 : last_errno();
+}
+
+// sn_os_truncate is os.Truncate, and sn_os_ftruncate File.Truncate.
+SN_HELD int64_t sn_os_truncate(sn_string path, int64_t size) {
+    wchar_t *p = wpath(path);
+    if (p == NULL) {
+        return errno;
+    }
+
+    HANDLE h = open_attributes(p, GENERIC_WRITE);
+    int code = h == INVALID_HANDLE_VALUE ? errno : 0;
+    sn_free(p);
+    if (code != 0) {
+        return code;
+    }
+
+    code = set_size(h, size);
+    CloseHandle(h);
+    return code;
+}
+
+SN_HELD int64_t sn_os_ftruncate(int64_t fd, int64_t size) {
+    HANDLE h = (HANDLE)_get_osfhandle((int)fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        return EBADF;
+    }
+
+    return set_size(h, size);
+}
+
+// sn_os_link is os.Link.
+SN_HELD int64_t sn_os_link(sn_string from, sn_string to) {
+    wchar_t *f = wpath(from);
+    if (f == NULL) {
+        return errno;
+    }
+
+    wchar_t *t = wpath(to);
+    if (t == NULL) {
+        sn_free(f);
+        return EINVAL;
+    }
+
+    int code = CreateHardLinkW(t, f, NULL) ? 0 : last_errno();
+    sn_free(f);
+    sn_free(t);
+    return code;
+}
+
+// links_directory reports whether the target of a link to be made at
+// link names a directory now, as the system will read the target: as it
+// is when it has a volume or names a share, on the link's volume when
+// it starts at a root, and under the link's own directory when
+// relative; a link to a directory is made as a directory link.
+SN_HELD_STATIC static bool links_directory(sn_string target, sn_string link) {
+    sn_string path = target;
+    bool joined = false;
+    bool separator = target.len > 0 && (target.ptr[0] == '\\' || target.ptr[0] == '/');
+    bool share = target.len > 1 && separator && (target.ptr[1] == '\\' || target.ptr[1] == '/');
+    bool volume = target.len > 1 && target.ptr[1] == ':';
+    if (separator && !share && link.len > 1 && link.ptr[1] == ':') { // rooted: the link's volume
+        path = sn_join(SN_STR(link.ptr, 2), target, 0);
+        joined = true;
+    } else if (!separator && !volume) { // relative: under the link's directory
+        int64_t end = link.len;
+        while (end > 0 && link.ptr[end - 1] != '\\' && link.ptr[end - 1] != '/') {
+            end--;
+        }
+
+        path = sn_join(SN_STR(link.ptr, end), target, 0);
+        joined = true;
+    }
+
+    wchar_t *p = wpath(path);
+    if (joined) {
+        sn_string_free(path);
+    }
+
+    if (p == NULL) {
+        return false;
+    }
+
+    DWORD attrs = GetFileAttributesW(p);
+    sn_free(p);
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+// sn_os_symlink is os.Symlink: the target is kept as written, so it is
+// converted without the prefix a long path takes; a link to a directory
+// is made as a directory link; and the right a user has to make a link
+// without a privilege, developer mode, is asked for first, and the call
+// made again without it on a system too old to know the flag.
+SN_HELD int64_t sn_os_symlink(sn_string target, sn_string link) {
+    wchar_t *t = sn_os_wide(target);
+    if (t == NULL) {
+        return errno;
+    }
+
+    wchar_t *l = wpath(link);
+    if (l == NULL) {
+        sn_free(t);
+        return EINVAL;
+    }
+
+    DWORD flags = links_directory(target, link) ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0;
+    int code = 0;
+    if (!CreateSymbolicLinkW(l, t, flags | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+        code = last_errno();
+        if (GetLastError() == ERROR_INVALID_PARAMETER) {
+            code = CreateSymbolicLinkW(l, t, flags) ? 0 : last_errno();
+        }
+    }
+
+    sn_free(t);
+    sn_free(l);
+    return code;
+}
+
+// A reparse point's data, as the system lays it out for a symbolic link
+// and for a mount point, a junction, which has no Flags: the two names
+// are at offsets into PathBuffer, in UTF-16 units.
+typedef struct {
+    ULONG tag;
+    USHORT dataLength;
+    USHORT reserved;
+    USHORT substituteOffset;
+    USHORT substituteLength;
+    USHORT printOffset;
+    USHORT printLength;
+    ULONG flags; // a symbolic link's; a mount point's PathBuffer starts here
+    WCHAR pathBuffer[1];
+} reparse_data;
+
+// without_prefix is the path w of n units without the prefix the system
+// gives a link's target, \??\ or \??\UNC\, which os.Readlink gives
+// back as the path it stands for, in an owned Snello string.
+SN_HELD_STATIC static sn_string without_prefix(const wchar_t *w, int n) {
+    if (n >= 8 && wcsncmp(w, L"\\??\\UNC\\", 8) == 0) {
+        return sn_join(SN_STR("\\\\", 2), utf8(w + 8, n - 8), 2);
+    }
+
+    if (n >= 4 && wcsncmp(w, L"\\??\\", 4) == 0) {
+        return utf8(w + 4, n - 4);
+    }
+
+    return utf8(w, n);
+}
+
+// sn_os_readlink is os.Readlink: the target a symbolic link or a mount
+// point holds, read from its reparse point; a file that is neither is
+// refused as an invalid argument, as on the other systems.
+SN_HELD int64_t sn_os_readlink(sn_string path, sn_string *out) {
+    wchar_t *p = wpath(path);
+    if (p == NULL) {
+        return errno;
+    }
+
+    HANDLE h = CreateFileW(p, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    sn_free(p);
+    if (h == INVALID_HANDLE_VALUE) {
+        return last_errno();
+    }
+
+    char *block = sn_alloc(MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
+    DWORD got = 0;
+    int code = 0;
+    if (!DeviceIoControl(h, FSCTL_GET_REPARSE_POINT, NULL, 0, block, MAXIMUM_REPARSE_DATA_BUFFER_SIZE, &got, NULL)) {
+        code = GetLastError() == ERROR_NOT_A_REPARSE_POINT ? EINVAL : last_errno();
+    }
+
+    CloseHandle(h);
+    if (code == 0) {
+        // The data is what whoever set the reparse point wrote, so its
+        // offsets are held to the bytes the system gave back before the
+        // names are read: a point of another kind, or one too short or
+        // pointing outside its data, is no link.
+        reparse_data *data = (reparse_data *)block;
+        bool mount = got >= offsetof(reparse_data, flags) && data->tag == IO_REPARSE_TAG_MOUNT_POINT;
+        bool symlink = got >= offsetof(reparse_data, pathBuffer) && data->tag == IO_REPARSE_TAG_SYMLINK;
+        const char *names = mount ? (const char *)&data->flags : (const char *)data->pathBuffer;
+        DWORD room = (mount || symlink) ? got - (DWORD)(names - block) : 0;
+        if ((mount || symlink) && (DWORD)data->substituteOffset + data->substituteLength <= room) {
+            sn_string_drop(out);
+            *out = without_prefix((const wchar_t *)(names + data->substituteOffset),
+                                  (int)(data->substituteLength / sizeof(wchar_t)));
+        } else {
+            code = EINVAL;
+        }
+    }
+
+    sn_free(block);
+    return code;
+}
+
+// win_create_temp makes and opens a new file under dir as win_mkdir_temp
+// names a directory, for reading and writing, the owner's; the
+// descriptor and the name are stored, or on a failure the name the
+// error is about and the call that failed, open or stat.
+SN_HELD_STATIC static int64_t win_create_temp(sn_string dir, sn_string pattern, int64_t *fd, sn_string *out,
+                                              sn_string *op) {
+    sn_string_drop(op);
+    *op = SN_STR(OP_OPEN, sizeof OP_OPEN - 1);
+    sn_string prefix, suffix;
+    sn_os_tempParts(dir, pattern, SEPARATOR[0], &prefix, &suffix);
+    int code = EEXIST;
+    for (int try = 0; try < 10000 && code == EEXIST; try++) {
+        sn_string name = sn_os_tempName(prefix, suffix);
+        int f = win_open(name, _O_RDWR | _O_CREAT | _O_EXCL, mode_owner, false);
+        if (f >= 0) {
+            sn_string_free(prefix);
+            sn_string_drop(out);
+            *out = name;
+            *fd = f;
+            return 0;
+        }
+
+        code = errno;
+        sn_string_free(name);
+    }
+
+    return sn_os_tempFailed(dir, prefix, suffix, code, win_dir_missing(dir, code), out, op);
+}
+
+SN_HELD int64_t sn_os_createTemp(sn_string dir, sn_string pattern, int64_t *fd, sn_string *out, sn_string *op) {
+    if (dir.len > 0) {
+        return win_create_temp(dir, pattern, fd, out, op);
+    }
+
+    sn_string tmp = sn_os_TempDir();
+    int64_t code = win_create_temp(tmp, pattern, fd, out, op);
+    sn_string_free(tmp);
+    return code;
+}
+
+// sn_os_readExecutable reads the path of the program's file, once, for
+// os.Executable, in a block that doubles while the path does not fit.
+SN_HELD int64_t sn_os_readExecutable(sn_string *out) {
+    for (DWORD cap = 260;; cap *= 2) {
+        wchar_t *w = sn_alloc(cap * sizeof *w);
+        DWORD n = GetModuleFileNameW(NULL, w, cap);
+        if (n == 0) {
+            int code = last_errno();
+            sn_free(w);
+            return code;
+        }
+
+        if (n < cap) {
+            sn_string_drop(out);
+            *out = shown(w);
+            sn_free(w);
+            return 0;
+        }
+
+        sn_free(w);
+    }
+}
+
+// sn_os_fstat is File.Stat: what sn_os_stat says of a path, of an open
+// file.
+SN_HELD int64_t sn_os_fstat(int64_t fd, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec, uint64_t *dev,
+                            uint64_t *ino) {
+    HANDLE h = (HANDLE)_get_osfhandle((int)fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        return EBADF;
+    }
+
+    BY_HANDLE_FILE_INFORMATION info;
+    FILE_ATTRIBUTE_TAG_INFO tag = { 0 };
+    bool ok = GetFileInformationByHandle(h, &info);
+    if (ok && (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        ok = GetFileInformationByHandleEx(h, FileAttributeTagInfo, &tag, sizeof tag);
+    }
+
+    if (!ok) {
+        return last_errno();
+    }
+
+    *size = (int64_t)((uint64_t)info.nFileSizeHigh << 32 | info.nFileSizeLow);
+    *mode = mode_of(info.dwFileAttributes, tag.ReparseTag);
+    unix_time(info.ftLastWriteTime, sec, nsec);
+    *dev = info.dwVolumeSerialNumber;
+    *ino = (uint64_t)info.nFileIndexHigh << 32 | info.nFileIndexLow;
+    return 0;
+}
+
+// sn_os_Getppid is os.Getppid: the parent's id from the system's list
+// of processes, the entry of this process naming it; 0 when the list
+// cannot be read or the process is not in it.
+SN_HELD int64_t sn_os_Getppid(void) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+
+    DWORD self = GetCurrentProcessId();
+    int64_t parent = 0;
+    PROCESSENTRY32W e;
+    e.dwSize = sizeof e;
+    for (BOOL more = Process32FirstW(snap, &e); more; more = Process32NextW(snap, &e)) {
+        if (e.th32ProcessID == self) {
+            parent = (int64_t)e.th32ParentProcessID;
+            break;
+        }
+    }
+
+    CloseHandle(snap);
+    return parent;
 }
 
 #endif

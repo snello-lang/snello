@@ -4,7 +4,7 @@
 
 package os_test
 
-import ("expect"; "fmt"; "io"; "os"; "path/filepath"; "testing"; "time")
+import ("expect"; "fmt"; "io"; "os"; "path/filepath"; "strings"; "testing"; "time")
 
 // The variables TestEnvMany sets in each of its rounds, and the rounds.
 const manyVars = 500
@@ -508,4 +508,228 @@ func TestReadAtWriteAt() {
 	readOnly := expect.IsOk(os.Open(ref path))
 	e := expect.IsErr(readOnly.WriteAt(ref []byte("x"), 0))
 	expect.Contains(ref e.Error(), ref ("write " + path)) // the operation and the file, then the system's reason
+}
+
+// TestChmod sets a file's permissions and reads them back: the owner's
+// write bit is kept on every system, the rest where the system keeps
+// them, which each system's own test checks.
+func TestChmod() {
+	dir := testing.TempDir()
+	path := dir.Join("mode.txt")
+	expect.IsOk(os.WriteFile(ref path, ref []byte("x"), 0o644))
+	expect.IsOk(os.Chmod(ref path, 0o444))
+	expect.True(expect.IsOk(os.Stat(ref path)).Mode().Perm()&0o200 == 0)
+	expect.IsOk(os.Chmod(ref path, 0o644))
+	expect.True(expect.IsOk(os.Stat(ref path)).Mode().Perm()&0o200 != 0)
+	missing := expect.IsErr(os.Chmod(ref dir.Join("gone"), 0o644))
+	expect.True(missing.Kind() == io.NotExist)
+	expect.Equal(ref missing.Error(), ref ("chmod " + dir.Join("gone") + ": no such file or directory"))
+}
+
+// TestChtimes sets the time a file was last changed, leaves the time it
+// was last read as it is, and reads the change back through Stat.
+func TestChtimes() {
+	dir := testing.TempDir()
+	path := dir.Join("old.txt")
+	expect.IsOk(os.WriteFile(ref path, ref []byte("x"), 0o644))
+	when := time.Unix(1700000000, 123456789)
+	expect.IsOk(os.Chtimes(ref path, None, Some(when)))
+	got := expect.IsOk(os.Stat(ref path)).ModTime()
+	expect.Equal(ref got.Unix(), ref when.Unix())
+	expect.Equal(ref got.Nanosecond()/100, ref 1234567) // to the hundred of nanoseconds Windows keeps; each system's own test checks the rest
+	expect.IsOk(os.Chtimes(ref path, Some(time.Now()), None)) // the change time stays
+	expect.Equal(ref expect.IsOk(os.Stat(ref path)).ModTime().Unix(), ref when.Unix())
+	expect.IsOk(os.Chtimes(ref path, None, None)) // nothing to set is nothing done
+	missing := expect.IsErr(os.Chtimes(ref dir.Join("gone"), None, Some(when)))
+	expect.True(missing.Kind() == io.NotExist)
+	expect.Equal(ref missing.Error(), ref ("chtimes " + dir.Join("gone") + ": no such file or directory"))
+}
+
+// TestTruncate cuts a file and grows it with zeros, by its path and
+// through an open File, and refuses a size below zero before the
+// system is asked, so the path need not exist.
+func TestTruncate() {
+	dir := testing.TempDir()
+	path := dir.Join("size.txt")
+	expect.IsOk(os.WriteString(ref path, "hello world"))
+	expect.IsOk(os.Truncate(ref path, 5))
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref path)), "hello")
+	expect.IsOk(os.Truncate(ref path, 7))
+	expect.EqualSlice(ref expect.IsOk(os.ReadFile(ref path)), ref []byte("hello\x00\x00"))
+	expect.Equal(ref expect.IsErr(os.Truncate(ref dir.Join("gone"), -1)).Error(), ref ("truncate " + dir.Join("gone") + ": invalid argument"))
+	expect.True(expect.IsErr(os.Truncate(ref dir.Join("gone"), 1)).Kind() == io.NotExist)
+	f := expect.IsOk(os.OpenFile(ref path, os.O_RDWR, 0o644))
+	expect.IsOk(f.Truncate(2))
+	expect.Equal(ref expect.IsOk(f.Stat()).Size(), ref i64(2))
+	expect.Equal(ref expect.IsErr(f.Truncate(-1)).Error(), ref ("truncate " + path + ": invalid argument"))
+	expect.IsOk(f.Truncate(4))
+	buf := []byte{0, 0, 0, 0, 0}
+	expect.Equal(ref expect.IsOk(f.Read(mut buf)), ref 4) // the position did not move: the bytes from the start
+	expect.EqualSlice(ref buf, ref []byte{'h', 'e', 0, 0, 0})
+}
+
+// TestLink makes a second name for a file: a write through one reads
+// through the other, and the file lives while either name does.
+func TestLink() {
+	dir := testing.TempDir()
+	path := dir.Join("one.txt")
+	link := dir.Join("two.txt")
+	expect.IsOk(os.WriteString(ref path, "shared"))
+	expect.IsOk(os.Link(ref path, ref link))
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref link)), "shared")
+	expect.IsOk(os.WriteString(ref link, "changed"))
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref path)), "changed")
+	taken := expect.IsErr(os.Link(ref path, ref link))
+	expect.True(taken.Kind() == io.Exists)
+	expect.Equal(ref taken.Error(), ref ("link " + path + " " + link + ": file exists"))
+	expect.True(expect.IsErr(os.Link(ref dir.Join("gone"), ref dir.Join("three"))).Kind() == io.NotExist)
+	expect.IsOk(os.Remove(ref path))
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref link)), "changed")
+}
+
+// TestSymlink makes a symbolic link, reads its text back, follows it
+// with Stat and not with Lstat, and reads a dangling one.
+func TestSymlink() {
+	dir := testing.TempDir()
+	path := dir.Join("target.txt")
+	link := dir.Join("link")
+	expect.IsOk(os.WriteString(ref path, "pointed at"))
+	expect.IsOk(os.Symlink("target.txt", ref link))
+	expect.Equal(ref expect.IsOk(os.Readlink(ref link)), "target.txt")
+	expect.True(expect.IsOk(os.Lstat(ref link)).Mode()&os.ModeSymlink != 0)
+	expect.Equal(ref expect.IsOk(os.Stat(ref link)).Size(), ref i64(10))
+	expect.Equal(ref expect.IsOk(os.ReadToString(ref link)), "pointed at")
+	absolute := dir.Join("abs")
+	expect.IsOk(os.Symlink(ref path, ref absolute))
+	expect.Equal(ref expect.IsOk(os.Readlink(ref absolute)), ref path)
+	long := expect.IsSome(strings.Repeat("x", 300)) // past the first block Readlink reads into, which doubles
+	longLink := dir.Join("long")
+	expect.IsOk(os.Symlink(ref long, ref longLink))
+	expect.Equal(ref expect.IsOk(os.Readlink(ref longLink)), ref long)
+	dangling := dir.Join("dangling")
+	expect.IsOk(os.Symlink("nowhere", ref dangling))
+	expect.Equal(ref expect.IsOk(os.Readlink(ref dangling)), "nowhere")
+	expect.True(expect.IsOk(os.Lstat(ref dangling)).Mode()&os.ModeSymlink != 0)
+	expect.True(expect.IsErr(os.Stat(ref dangling)).Kind() == io.NotExist)
+	taken := expect.IsErr(os.Symlink("x", ref link))
+	expect.True(taken.Kind() == io.Exists)
+	expect.Equal(ref taken.Error(), ref ("symlink x " + link + ": file exists"))
+	plain := expect.IsErr(os.Readlink(ref path))
+	expect.Equal(ref plain.Error(), ref ("readlink " + path + ": invalid argument"))
+	expect.True(expect.IsErr(os.Readlink(ref dir.Join("gone"))).Kind() == io.NotExist)
+}
+
+// TestCreateTemp makes temporary files named by a pattern, each name
+// new, open for reading and writing, and reports a missing directory
+// by its stat and a pattern with a separator before anything is made.
+func TestCreateTemp() {
+	dir := testing.TempDir()
+	f := expect.IsOk(os.CreateTemp(dir.Path(), "up-*.bin"))
+	name := filepath.Base(f.Name()).Clone()
+	expect.True(name.HasPrefix("up-") && name.HasSuffix(".bin") && name.Len() > 7)
+	expect.Equal(ref filepath.Dir(f.Name()), ref filepath.Clean(dir.Path())) // the temporary directory's path may end in a separator
+	expect.Equal(ref expect.IsOk(f.WriteString("abc")), ref 3)
+	expect.Equal(ref expect.IsOk(os.ReadToString(f.Name())), "abc")
+	g := expect.IsOk(os.CreateTemp(dir.Path(), "up-*.bin"))
+	expect.NotEqual(f.Name(), g.Name())
+	plain := expect.IsOk(os.CreateTemp(dir.Path(), "plain"))
+	expect.True(filepath.Base(plain.Name()).HasPrefix("plain") && filepath.Base(plain.Name()).Len() > 5)
+	system := expect.IsOk(os.CreateTemp("", "snello-test-*"))
+	expect.Equal(ref filepath.Dir(system.Name()), ref filepath.Clean(ref os.TempDir()))
+	expect.IsOk(os.Remove(system.Name()))
+	separator := expect.IsErr(os.CreateTemp(dir.Path(), "a/b"))
+	expect.Equal(ref separator.Error(), "createtemp a/b: pattern contains path separator")
+	gone := expect.IsErr(os.CreateTemp(ref dir.Join("gone"), "x"))
+	expect.True(gone.Kind() == io.NotExist)
+	expect.Equal(ref gone.Error(), ref ("stat " + dir.Join("gone") + ": no such file or directory"))
+}
+
+// TestFileStat asks an open file what the system says of it: its size
+// as written so far and the name it was opened by.
+func TestFileStat() {
+	dir := testing.TempDir()
+	path := dir.Join("open.txt")
+	f := expect.IsOk(os.Create(ref path))
+	expect.Equal(ref expect.IsOk(f.Stat()).Size(), ref i64(0))
+	expect.IsOk(f.WriteString("twelve bytes"))
+	fi := expect.IsOk(f.Stat())
+	expect.Equal(ref fi.Size(), ref i64(12))
+	expect.Equal(fi.Name(), "open.txt")
+	expect.True(fi.Mode().IsRegular())
+	expect.True(time.Since(fi.ModTime()) < time.Minute)
+}
+
+// TestExecutable finds the running program's file: an absolute path to
+// a regular file.
+func TestExecutable() {
+	exe := expect.IsOk(os.Executable())
+	expect.True(filepath.IsAbs(ref exe))
+	expect.True(expect.IsOk(os.Stat(ref exe)).Mode().IsRegular())
+	expect.True(filepath.Base(ref exe).Len() > 0)
+}
+
+// TestUserDirs reads the user's directories: the home is the
+// environment's, and the configuration and cache directories are under
+// it or named by the environment, as each system's own test checks.
+func TestUserDirs() {
+	home := expect.IsOk(os.UserHomeDir())
+	expect.True(home.Len() > 0)
+	expect.True(filepath.IsAbs(ref home))
+	expect.True(filepath.IsAbs(ref expect.IsOk(os.UserConfigDir())))
+	expect.True(filepath.IsAbs(ref expect.IsOk(os.UserCacheDir())))
+}
+
+// TestIds reads the process's parent, which started it, and its user
+// and group where the system has them.
+func TestIds() {
+	expect.True(os.Getppid() > 0)
+	if uid := os.Getuid() {
+		expect.True(uid >= 0)
+		expect.True(expect.IsSome(os.Getgid()) >= 0)
+	} else {
+		expect.IsNone(os.Getgid())
+	}
+}
+
+// Stat of an open file.
+func BenchmarkFileStat() {
+	dir := testing.TempDir()
+	f := expect.IsOk(os.Create(ref dir.Join("bench.txt")))
+	for testing.Loop() { _ = f.Stat() }
+}
+
+// Readlink of a short link.
+func BenchmarkReadlink() {
+	dir := testing.TempDir()
+	link := dir.Join("link")
+	expect.IsOk(os.Symlink("target", ref link))
+	for testing.Loop() { _ = os.Readlink(ref link) }
+}
+
+// Chmod of a file, alternating two modes.
+func BenchmarkChmod() {
+	dir := testing.TempDir()
+	path := dir.Join("bench.txt")
+	expect.IsOk(os.WriteString(ref path, "x"))
+	mode := os.FileMode(0o600)
+	for testing.Loop() {
+		expect.IsOk(os.Chmod(ref path, mode))
+		mode ^= 0o044
+	}
+}
+
+// Executable, read once and lent after.
+func BenchmarkExecutable() {
+	for testing.Loop() { _ = os.Executable() }
+}
+
+// CreateTemp, Close and Remove of a file.
+func BenchmarkCreateTemp() {
+	dir := testing.TempDir()
+	for testing.Loop() {
+		f := expect.IsOk(os.CreateTemp(dir.Path(), "b-*"))
+		name := f.Name().Clone()
+		expect.IsOk(f.Close())
+		expect.IsOk(os.Remove(ref name))
+	}
 }

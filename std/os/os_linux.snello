@@ -1,0 +1,34 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The user's directories on Linux: the XDG base directories, with their
+// defaults under the home.
+package os
+
+import "io"
+
+// UserConfigDir returns the directory for the user's configuration
+// files, in a string of its own, where a program keeps its own under a
+// directory named for it: on Linux the XDG_CONFIG_HOME of the
+// environment, or .config under the home when it is unset or empty;
+// on macOS Library/Application Support under the home; on Windows the
+// AppData of the environment. It fails when the home is not defined,
+// and when XDG_CONFIG_HOME is a relative path, "path in
+// $XDG_CONFIG_HOME is relative"; the directory is not checked to
+// exist.
+//
+//	dir := filepath.Join(ref os.UserConfigDir()?, "myapp")
+func UserConfigDir() Result<string, io.Error> {
+	return xdgDir("XDG_CONFIG_HOME", ".config")
+}
+
+// UserCacheDir returns the directory for the user's cached files, in a
+// string of its own, where a program keeps its own under a directory
+// named for it: on Linux the XDG_CACHE_HOME of the environment, or
+// .cache under the home when it is unset or empty; on macOS
+// Library/Caches under the home; on Windows the LocalAppData of the
+// environment. It fails as UserConfigDir does.
+func UserCacheDir() Result<string, io.Error> {
+	return xdgDir("XDG_CACHE_HOME", ".cache")
+}

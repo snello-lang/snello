@@ -161,7 +161,6 @@ SN_HELD_STATIC static int check_at_exit(void) {
     }
 
     sn_slice_free(&sn_os_Args);
-    sn_os_env_free();
     int64_t n = sn_tasks_running();
     for (int i = 0; n > 0 && i < 200; i++) { // a task that has sent its last word may still be ending
         sn_time_Sleep(1000000);
@@ -173,6 +172,8 @@ SN_HELD_STATIC static int check_at_exit(void) {
         fprintf(stderr, "snello: %lld tasks still running at exit; the blocks were not checked\n", (long long)n);
         return 0; // what a running task owns is not a leak
     }
+
+    sn_os_env_free(); // once no task runs: a task ending may still read a lent variable or the program's path
 
     sn_timers_stop();  // a pending After's channel is the timer's, which ends here
     sn_signals_stop(); // and a Notify's the runtime's, which lets its end go here

@@ -1,0 +1,66 @@
+// Copyright 2026 The Snello Programming Language. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// The user's directories and ids on Windows: the profile and the
+// application data from the environment, and no user or group id.
+package os
+
+import "io"
+
+// UserHomeDir returns the user's home directory, the USERPROFILE of the
+// environment, in a string of its own, and on Linux and macOS the HOME.
+// It fails when the variable is unset or empty, "userdir: %USERPROFILE%
+// is not defined"; the directory is not checked to exist.
+//
+//	home := os.UserHomeDir()?
+func UserHomeDir() Result<string, io.Error> {
+	return envDir("USERPROFILE")
+}
+
+// UserConfigDir returns the directory for the user's configuration
+// files, in a string of its own, where a program keeps its own under a
+// directory named for it: on Windows the AppData of the environment;
+// on Linux the XDG_CONFIG_HOME of the environment, or .config under
+// the home; on macOS Library/Application Support under the home. It
+// fails when the variable is unset or empty, "userdir: %AppData% is not
+// defined"; the directory is not checked to exist.
+//
+//	dir := filepath.Join(ref os.UserConfigDir()?, "myapp")
+func UserConfigDir() Result<string, io.Error> {
+	return envDir("AppData")
+}
+
+// UserCacheDir returns the directory for the user's cached files, in a
+// string of its own, where a program keeps its own under a directory
+// named for it: on Windows the LocalAppData of the environment; on
+// Linux the XDG_CACHE_HOME of the environment, or .cache under the
+// home; on macOS Library/Caches under the home. It fails as
+// UserConfigDir does.
+func UserCacheDir() Result<string, io.Error> {
+	return envDir("LocalAppData")
+}
+
+// Getuid returns the id of the user the program runs as, and Getgid the
+// id of its group, on Linux and macOS; on Windows, which has no such
+// ids, each is None.
+func Getuid() int? {
+	return None
+}
+
+// Getgid returns the id of the group the program runs as; see Getuid.
+func Getgid() int? {
+	return None
+}
+
+// envDir is the directory the environment variable key names, or the
+// error of one unset or empty, "%AppData% is not defined".
+func envDir(key ref string) Result<string, io.Error> {
+	if dir := LookupEnv(key) {
+		if len(dir) > 0 {
+			return Ok(dir)
+		}
+	}
+
+	return Err(io.NewError("userdir", "", "%"+key+"% is not defined", io.Other))
+}

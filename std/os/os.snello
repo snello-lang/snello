@@ -272,10 +272,11 @@ func Open(path ref string) Result<File, io.Error> {
 	return Ok(File{fd: fd, name: path.Clone(), stream: false, appending: false})
 }
 
-// Create opens the file path names for writing and returns it, a File
-// the caller owns. A file that does not exist is made, with
-// permissions 0666 before the umask; one that does is emptied first.
-// path is only read; the File keeps a copy of it.
+// Create opens the file path names for writing, and for reading back
+// what was written, and returns it, a File the caller owns. A file
+// that does not exist is made, with permissions 0666 before the umask;
+// one that does is emptied first. path is only read; the File keeps a
+// copy of it.
 //
 //	f := os.Create(ref out)?
 //	f.WriteString("hello\n")?
@@ -632,6 +633,194 @@ func Rename(from ref string, to ref string) Result<(), io.Error> {
 	return Ok(())
 }
 
+// Chmod sets the permissions of the file path names to mode's: its
+// nine permission bits, and ModeSetuid, ModeSetgid and ModeSticky
+// where the system keeps them; the bits of the file's kind are not
+// read. path is only read; a symbolic link is followed.
+//
+//	os.Chmod(ref script, 0o755)?
+//
+// On Windows, which keeps no permissions, the owner's write bit alone
+// counts: a mode without it makes the file read-only, one with it
+// writable, as FileMode says. A path that names nothing is an Error of
+// Kind io.NotExist, "chmod /x: no such file or directory".
+func Chmod(path ref string, mode FileMode) Result<(), io.Error> {
+	code := chmod(path, u32(mode))
+	if code != 0 {
+		return Err(io.Errno("chmod", path, code))
+	}
+
+	return Ok(())
+}
+
+// Chtimes sets the time the file path names was last read, atime, and
+// last changed, mtime; a time given as None is left as it is, so a
+// program sets one without reading the other first. The system keeps
+// a time to the precision it has, nanoseconds on Linux and macOS and
+// hundreds of nanoseconds on Windows, and Stat reads back what it
+// kept. path is only read; a symbolic link is followed.
+//
+//	os.Chtimes(ref path, None, Some(time.Now()))? // touch
+//
+// A path that names nothing is an Error of Kind io.NotExist, "chtimes
+// /x: no such file or directory".
+func Chtimes(path ref string, atime time.Time?, mtime time.Time?) Result<(), io.Error> {
+	var asec i64 = 0
+	var ansec i64 = 0
+	var msec i64 = 0
+	var mnsec i64 = 0
+	if a := atime {
+		asec = a.Unix()
+		ansec = i64(a.Nanosecond())
+	}
+
+	if m := mtime {
+		msec = m.Unix()
+		mnsec = i64(m.Nanosecond())
+	}
+
+	code := chtimes(path, atime.IsSome(), asec, ansec, mtime.IsSome(), msec, mnsec)
+	if code != 0 {
+		return Err(io.Errno("chtimes", path, code))
+	}
+
+	return Ok(())
+}
+
+// Truncate sets the size of the file path names to size bytes: a
+// longer file loses its end, a shorter one grows with zero bytes.
+// path is only read. A size below zero is refused as an invalid
+// argument before the system is asked.
+//
+//	os.Truncate(ref log, 0)? // empty it
+//
+// A path that names nothing is an Error of Kind io.NotExist,
+// "truncate /x: no such file or directory".
+func Truncate(path ref string, size i64) Result<(), io.Error> {
+	if size < 0 {
+		return Err(io.Errno("truncate", path, einval))
+	}
+
+	code := truncate(path, size)
+	if code != 0 {
+		return Err(io.Errno("truncate", path, code))
+	}
+
+	return Ok(())
+}
+
+// Link makes newname a hard link to the file oldname names: a second
+// name for the same file, which lives while either name does. Both
+// are only read. A directory cannot be linked.
+//
+//	os.Link(ref data, ref backup)?
+//
+// A newname taken already is an Error of Kind io.Exists, "link OLD
+// NEW: file exists", and an oldname that names nothing one of Kind
+// io.NotExist.
+func Link(oldname ref string, newname ref string) Result<(), io.Error> {
+	code := link(oldname, newname)
+	if code != 0 {
+		return Err(io.Errno("link", ref (oldname + " " + newname), code))
+	}
+
+	return Ok(())
+}
+
+// Symlink makes newname a symbolic link to oldname: a file that holds
+// the text oldname, which Open and Stat follow and Lstat and Readlink
+// do not. oldname need not exist, and is kept as written, relative to
+// the link's own directory when it is relative. Both are only read.
+//
+//	os.Symlink("current.log", ref link)?
+//
+// On Windows a link to a directory is made as a directory link, which
+// takes the target to exist when the link is made, and making a link
+// takes the user's right to, which developer mode gives. A newname
+// taken already is an Error of Kind io.Exists, "symlink OLD NEW: file
+// exists".
+func Symlink(oldname ref string, newname ref string) Result<(), io.Error> {
+	code := symlink(oldname, newname)
+	if code != 0 {
+		return Err(io.Errno("symlink", ref (oldname + " " + newname), code))
+	}
+
+	return Ok(())
+}
+
+// Readlink returns the text the symbolic link path names holds, as
+// Symlink wrote it, in a string of its own; path is only read. A path
+// that is no symbolic link is refused as an invalid argument,
+// "readlink /x: invalid argument", and one that names nothing is an
+// Error of Kind io.NotExist.
+//
+//	target := os.Readlink(ref link)?
+func Readlink(path ref string) Result<string, io.Error> {
+	target := ""
+	code := readlink(path, mut target)
+	if code != 0 {
+		return Err(io.Errno("readlink", path, code))
+	}
+
+	return Ok(target)
+}
+
+// CreateTemp makes a new file under dir, or the system's temporary
+// directory when dir is empty, open for reading and writing, with
+// permissions 0600, named by pattern: the pattern with its last *
+// replaced by a random number, or followed by one when it has none,
+// so the name is one no file had. The caller removes the file when it
+// is done with it; Name gives its path. dir and pattern are only
+// read.
+//
+//	f := os.CreateTemp("", "upload-*.bin")?
+//	defer os.Remove(f.Name())
+//
+// A pattern holding a separator is refused, "createtemp up/*: pattern
+// contains path separator", and a dir that does not exist is reported
+// by its stat, "stat /tmp/gone: no such file or directory".
+func CreateTemp(dir ref string, pattern ref string) Result<File, io.Error> {
+	if hasSeparator(pattern) {
+		return Err(io.NewError("createtemp", pattern.Clone(), "pattern contains path separator", io.Other))
+	}
+
+	fd := 0
+	name := ""
+	op := ""
+	code := createTemp(dir, pattern, mut fd, mut name, mut op)
+	if code != 0 {
+		return Err(io.Errno(op, name, code))
+	}
+
+	return Ok(File{fd: fd, name: name, stream: false, appending: false})
+}
+
+// Executable returns the path of the running program's file, absolute:
+// what the system says started the program, not the name it was
+// started by, so a program finds the files beside itself with
+// filepath.Dir. On Linux and macOS a link to the program is resolved;
+// on Windows the path is the one the program was started by, made
+// absolute. The system is asked once, on
+// the first call, since the program's file does not change while it
+// runs, and the path is kept for the program's life: the string
+// returned is lent from that block, with nothing copied, as a string
+// literal is.
+//
+//	exe := os.Executable()?
+//	assets := filepath.Join(filepath.Dir(ref exe), "assets")
+//
+// It fails when the system cannot say, "executable: ...", which no
+// supported system does for a program started from a file.
+func Executable() Result<string, io.Error> {
+	path := ""
+	code := executable(mut path)
+	if code != 0 {
+		return Err(syscallError("executable", code))
+	}
+
+	return Ok(path)
+}
+
 // Getwd returns the path of the current directory, a string of its
 // own: the PWD of the environment when it is an absolute path that
 // names the current directory, which is the path the user came by,
@@ -699,6 +888,10 @@ func Hostname() Result<string, io.Error> {
 // Getpid returns the number of the program's process, the one ps and
 // kill know it by, and Task Manager on Windows. The runtime provides it.
 func Getpid() int
+
+// Getppid returns the process id of the program's parent, the shell or
+// the program that started it. The runtime provides it.
+func Getppid() int
 
 // TempDir returns the directory for temporary files: the TMPDIR of the
 // environment, or /tmp when it is unset or empty, and on Windows the
@@ -920,6 +1113,47 @@ func (f mut File) Sync() Result<(), io.Error> {
 	return Ok(())
 }
 
+// Stat returns what the system says of the open file, a FileInfo whose
+// Name is the last element of the path the file was opened by: its
+// size now, which a write through another File changes too. The
+// receiver is lent.
+//
+//	size := f.Stat()?.Size()
+func (f ref File) Stat() Result<FileInfo, io.Error> {
+	var size i64 = 0
+	var mode u32 = 0
+	var sec i64 = 0
+	var nsec i64 = 0
+	var dev u64 = 0
+	var ino u64 = 0
+	code := fstat(f.fd, mut size, mut mode, mut sec, mut nsec, mut dev, mut ino)
+	if code != 0 {
+		return Err(io.Errno("stat", ref f.name, code))
+	}
+
+	return Ok(fileInfo(ref f.name, size, mode, sec, nsec, dev, ino))
+}
+
+// Truncate sets the size of the open file to size bytes, as
+// os.Truncate does by a path: a longer file loses its end, a shorter
+// one grows with zero bytes; the position for the next Read or Write
+// does not move. The file must be open for writing. A size below zero
+// is refused as an invalid argument before the system is asked.
+//
+//	f.Truncate(0)?
+func (f mut File) Truncate(size i64) Result<(), io.Error> {
+	if size < 0 {
+		return Err(io.Errno("truncate", ref f.name, einval))
+	}
+
+	code := ftruncate(f.fd, size)
+	if code != 0 {
+		return Err(io.Errno("truncate", ref f.name, code))
+	}
+
+	return Ok(())
+}
+
 // Close takes the file, closes it, and reports a failure to: on some
 // file systems a write's failure shows only then. A closed file cannot
 // be used again: the compiler refuses a use after Close as a use of a
@@ -1103,15 +1337,16 @@ func statInto(path ref string, follow bool, fi mut FileInfo) int {
 	var ino u64 = 0
 	code := stat(path, follow, mut size, mut mode, mut sec, mut nsec, mut dev, mut ino)
 	if code == 0 {
-		fi.name = filepath.Base(path).Clone()
-		fi.size = size
-		fi.mode = FileMode(mode)
-		fi.modTime = time.Unix(sec, nsec)
-		fi.dev = dev
-		fi.ino = ino
+		*fi = fileInfo(path, size, mode, sec, nsec, dev, ino)
 	}
 
 	return code
+}
+
+// fileInfo is the FileInfo of what the system said of the file at path,
+// named by the last element of the path.
+func fileInfo(path ref string, size i64, mode u32, sec i64, nsec i64, dev u64, ino u64) FileInfo {
+	return FileInfo{name: filepath.Base(path).Clone(), size: size, mode: FileMode(mode), modTime: time.Unix(sec, nsec), dev: dev, ino: ino}
 }
 
 // hasSeparator reports whether p holds a separator of the system's.
@@ -1146,9 +1381,9 @@ func syscallError(op string, code int) io.Error {
 // and stores its results through its last parameters.
 func open(path ref string, fd mut int) int
 
-// create opens path for writing, made 0666 before the umask when it
-// does not exist and emptied when it does, and stores its descriptor
-// in fd.
+// create opens path for reading and writing, made 0666 before the
+// umask when it does not exist and emptied when it does, and stores
+// its descriptor in fd.
 func create(path ref string, fd mut int) int
 
 // readToString reads the file path whole into out, storing in inRead
@@ -1242,3 +1477,39 @@ func setenv(key ref string, value ref string) int
 // environ fills out, a slice that holds nothing, with every variable
 // of the environment as KEY=value.
 func environ(out mut []string)
+
+// chmod sets the mode of the file at path, its permission, setuid,
+// setgid and sticky bits.
+func chmod(path ref string, mode u32) int
+
+// chtimes sets the time last read and the time last changed of the file
+// at path, each when its flag is set, from seconds and nanoseconds
+// since 1970.
+func chtimes(path ref string, setAccess bool, asec i64, ansec i64, setChange bool, msec i64, mnsec i64) int
+
+// truncate sets the size of the file at path, and ftruncate of the open
+// file fd.
+func truncate(path ref string, size i64) int
+
+func ftruncate(fd int, size i64) int
+
+// link makes to a hard link to from, and symlink makes link a symbolic
+// link holding target.
+func link(from ref string, to ref string) int
+
+func symlink(target ref string, link ref string) int
+
+// readlink stores the text of the symbolic link at path in out.
+func readlink(path ref string, out mut string) int
+
+// createTemp makes and opens a new file under dir, or the system's
+// temporary directory when dir is empty, named by pattern as mkdirTemp
+// names a directory, and stores its descriptor and name; on a failure
+// name holds what the error is about and op the call that failed.
+func createTemp(dir ref string, pattern ref string, fd mut int, name mut string, op mut string) int
+
+// executable stores the path of the running program's file in out.
+func executable(out mut string) int
+
+// fstat is stat of the open file fd.
+func fstat(fd int, size mut i64, mode mut u32, sec mut i64, nsec mut i64, dev mut u64, ino mut u64) int

@@ -61,3 +61,24 @@ func TestTempDir() {
 		None => os.Unsetenv("TMP"),
 	}
 }
+
+// TestChmodWindows reads back what Windows keeps of a mode: the
+// owner's write bit alone, as the read-only flag.
+func TestChmodWindows() {
+	dir := testing.TempDir()
+	path := dir.Join("mode.txt")
+	expect.IsOk(os.WriteFile(ref path, ref []byte("x"), 0o644))
+	expect.IsOk(os.Chmod(ref path, 0o444))
+	expect.Equal(ref expect.IsOk(os.Stat(ref path)).Mode().Perm(), ref os.FileMode(0o444))
+	expect.IsOk(os.Chmod(ref path, 0o600))
+	expect.Equal(ref expect.IsOk(os.Stat(ref path)).Mode().Perm(), ref os.FileMode(0o666))
+}
+
+// TestUserDirsWindows checks the directories against the environment.
+func TestUserDirsWindows() {
+	expect.Equal(ref expect.IsOk(os.UserHomeDir()), ref os.Getenv("USERPROFILE"))
+	expect.Equal(ref expect.IsOk(os.UserConfigDir()), ref os.Getenv("AppData"))
+	expect.Equal(ref expect.IsOk(os.UserCacheDir()), ref os.Getenv("LocalAppData"))
+	expect.IsNone(os.Getuid())
+	expect.IsNone(os.Getgid())
+}

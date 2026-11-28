@@ -24,6 +24,10 @@
 #include <unistd.h>
 #endif
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h> // _NSGetExecutablePath, for sn_os_executable
+#endif
+
 // sn_os_Cores is os.Cores: the processors the program may run on, the
 // count the scheduler starts a worker per.
 SN_HELD int64_t sn_os_Cores(void) { return sn_cores(); }
@@ -214,7 +218,7 @@ SN_HELD int64_t sn_os_open(sn_string path, int64_t *fd) {
 }
 
 SN_HELD int64_t sn_os_create(sn_string path, int64_t *fd) {
-    int f = sysopen(path, O_WRONLY | O_CREAT | O_TRUNC);
+    int f = sysopen(path, O_RDWR | O_CREAT | O_TRUNC); // read-write: a stat of a write-only file costs the kernel more on macOS
     if (f < 0) {
         return errno;
     }
@@ -223,31 +227,34 @@ SN_HELD int64_t sn_os_create(sn_string path, int64_t *fd) {
     return 0;
 }
 
-// sn_os_mkdirTemp makes a new directory under dir, or the system's
-// temporary directory when dir is empty, named by its pattern: the
+// dir_missing reports whether a temporary name that could not be made,
+// with the error number code, failed because dir itself is missing,
+// which its stat says.
+SN_HELD_STATIC static bool dir_missing(sn_string dir, int code) {
+    if (code != ENOENT) {
+        return false;
+    }
+
+    struct stat st;
+    char *p = cpath(dir);
+    bool missing = p != NULL && stat(p, &st) != 0 && errno == ENOENT;
+    sn_free(p);
+    return missing;
+}
+
+// mkdir_temp makes a new directory under dir, named by its pattern: the
 // pattern with its last * replaced by a random number, or followed by
-// one when it has none, trying another number while the name is
-// taken. On a failure out holds the name the error is about and op
-// the call that failed: mkdirtemp, or stat when dir itself is
-// missing, which it finds by stating dir.
+// one when it has none, trying another number while the name is taken.
+// On a failure out holds the name the error is about and op the call
+// that failed: mkdirtemp, or stat when dir itself is missing.
 SN_HELD_STATIC static int64_t mkdir_temp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
     sn_string_drop(op);
     *op = SN_STR("mkdirtemp", 9);
-    int64_t star = pattern.len;
-    for (int64_t i = pattern.len - 1; i >= 0; i--) {
-        if (pattern.ptr[i] == '*') {
-            star = i;
-            break;
-        }
-    }
-
-    sn_string prefix = sn_join(sn_join(dir, SN_STR("/", 1), 0), SN_STR(pattern.ptr, star), 1);
-    sn_string suffix = star < pattern.len ? SN_STR(pattern.ptr + star + 1, pattern.len - star - 1) : SN_STR("", 0);
+    sn_string prefix, suffix;
+    sn_os_tempParts(dir, pattern, '/', &prefix, &suffix);
     int code = EEXIST;
     for (int try = 0; try < 10000 && code == EEXIST; try++) {
-        char digits[24];
-        int n = snprintf(digits, sizeof digits, "%u", (unsigned)(sn_next_random() >> 32));
-        sn_string name = sn_join(sn_join(prefix, SN_STR(digits, n), 0), suffix, 1);
+        sn_string name = sn_os_tempName(prefix, suffix);
         char *p = cpath(name);
         if (p != NULL && mkdir(p, 0700) == 0) {
             sn_free(p);
@@ -262,26 +269,45 @@ SN_HELD_STATIC static int64_t mkdir_temp(sn_string dir, sn_string pattern, sn_st
         sn_string_free(name);
     }
 
-    if (code == ENOENT) {
-        // The parent may be what is missing: it is stated, and that
-        // reported when it is.
-        struct stat st;
-        char *p = cpath(dir);
-        int missing = p != NULL && stat(p, &st) != 0 && errno == ENOENT;
-        sn_free(p);
-        if (missing) {
+    return sn_os_tempFailed(dir, prefix, suffix, code, dir_missing(dir, code), out, op);
+}
+
+// create_temp makes and opens a new file under dir as mkdir_temp names
+// a directory, for reading and writing, 0600, closed on exec; the
+// descriptor and the name are stored, or on a failure the name the
+// error is about and the call that failed, open or stat.
+SN_HELD_STATIC static int64_t create_temp(sn_string dir, sn_string pattern, int64_t *fd, sn_string *out,
+                                          sn_string *op) {
+    sn_string_drop(op);
+    *op = SN_STR("open", 4);
+    sn_string prefix, suffix;
+    sn_os_tempParts(dir, pattern, '/', &prefix, &suffix);
+    int code = EEXIST;
+    for (int try = 0; try < 10000 && code == EEXIST; try++) {
+        sn_string name = sn_os_tempName(prefix, suffix);
+        char *p = cpath(name);
+        int f = -1;
+        if (p != NULL) {
+            do {
+                f = open(p, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+            } while (f < 0 && errno == EINTR);
+        }
+
+        if (f >= 0) {
+            sn_free(p);
             sn_string_free(prefix);
             sn_string_drop(out);
-            *out = sn_string_clone(dir);
-            *op = SN_STR("stat", 4);
-            return ENOENT;
+            *out = name;
+            *fd = f;
+            return 0;
         }
+
+        code = errno;
+        sn_free(p);
+        sn_string_free(name);
     }
 
-    sn_string_drop(out);
-    *out = sn_join(sn_join(prefix, SN_STR("*", 1), 1), suffix,
-                   1); // the pattern of the names tried
-    return code;
+    return sn_os_tempFailed(dir, prefix, suffix, code, dir_missing(dir, code), out, op);
 }
 
 SN_HELD int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
@@ -291,6 +317,17 @@ SN_HELD int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out
 
     sn_string tmp = sn_os_TempDir();
     int64_t code = mkdir_temp(tmp, pattern, out, op);
+    sn_string_free(tmp);
+    return code;
+}
+
+SN_HELD int64_t sn_os_createTemp(sn_string dir, sn_string pattern, int64_t *fd, sn_string *out, sn_string *op) {
+    if (dir.len > 0) {
+        return create_temp(dir, pattern, fd, out, op);
+    }
+
+    sn_string tmp = sn_os_TempDir();
+    int64_t code = create_temp(tmp, pattern, fd, out, op);
     sn_string_free(tmp);
     return code;
 }
@@ -504,6 +541,50 @@ SN_HELD int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at
 // io.ReadAll's slice of the exact length, before its blocks are copied
 // in.
 SN_HELD void sn_io_reserve(sn_slice_u8 *buf, int64_t n) { sn_strings_reserve(buf, n); }
+
+// The names of temporary files and directories, which both systems make
+// the same way: sn_os_tempParts splits the pattern into the prefix, dir
+// and the pattern up to its last *, joined by the system's separator,
+// and the suffix after the *, empty when the pattern has none;
+// sn_os_tempName is one name to try, the prefix, a random number and
+// the suffix, owned; sn_os_tempFailed reports a name that could not be
+// made, taking the prefix: a dir that is missing, which the caller has
+// stated, by its stat, since the parent may be what is missing, and
+// anything else by the pattern of the names tried.
+SN_HELD void sn_os_tempParts(sn_string dir, sn_string pattern, char separator, sn_string *prefix, sn_string *suffix) {
+    int64_t star = pattern.len;
+    for (int64_t i = pattern.len - 1; i >= 0; i--) {
+        if (pattern.ptr[i] == '*') {
+            star = i;
+            break;
+        }
+    }
+
+    *prefix = sn_join(sn_join(dir, SN_STR(&separator, 1), 0), SN_STR(pattern.ptr, star), 1);
+    *suffix = star < pattern.len ? SN_STR(pattern.ptr + star + 1, pattern.len - star - 1) : SN_STR("", 0);
+}
+
+SN_HELD sn_string sn_os_tempName(sn_string prefix, sn_string suffix) {
+    char digits[24];
+    int n = snprintf(digits, sizeof digits, "%u", (unsigned)(sn_next_random() >> 32));
+    return sn_join(sn_join(prefix, SN_STR(digits, n), 0), suffix, 1);
+}
+
+SN_HELD int64_t sn_os_tempFailed(sn_string dir, sn_string prefix, sn_string suffix, int64_t code, bool dirMissing,
+                                 sn_string *out, sn_string *op) {
+    if (dirMissing) {
+        sn_string_free(prefix);
+        sn_string_drop(out);
+        *out = sn_string_clone(dir);
+        sn_string_drop(op);
+        *op = SN_STR("stat", 4);
+        return ENOENT;
+    }
+
+    sn_string_drop(out);
+    *out = sn_join(sn_join(prefix, SN_STR("*", 1), 1), suffix, 1);
+    return code;
+}
 
 #if !defined(_WIN32) // the modes, the directories and the host of Linux and macOS; os_windows.c has Windows'
 // mode_from_sys is the os.FileMode of a file the system reports the mode
@@ -865,6 +946,210 @@ SN_HELD int64_t sn_os_hostname(sn_string *out) {
     *out = sn_string_clone(SN_STR(name, (int64_t)strlen(name)));
     return 0;
 }
+
+// sn_os_chmod is os.Chmod: the permission bits and the setuid, setgid
+// and sticky bits of mode, the bits of the file's kind left out.
+SN_HELD int64_t sn_os_chmod(sn_string path, uint32_t mode) {
+    char *p = cpath(path);
+    if (p == NULL) {
+        return errno;
+    }
+
+    int r;
+    do {
+        r = chmod(p, mode_to_sys(mode));
+    } while (r != 0 && errno == EINTR);
+    int code = r == 0 ? 0 : errno;
+    sn_free(p);
+    return code;
+}
+
+// sn_os_chtimes is os.Chtimes: the time last read and the time last
+// changed, each set when its flag says so and left as it is otherwise.
+SN_HELD int64_t sn_os_chtimes(sn_string path, bool setAccess, int64_t asec, int64_t ansec, bool setChange,
+                              int64_t msec, int64_t mnsec) {
+    char *p = cpath(path);
+    if (p == NULL) {
+        return errno;
+    }
+
+    struct timespec times[2];
+    times[0].tv_sec = setAccess ? (time_t)asec : 0;
+    times[0].tv_nsec = setAccess ? (long)ansec : UTIME_OMIT;
+    times[1].tv_sec = setChange ? (time_t)msec : 0;
+    times[1].tv_nsec = setChange ? (long)mnsec : UTIME_OMIT;
+    int r;
+    do {
+        r = utimensat(AT_FDCWD, p, times, 0);
+    } while (r != 0 && errno == EINTR);
+    int code = r == 0 ? 0 : errno;
+    sn_free(p);
+    return code;
+}
+
+// sn_os_truncate is os.Truncate, and sn_os_ftruncate File.Truncate: the
+// file's size set, a shorter file cut and a longer one filled with
+// zeros.
+SN_HELD int64_t sn_os_truncate(sn_string path, int64_t size) {
+    char *p = cpath(path);
+    if (p == NULL) {
+        return errno;
+    }
+
+    int r;
+    do {
+        r = truncate(p, (off_t)size);
+    } while (r != 0 && errno == EINTR);
+    int code = r == 0 ? 0 : errno;
+    sn_free(p);
+    return code;
+}
+
+SN_HELD int64_t sn_os_ftruncate(int64_t fd, int64_t size) {
+    int r;
+    do {
+        r = ftruncate((int)fd, (off_t)size);
+    } while (r != 0 && errno == EINTR);
+    return r == 0 ? 0 : errno;
+}
+
+// sn_os_link is os.Link, and sn_os_symlink os.Symlink: a second name for
+// a file, and a file holding the text of a path.
+SN_HELD int64_t sn_os_link(sn_string from, sn_string to) {
+    char *f = cpath(from);
+    if (f == NULL) {
+        return errno;
+    }
+
+    char *t = cpath(to);
+    if (t == NULL) {
+        sn_free(f);
+        return EINVAL;
+    }
+
+    int code = link(f, t) == 0 ? 0 : errno;
+    sn_free(f);
+    sn_free(t);
+    return code;
+}
+
+SN_HELD int64_t sn_os_symlink(sn_string target, sn_string link) {
+    char *t = cpath(target);
+    if (t == NULL) {
+        return errno;
+    }
+
+    char *l = cpath(link);
+    if (l == NULL) {
+        sn_free(t);
+        return EINVAL;
+    }
+
+    int code = symlink(t, l) == 0 ? 0 : errno;
+    sn_free(t);
+    sn_free(l);
+    return code;
+}
+
+// read_link stores the text of the symbolic link at p, a C path, in
+// out: the system says the length only by filling what it is given, so
+// the block doubles from 128 bytes while it fills.
+SN_HELD_STATIC static int64_t read_link(const char *p, sn_string *out) {
+    for (size_t cap = 128;; cap *= 2) {
+        char *buf = sn_alloc(cap);
+        ssize_t n = readlink(p, buf, cap);
+        if (n < 0) {
+            int code = errno;
+            sn_free(buf);
+            return code;
+        }
+
+        if ((size_t)n < cap) {
+            sn_string_drop(out);
+            *out = sn_string_clone(SN_STR(buf, (int64_t)n));
+            sn_free(buf);
+            return 0;
+        }
+
+        sn_free(buf);
+    }
+}
+
+// sn_os_readlink is os.Readlink.
+SN_HELD int64_t sn_os_readlink(sn_string path, sn_string *out) {
+    char *p = cpath(path);
+    if (p == NULL) {
+        return errno;
+    }
+
+    int64_t code = read_link(p, out);
+    sn_free(p);
+    return code;
+}
+
+// sn_os_readExecutable reads the path of the program's file, once, for
+// os.Executable: on Linux the link the system keeps to the program's
+// file, and on macOS the path the loader has for it, made absolute and
+// resolved, since the loader keeps the path the program was started by.
+SN_HELD int64_t sn_os_readExecutable(sn_string *out) {
+#if defined(__APPLE__)
+    uint32_t size = 0;
+    (void)_NSGetExecutablePath(NULL, &size); // asks the length
+    char *buf = sn_alloc(size + 1);
+    if (_NSGetExecutablePath(buf, &size) != 0) {
+        sn_free(buf);
+        return EINVAL;
+    }
+
+    char *real = realpath(buf, NULL);
+    sn_free(buf);
+    if (real == NULL) {
+        return errno;
+    }
+
+    sn_string_drop(out);
+    *out = sn_string_clone(SN_STR(real, (int64_t)strlen(real)));
+    free(real);
+    return 0;
+#else
+    return read_link("/proc/self/exe", out);
+#endif
+}
+
+// sn_os_fstat is File.Stat: what sn_os_stat says of a path, of an open
+// file.
+SN_HELD int64_t sn_os_fstat(int64_t fd, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec, uint64_t *dev,
+                            uint64_t *ino) {
+    struct stat st;
+    int r;
+    do {
+        r = fstat((int)fd, &st);
+    } while (r != 0 && errno == EINTR);
+    if (r != 0) {
+        return errno;
+    }
+
+    *size = (int64_t)st.st_size;
+    *mode = mode_from_sys(st.st_mode);
+#if defined(__APPLE__)
+    *sec = (int64_t)st.st_mtimespec.tv_sec;
+    *nsec = (int64_t)st.st_mtimespec.tv_nsec;
+#else
+    *sec = (int64_t)st.st_mtim.tv_sec;
+    *nsec = (int64_t)st.st_mtim.tv_nsec;
+#endif
+    *dev = (uint64_t)st.st_dev;
+    *ino = (uint64_t)st.st_ino;
+    return 0;
+}
+
+// The ids of the process's parent, user and group; the user's and the
+// group's are Unix's alone, and the Windows runtime has neither.
+SN_HELD int64_t sn_os_Getppid(void) { return (int64_t)getppid(); }
+
+SN_HELD int64_t sn_os_getuid(void) { return (int64_t)getuid(); }
+
+SN_HELD int64_t sn_os_getgid(void) { return (int64_t)getgid(); }
 #endif
 
 // The program's environment is a copy the runtime makes of the one the
@@ -1183,9 +1468,36 @@ SN_HELD void sn_os_environ(void *out) {
     sn_sync_unlockShared(env.lock);
 }
 
-// sn_os_env_free releases the copy of the environment, at the end of a
-// debug build, which counts every block.
+// The program's own path, read once: the first call asks the system,
+// through the system's own reader, and every call lends the path from
+// the block kept, as os.Executable says; a read that failed is kept too,
+// as its error number.
+static struct {
+    sn_once once;
+    sn_string path;
+    int64_t code;
+} executable;
+
+static void read_executable(void) { executable.code = sn_os_readExecutable(&executable.path); }
+
+// sn_os_executable is os.Executable.
+SN_HELD int64_t sn_os_executable(sn_string *out) {
+    sn_once_call(&executable.once, read_executable);
+    if (executable.code != 0) {
+        return executable.code;
+    }
+
+    sn_string_drop(out);
+    *out = SN_STR(executable.path.ptr, executable.path.len); // lent: cap 0, which no drop frees
+    return 0;
+}
+
+// sn_os_env_free releases the copies the runtime keeps for the
+// program's life, the environment and the program's own path, at the
+// end of a debug build, which counts every block.
 SN_HELD void sn_os_env_free(void) {
+    sn_string_drop(&executable.path);
+    executable.path = SN_STR("", 0);
     for (int64_t i = 0; i < env.len; i++) {
         sn_string_drop(&env.entries[i]);
     }

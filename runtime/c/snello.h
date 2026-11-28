@@ -812,6 +812,21 @@ int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at);
 int64_t sn_os_readFile(sn_string path, sn_slice_u8 *out, int64_t *inRead);
 int64_t sn_os_stat(sn_string path, bool follow, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec,
                    uint64_t *dev, uint64_t *ino);
+int64_t sn_os_fstat(int64_t fd, int64_t *size, uint32_t *mode, int64_t *sec, int64_t *nsec, uint64_t *dev,
+                    uint64_t *ino);
+int64_t sn_os_chmod(sn_string path, uint32_t mode);
+int64_t sn_os_chtimes(sn_string path, bool setAccess, int64_t asec, int64_t ansec, bool setChange, int64_t msec,
+                      int64_t mnsec);
+int64_t sn_os_truncate(sn_string path, int64_t size);
+int64_t sn_os_ftruncate(int64_t fd, int64_t size);
+int64_t sn_os_link(sn_string from, sn_string to);
+int64_t sn_os_symlink(sn_string target, sn_string link);
+int64_t sn_os_readlink(sn_string path, sn_string *out);
+int64_t sn_os_createTemp(sn_string dir, sn_string pattern, int64_t *fd, sn_string *out, sn_string *op);
+int64_t sn_os_executable(sn_string *out);
+int64_t sn_os_Getppid(void);
+int64_t sn_os_getuid(void); // Unix alone
+int64_t sn_os_getgid(void); // Unix alone
 int64_t sn_os_mkdir(sn_string path, uint32_t perm);
 int64_t sn_os_rename(sn_string from, sn_string to);
 int64_t sn_os_chdir(sn_string path);
@@ -825,7 +840,7 @@ int64_t sn_os_setenv(sn_string key, sn_string value);
 void sn_os_Unsetenv(sn_string key);
 sn_string sn_os_TempDir(void);
 void sn_os_environ(void *out); // a []string that holds nothing
-void sn_os_env_free(void);     // the copy of the environment, released at the end of a debug build
+void sn_os_env_free(void);     // the copies kept for the program's life, the environment and its own path, released at the end of a debug build
 void sn_io_reserve(sn_slice_u8 *buf, int64_t n);
 int64_t sn_strconv_parseFloat(sn_string s, double *out);
 int64_t sn_strconv_parseFloat32(sn_string s, float *out);
