@@ -168,7 +168,7 @@ Both are walked with `range` over the collection lent, which lends each element 
 A `map[K]V` finds a key in constant time and keeps its entries in the order they were inserted. When the keys themselves must stay in order, least first, `btree.Map<K, V>` and `btree.Set<T>` do, for a `K` or `T` that is `Ord`: a range over either walks the keys in the order of their `Cmp`, `First` and `Last` read the ends, `PopFirst` and `PopLast` take them, and `Range(from, to)` and `From(key)` walk from a given key. The price is `O(log n)` comparisons per lookup instead of one hash, which for a million keys is about twenty.
 
 ```go
-var ranks btree.Map<string, int>
+ranks := btree.New<string, int>()
 ranks.Insert("pear".Clone(), 3)
 ranks.Insert("apple".Clone(), 1)
 if old := ranks.Insert("pear".Clone(), 30) { ... } // Some(3): the key was there
@@ -177,7 +177,7 @@ for name, rank := range ranks.Range("b", "q") { ... } // from b up to but not q
 first := ranks.First() ?? return                   // (ref "apple", ref 1)
 ```
 
-`Insert` returns the value a key had, or `None` when the key is new; `Get`, `GetMut`, `Contains` and `Remove` are the hash map's, each `O(log n)`. The zero value is an empty map, and a map prints as `map[apple:1 pear:30]`, in key order. A `btree.Set<T>` is the same over values alone: `Insert` reports whether the value was new, `Remove` whether it was there, and it prints as `set[1 3 5]`. Both are B-trees: nodes of up to fifteen keys, every leaf at the same depth, a scan of each node's keys on the way down, and no node moved on a change but the one that splits or merges. Chapter 14 names what each operation costs.
+`Insert` returns the value a key had, or `None` when the key is new; `Get`, `GetMut`, `Contains` and `Remove` are the hash map's, each `O(log n)`. A map has no zero value, since it frees its nodes when it goes: one comes from `btree.New<K, V>()`, and a set from `btree.NewSet<T>()`. A map prints as `map[apple:1 pear:30]`, in key order. A `btree.Set<T>` is the same over values alone: `Insert` reports whether the value was new, `Remove` whether it was there, and it prints as `set[1 3 5]`. Both are B-trees: nodes of up to fifteen keys, each node's keys in one block, every leaf at the same depth, a scan of each node's keys on the way down with the last key first, so keys that arrive in order pass each node in one comparison, and no node moved on a change but the one that splits or merges. Chapter 14 names what each operation costs.
 
 ## Arrays
 

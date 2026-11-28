@@ -56,8 +56,9 @@ func (e *Emitter) libraryCall(x *ast.CallExpr, key string) value {
 	case "rc.rawNew", "rc.rawMut", "rc.rawFree", "rc.moveOut", "rc.leak",
 		"sync.rawNew", "sync.rawMut", "sync.rawTake":
 		return e.cellCall(x, key)
-	case "deque.rawAlloc", "deque.rawFree", "deque.rawPut", "deque.rawTake", "deque.rawRef", "deque.rawMut", "deque.rawMove":
-		return e.rawCall(x, key)
+	case "deque.rawAlloc", "deque.rawFree", "deque.rawPut", "deque.rawTake", "deque.rawRef", "deque.rawMut", "deque.rawMove",
+		"btree.rawAlloc", "btree.rawFree", "btree.rawPut", "btree.rawTake", "btree.rawRef", "btree.rawMut", "btree.rawMove":
+		return e.rawCall(x, rawName(key))
 	case "testing.Logf", "expect.Failf": // the format read at compile time as fmt's are, the line handed to the unformatted function with the place of this call
 		fn := e.info.Uses[x.Fun.(*ast.SelectorExpr).Sel].(*types.Func)
 		e.locate(x, fn)
@@ -416,15 +417,17 @@ func (e *Emitter) bitOp(x *ast.CallExpr, op string, width int) value {
 	return call("fshl", ir+", "+ir+", "+ir, a.typed()+", "+a.typed()+", "+k.typed())
 }
 
-// rawCall writes a primitive of the deque's buffer: a block of slots of
-// the element type, held by the deque as its address, each slot holding
-// an element or nothing. The deque knows which: its head and its count
-// name the slots that hold one, so a slot is written only when it holds
-// nothing, read only when it holds one, and the elements are moved, not
-// copied. rawAlloc makes a block of n slots, n above zero, and rawFree
+// rawCall writes a primitive of a block of slots of the element type,
+// held by a deque as its buffer or by a btree as a node, as its
+// address, each slot holding an element or nothing. The package knows
+// which: the deque's head and count, and a node's count, name the slots
+// that hold one, so a slot is written only when it holds nothing, read
+// only when it holds one, and the elements are moved, not copied. The
+// key is the primitive's name, the same in both packages. rawAlloc
+// makes a block of n slots, n above zero, and rawFree
 // frees one; rawPut moves an element into a slot and rawTake moves one
 // out; rawRef and rawMut lend the element in a slot, as a map's Get and
-// GetMut lend an entry, the borrow tied to the deque; rawMove moves n
+// GetMut lend an entry, the borrow tied to the owner; rawMove moves n
 // elements from one run of slots to another as one block. The element
 // type is the call's type argument.
 func (e *Emitter) rawCall(x *ast.CallExpr, key string) value {
@@ -438,7 +441,7 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) value {
 	}
 
 	at := func(p value) value { return e.op("inttoptr i64 "+p.s+" to ptr", "ptr") }
-	if key == "deque.rawFree" {
+	if key == "rawFree" {
 		e.rt("sn_free", "void", at(e.operands(x.Args, ints(1))[0]))
 		return unit
 	}
@@ -450,21 +453,21 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) value {
 	ir := e.irType(t, x.Pos())
 	size := e.sizeOf(t)
 	switch key {
-	case "deque.rawAlloc":
+	case "rawAlloc":
 		n := e.operands(x.Args, ints(1))[0]
 		p := e.rt("sn_alloc_elems", "ptr", n, size) // the count checked against the address space before the product
 		return e.op("ptrtoint ptr "+p.s+" to i64", "i64")
-	case "deque.rawPut":
+	case "rawPut":
 		args := e.operands(x.Args, []types.Type{types.Typ[types.Int], types.Typ[types.Int], t})
 		e.store(args[2], e.elem(ir, at(args[0]).s, args[1].s))
 		return unit
-	case "deque.rawTake":
+	case "rawTake":
 		args := e.operands(x.Args, ints(2))
 		return e.load(ir, e.elem(ir, at(args[0]).s, args[1].s)) // the slot holds nothing from here on, which the deque's count says
-	case "deque.rawRef", "deque.rawMut":
+	case "rawRef", "rawMut":
 		args := e.operands(x.Args[:2], ints(2))
 		slot := e.elem(ir, at(args[0]).s, args[1].s)
-		if key == "deque.rawRef" && depth(types.NewRef(t, false)) == 0 {
+		if key == "rawRef" && depth(types.NewRef(t, false)) == 0 {
 			return e.load(ir, slot) // a ref of a view, or of a value lent by value, is the value, as a map's Get lends it
 		}
 
@@ -477,6 +480,12 @@ func (e *Emitter) rawCall(x *ast.CallExpr, key string) value {
 		e.inst("call void @llvm.memmove.p0.p0.i64(ptr " + dst + ", ptr " + src + ", i64 " + e.op("mul i64 "+args[4].s+", "+size.s, "i64").s + ", i1 false)")
 		return unit
 	}
+}
+
+// rawName returns the primitive's name out of its key, package.name:
+// the deque and the btree declare the same primitives.
+func rawName(key string) string {
+	return key[strings.IndexByte(key, '.')+1:]
 }
 
 // cellCall writes a primitive of the cells rc and sync share among
@@ -530,8 +539,9 @@ func (e *Emitter) cellCall(x *ast.CallExpr, key string) value {
 
 // primitiveType is the type a primitive the compiler writes for the
 // library works on, its call's first type argument: the element of the
-// deque's buffer, or the cell or box a handle holds. A call without one,
-// which the library never writes, is reported.
+// deque's buffer or of a btree's node, or the cell or box a handle
+// holds. A call without one, which the library never writes, is
+// reported.
 func (e *Emitter) primitiveType(x *ast.CallExpr) (types.Type, bool) {
 	id, ok := x.Fun.(*ast.Ident) // the library calls its own function by name
 	if sel, isSel := x.Fun.(*ast.SelectorExpr); isSel {

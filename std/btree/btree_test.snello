@@ -8,9 +8,9 @@ import ("btree"; "expect"; "fmt"; "sort"; "testing")
 
 // The map keeps its keys in order: Insert returns the value replaced,
 // Get, GetMut and Contains find a key, Remove takes one out, and it
-// prints in key order; the zero value is an empty map.
+// prints in key order.
 func TestMapBasics() {
-	var m btree.Map<string, int>
+	m := btree.New<string, int>()
 	expect.True(m.IsEmpty())
 	expect.IsNone(m.Insert("pear".Clone(), 3))
 	expect.IsNone(m.Insert("apple".Clone(), 1))
@@ -199,7 +199,7 @@ func TestStrings() {
 // A set holds each value once, in order, with the ends readable and
 // removable, and ranges as the map does.
 func TestSet() {
-	var s btree.Set<int>
+	s := btree.NewSet<int>()
 	expect.True(s.IsEmpty())
 	for _, v := range []int{5, 3, 9, 3, 1, 7, 5} {
 		s.Insert(v)

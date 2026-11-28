@@ -141,9 +141,10 @@ func CheckPrefixes(libraries []Library) error {
 // say it never returns yet; the cells of rc and sync, held by their
 // handles as an address, since several handles own one cell and a mut
 // is reached through a ref, which the language refuses and the count
-// and the lock make safe there; the slots of a deque's buffer, which
-// hold an element or nothing and so cannot be values of the language,
-// which the deque's count and head make safe there; and testing.Catch
+// and the lock make safe there; the slots of a deque's buffer and of a
+// btree's nodes, which hold an element or nothing and so cannot be
+// values of the language, which each package's counts make safe there;
+// and testing.Catch
 // runs a function under the runtime's mark, which takes the function
 // as C takes one, through an adapter the backend writes.
 // The functions of math/bits are written too, each as an instruction,
@@ -155,6 +156,8 @@ var lowered = map[string]bool{
 	"sync.rawNew": true, "sync.rawMut": true, "sync.rawTake": true,
 	"deque.rawAlloc": true, "deque.rawFree": true, "deque.rawPut": true, "deque.rawTake": true,
 	"deque.rawRef": true, "deque.rawMut": true, "deque.rawMove": true,
+	"btree.rawAlloc": true, "btree.rawFree": true, "btree.rawPut": true, "btree.rawTake": true,
+	"btree.rawRef": true, "btree.rawMut": true, "btree.rawMove": true,
 	"testing.Catch": true, "testing.Logf": true, "expect.Failf": true,
 }
 
