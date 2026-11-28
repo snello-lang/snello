@@ -206,7 +206,7 @@ An adapter is a struct of the iterator it wraps and its function, and each insta
 | the loop written by hand over the same deque | 0.4 | 0.4 | |
 | a chain over an iterator that counts | 0.9 | 0.8 | 0.6 |
 
-The loop by hand is vectorized and the chain, a loop that leaves from inside, is not, so the chain costs half again as much through either backend; a chain over a slice costs what Go's does, and from the back less, where Go's loop by hand over the slice costs four times Snello's. The chain over an iterator that counts is the one row Go wins. `../design/01-language-design.md` has the numbers beside other programs', and the program's peak memory, 21 MB against Go's 12: the Snello program holds one collection at a time, as Go's does, and the difference is the deque's ring, doubled to a power of two as it fills, which Go's program has no counterpart for.
+The loop by hand is vectorized and the chain, a loop that leaves from inside, is not, so the chain costs half again as much through either backend; a chain over a slice costs what Go's does, and from the back less, where Go's loop by hand over the slice costs four times Snello's. The chain over an iterator that counts is the one row Go wins. `../design/01-language-design.md` has the numbers beside other programs'. Both programs hold one collection at a time, the deque's room reserved once, and the Go program walks a ring written as the deque is, since Go has none; the Snello program's peak is 10 MB against Go's 21, since the slice is built in the room the dropped deque leaves, where Go's collector has not freed the slice when the ring is allocated.
 
 ## For maintainers
 
