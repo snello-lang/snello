@@ -872,58 +872,6 @@ SN_HELD int64_t sn_os_mkdir(sn_string path, uint32_t perm) {
     return code;
 }
 
-// win_dir_missing reports whether a temporary name that could not be
-// made, with the error number code, failed because dir itself is
-// missing.
-SN_HELD_STATIC static bool win_dir_missing(sn_string dir, int code) {
-    if (code != ENOENT) {
-        return false;
-    }
-
-    wchar_t *p = wpath(dir);
-    bool missing = p != NULL && GetFileAttributesW(p) == INVALID_FILE_ATTRIBUTES && last_errno() == ENOENT;
-    sn_free(p);
-    return missing;
-}
-
-// win_mkdir_temp makes a new directory under dir as os.MkdirTemp names it,
-// with the names os.c makes for both systems; out and op say what
-// failed, as os.c's does on the other systems.
-SN_HELD_STATIC static int64_t win_mkdir_temp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
-    sn_string_drop(op);
-    *op = SN_STR("mkdirtemp", 9);
-    sn_string prefix, suffix;
-    sn_os_tempParts(dir, pattern, SEPARATOR[0], &prefix, &suffix);
-    int code = EEXIST;
-    for (int try = 0; try < 10000 && code == EEXIST; try++) {
-        sn_string name = sn_os_tempName(prefix, suffix);
-        wchar_t *p = wpath(name);
-        code = p == NULL ? errno : make_dir(p);
-        sn_free(p);
-        if (code == 0) {
-            sn_string_free(prefix);
-            sn_string_drop(out);
-            *out = name;
-            return 0;
-        }
-
-        sn_string_free(name);
-    }
-
-    return sn_os_tempFailed(dir, prefix, suffix, code, win_dir_missing(dir, code), out, op);
-}
-
-SN_HELD int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op) {
-    if (dir.len > 0) {
-        return win_mkdir_temp(dir, pattern, out, op);
-    }
-
-    sn_string tmp = sn_os_TempDir();
-    int64_t code = win_mkdir_temp(tmp, pattern, out, op);
-    sn_string_free(tmp);
-    return code;
-}
-
 // remove_one removes the file or the empty directory at p, a converted
 // path, by the call that fits what it is: a directory, or a link to one,
 // which a removal takes away without following, by RemoveDirectoryW, and
@@ -1715,46 +1663,6 @@ SN_HELD int64_t sn_os_readlink(sn_string path, sn_string *out) {
     }
 
     sn_free(block);
-    return code;
-}
-
-// win_create_temp makes and opens a new file under dir as win_mkdir_temp
-// names a directory, for reading and writing, the owner's; the
-// descriptor and the name are stored, or on a failure the name the
-// error is about and the call that failed, open or stat.
-SN_HELD_STATIC static int64_t win_create_temp(sn_string dir, sn_string pattern, int64_t *fd, sn_string *out,
-                                              sn_string *op) {
-    sn_string_drop(op);
-    *op = SN_STR(OP_OPEN, sizeof OP_OPEN - 1);
-    sn_string prefix, suffix;
-    sn_os_tempParts(dir, pattern, SEPARATOR[0], &prefix, &suffix);
-    int code = EEXIST;
-    for (int try = 0; try < 10000 && code == EEXIST; try++) {
-        sn_string name = sn_os_tempName(prefix, suffix);
-        int f = win_open(name, _O_RDWR | _O_CREAT | _O_EXCL, mode_owner, false);
-        if (f >= 0) {
-            sn_string_free(prefix);
-            sn_string_drop(out);
-            *out = name;
-            *fd = f;
-            return 0;
-        }
-
-        code = errno;
-        sn_string_free(name);
-    }
-
-    return sn_os_tempFailed(dir, prefix, suffix, code, win_dir_missing(dir, code), out, op);
-}
-
-SN_HELD int64_t sn_os_createTemp(sn_string dir, sn_string pattern, int64_t *fd, sn_string *out, sn_string *op) {
-    if (dir.len > 0) {
-        return win_create_temp(dir, pattern, fd, out, op);
-    }
-
-    sn_string tmp = sn_os_TempDir();
-    int64_t code = win_create_temp(tmp, pattern, fd, out, op);
-    sn_string_free(tmp);
     return code;
 }
 

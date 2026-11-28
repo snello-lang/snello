@@ -13,14 +13,19 @@
 // argument.
 package os
 
-import ("fmt"; "io"; "path/filepath"; "time")
+import ("fmt"; "io"; "math/rand"; "path/filepath"; "time")
 
 // The error numbers the package reports of its own accord, where the
 // system was not asked: each is the same number on every system Snello
 // runs on.
 const eexist int = 17  // file exists
+const enoent int = 2   // no such file or directory
 const enotdir int = 20 // not a directory
 const einval int = 22  // invalid argument
+
+// tempTries is how many names MkdirTemp and CreateTemp try before giving
+// up on a directory where every name drawn is taken.
+const tempTries = 10000
 
 // maxLinks is how many symbolic links EvalSymlinks follows in one path
 // before it gives up on a chain that may loop: a bound above any
@@ -438,14 +443,21 @@ func MkdirTemp(dir ref string, pattern ref string) Result<string, io.Error> {
 		return Err(io.NewError("mkdirtemp", pattern.Clone(), "pattern contains path separator", io.Other))
 	}
 
-	path := ""
-	op := ""
-	code := mkdirTemp(dir, pattern, mut path, mut op)
-	if code != 0 {
-		return Err(io.Errno(op, path, code))
+	under := tempUnder(dir)
+	prefix, suffix := tempParts(ref under, pattern)
+	for try := 0; try < tempTries; try++ {
+		name := tempName(ref prefix, ref suffix)
+		code := mkdir(ref name, 0o700)
+		if code == 0 {
+			return Ok(name)
+		}
+
+		if code != eexist {
+			return Err(tempFailed("mkdirtemp", ref under, ref prefix, ref suffix, code))
+		}
 	}
 
-	return Ok(path)
+	return Err(tempFailed("mkdirtemp", ref under, ref prefix, ref suffix, eexist))
 }
 
 // Remove removes the file path names, or the directory when it is
@@ -1055,15 +1067,22 @@ func CreateTemp(dir ref string, pattern ref string) Result<File, io.Error> {
 		return Err(io.NewError("createtemp", pattern.Clone(), "pattern contains path separator", io.Other))
 	}
 
-	fd := 0
-	name := ""
-	op := ""
-	code := createTemp(dir, pattern, mut fd, mut name, mut op)
-	if code != 0 {
-		return Err(io.Errno(op, name, code))
+	under := tempUnder(dir)
+	prefix, suffix := tempParts(ref under, pattern)
+	for try := 0; try < tempTries; try++ {
+		name := tempName(ref prefix, ref suffix)
+		fd := 0
+		code := openFile(ref name, O_RDWR|O_CREATE|O_EXCL, 0o600, mut fd)
+		if code == 0 {
+			return Ok(File{fd: fd, name: name, stream: false, appending: false})
+		}
+
+		if code != eexist {
+			return Err(tempFailed("open", ref under, ref prefix, ref suffix, code))
+		}
 	}
 
-	return Ok(File{fd: fd, name: name, stream: false, appending: false})
+	return Err(tempFailed("open", ref under, ref prefix, ref suffix, eexist))
 }
 
 // Executable returns the path of the running program's file, absolute:
@@ -1736,6 +1755,61 @@ func cleanGlobDir(dir ref string) string {
 	return dir[0 : dir.Len()-1].Clone()
 }
 
+// tempUnder is the directory a temporary name is made under: dir, or
+// the system's temporary directory when dir is empty.
+func tempUnder(dir ref string) string {
+	if dir.Len() == 0 {
+		return TempDir()
+	}
+
+	return dir.Clone()
+}
+
+// tempParts splits a pattern into the prefix a temporary name starts
+// with, the directory and the pattern up to its last *, joined with a
+// separator unless the directory ends in one, and the suffix after the
+// *, empty when the pattern has none; both are new strings.
+func tempParts(under ref string, pattern ref string) (string, string) {
+	star := pattern.Len()
+	if i := pattern.LastIndexByte('*') {
+		star = i
+	}
+
+	prefix := under.Clone()
+	if under.Len() > 0 && !filepath.IsSeparator(under[under.Len()-1]) {
+		prefix = prefix + string(filepath.Separator)
+	}
+
+	suffix := ""
+	if star < pattern.Len() {
+		suffix = pattern[star+1:].Clone()
+	}
+
+	return (prefix + pattern[0:star], suffix)
+}
+
+// tempName is one name to try: the prefix, a random number and the
+// suffix.
+func tempName(prefix ref string, suffix ref string) string {
+	return prefix + fmt.Sprint(rand.Int()) + suffix
+}
+
+// tempFailed is the error of a temporary name that could not be made,
+// with the error number code: a directory that is missing is reported
+// by its stat, since the parent may be what is missing, and anything
+// else by the pattern of the names tried, "open /tmp/up-*.bin: file
+// exists".
+func tempFailed(op string, under ref string, prefix ref string, suffix ref string, code int) io.Error {
+	if code == enoent {
+		var fi FileInfo
+		if statInto(under, true, mut fi) == enoent {
+			return io.Errno("stat", under, enoent)
+		}
+	}
+
+	return io.Errno(op, ref (prefix + "*" + suffix), code)
+}
+
 // hasSeparator reports whether p holds a separator of the system's.
 func hasSeparator(p ref string) bool {
 	for i := 0; i < p.Len(); i++ {
@@ -1776,11 +1850,6 @@ func create(path ref string, fd mut int) int
 // readToString reads the file path whole into out, storing in inRead
 // failedInRead when the read failed and 0 when the open did.
 func readToString(path ref string, out mut string, inRead mut int) int
-
-// mkdirTemp makes a directory named after pattern under dir and
-// stores its path in out; on a failure, out holds the path the error
-// is about and op the call that failed.
-func mkdirTemp(dir ref string, pattern ref string, out mut string, op mut string) int
 
 // removeAll removes path and all it holds; on a failure, failed holds
 // the entry it failed on and op the call that failed.
@@ -1888,12 +1957,6 @@ func symlink(target ref string, link ref string) int
 
 // readlink stores the text of the symbolic link at path in out.
 func readlink(path ref string, out mut string) int
-
-// createTemp makes and opens a new file under dir, or the system's
-// temporary directory when dir is empty, named by pattern as mkdirTemp
-// names a directory, and stores its descriptor and name; on a failure
-// name holds what the error is about and op the call that failed.
-func createTemp(dir ref string, pattern ref string, fd mut int, name mut string, op mut string) int
 
 // executable stores the path of the running program's file in out.
 func executable(out mut string) int

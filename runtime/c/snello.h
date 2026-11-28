@@ -776,7 +776,6 @@ extern sn_slice sn_os_Args; // the command line, as a slice of sn_string
 int64_t sn_os_open(sn_string path, int64_t *fd);
 int64_t sn_os_create(sn_string path, int64_t *fd);
 int64_t sn_os_readToString(sn_string path, sn_string *out, int64_t *inRead);
-int64_t sn_os_mkdirTemp(sn_string dir, sn_string pattern, sn_string *out, sn_string *op);
 int64_t sn_os_removeAll(sn_string path, sn_string *failed, sn_string *op);
 int64_t sn_os_remove(sn_string path);
 int64_t sn_os_Cores(void);
@@ -822,7 +821,6 @@ int64_t sn_os_ftruncate(int64_t fd, int64_t size);
 int64_t sn_os_link(sn_string from, sn_string to);
 int64_t sn_os_symlink(sn_string target, sn_string link);
 int64_t sn_os_readlink(sn_string path, sn_string *out);
-int64_t sn_os_createTemp(sn_string dir, sn_string pattern, int64_t *fd, sn_string *out, sn_string *op);
 int64_t sn_os_executable(sn_string *out);
 int64_t sn_os_Getppid(void);
 int64_t sn_os_getuid(void); // Unix alone

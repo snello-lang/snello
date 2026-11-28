@@ -411,10 +411,6 @@ void sn_net_pipe_op_free(void *op);
 #endif
 int64_t sn_net_waiting(void);
 int sn_net_poll(sn_task **woke, int *taken);
-void sn_os_tempParts(sn_string dir, sn_string pattern, char separator, sn_string *prefix, sn_string *suffix); // os.c, shared
-sn_string sn_os_tempName(sn_string prefix, sn_string suffix);
-int64_t sn_os_tempFailed(sn_string dir, sn_string prefix, sn_string suffix, int64_t code, bool dirMissing, sn_string *out,
-                         sn_string *op);
 int64_t sn_os_readExecutable(sn_string *out); // os.c, os_windows.c: the path of the program's file, for os.Executable's one read
 void sn_net_kept(int64_t taken);
 void sn_handoff_wait(sn_handoff *h);
