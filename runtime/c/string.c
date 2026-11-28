@@ -703,18 +703,25 @@ bool sn_string_contains(sn_string s, sn_string t) { return find(s, t) >= 0; }
 
 int64_t sn_string_index(sn_string s, sn_string t) { return find(s, t); }
 
+// marked returns a bit at the top of every byte of w equal to the byte
+// pattern repeats, and no other: the exact form, since a borrow from a
+// lower byte would mark a byte above a true one falsely.
+static inline uint64_t marked(uint64_t w, uint64_t pattern) {
+    const uint64_t hi = 0x8080808080808080u, seven = 0x7f7f7f7f7f7f7f7fu;
+    uint64_t z = w ^ pattern;
+    return ~(((z & seven) + seven) | z | seven) & hi;
+}
+
 // last_byte returns the offset of the last c in p, or -1: the memrchr
 // glibc has and the other C libraries lack, eight bytes at a time from
 // the end, the highest matching byte of a word picked out of it.
 static int64_t last_byte(const uint8_t *p, int64_t n, uint8_t c) {
-    const uint64_t lo = 0x0101010101010101u, hi = 0x8080808080808080u, seven = 0x7f7f7f7f7f7f7f7fu;
-    uint64_t pattern = lo * c;
+    uint64_t pattern = 0x0101010101010101u * c;
     int64_t i = n;
     for (; i >= 8; i -= 8) {
         uint64_t w;
         memcpy(&w, p + i - 8, 8);
-        uint64_t z = w ^ pattern;
-        uint64_t zero = ~(((z & seven) + seven) | z | seven) & hi; // exact: no byte above a zero one is marked
+        uint64_t zero = marked(w, pattern);
         if (zero != 0) {
             return i - 8 + (63 - __builtin_clzll(zero)) / 8;
         }
@@ -1083,32 +1090,67 @@ void sn_runes(sn_string s, sn_slice *out) {
     }
 }
 
+// cut_line appends to out the line that runs from start to the newline
+// at nl, without a carriage return before the newline.
+static inline void cut_line(sn_slice *out, const uint8_t *start, const uint8_t *nl) {
+    const uint8_t *stop = nl;
+    if (stop > start && stop[-1] == '\r') {
+        stop--;
+    }
+
+    ((sn_string *)out->ptr)[out->len++] = SN_STR(start, stop - start);
+}
+
 // sn_lines splits s at every newline into views of s, each without
 // its newline and a carriage return before it; a last line without a
-// newline is a line, a trailing newline does not make an empty one.
+// newline is a line, kept whole to a carriage return that ends it,
+// and a trailing newline does not make an empty one. The newlines are
+// counted first, eight bytes at a time, so that the result is made
+// once at its length, and found the same way, each line cut at the
+// next marked byte of the word.
 void sn_lines(sn_string s, sn_slice *out) {
     sn_check_string(s);
     out->ptr = NULL;
     out->len = 0;
     out->cap = 0;
-    int64_t start = 0;
-    for (int64_t i = 0; i <= s.len; i++) {
-        if (i < s.len && s.ptr[i] != '\n') {
-            continue;
-        }
+    const uint64_t pattern = 0x0101010101010101u * '\n';
+    const uint8_t *p = s.ptr, *end = s.ptr + s.len;
+    int64_t n = s.len > 0 && end[-1] != '\n'; // the line after the last newline
+    for (; end - p >= 8; p += 8) {
+        uint64_t w;
+        memcpy(&w, p, 8);
+        n += __builtin_popcountll(marked(w, pattern));
+    }
 
-        if (i == s.len && start == s.len) {
-            break; // nothing after the last newline, or an empty string
-        }
+    for (; p < end; p++) {
+        n += *p == '\n';
+    }
 
-        int64_t end = i;
-        if (end > start && s.ptr[end - 1] == '\r') {
-            end--;
-        }
+    if (n == 0) {
+        return;
+    }
 
-        sn_string line = SN_STR(s.ptr + start, end - start);
-        sn_slice_push(out, &line, sizeof line);
-        start = i + 1;
+    sn_slice_make(out, 0, n, sizeof(sn_string));
+    const uint8_t *start = s.ptr;
+    for (p = s.ptr; end - p >= 8; p += 8) {
+        uint64_t w;
+        memcpy(&w, p, 8);
+        for (uint64_t marks = marked(w, pattern); marks != 0; marks &= marks - 1) {
+            const uint8_t *nl = p + __builtin_ctzll(marks) / 8;
+            cut_line(out, start, nl);
+            start = nl + 1;
+        }
+    }
+
+    for (; p < end; p++) {
+        if (*p == '\n') {
+            cut_line(out, start, p);
+            start = p + 1;
+        }
+    }
+
+    if (start < end) {
+        ((sn_string *)out->ptr)[out->len++] = SN_STR(start, end - start);
     }
 }
 

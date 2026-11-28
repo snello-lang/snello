@@ -837,7 +837,8 @@ func (b ref []byte) Fields() []ref []byte
 
 // Lines lends the lines of b, each without its newline and a carriage
 // return before it, as a slice of views into b; a last line without a
-// newline is a line, and a trailing newline makes no empty one.
+// newline is a line, whole to a carriage return that ends it, and a
+// trailing newline makes no empty one.
 func (b ref []byte) Lines() []ref []byte
 
 // Split lends the runs of b between each sep, lent, as a slice of
@@ -970,8 +971,8 @@ func (s ref string) ToLower() string
 
 // Lines lends the lines of the string, split at each newline and
 // without it, nor a carriage return before it; a last line without a
-// newline is a line, and a trailing newline does not make an empty
-// one. A range over them yields each as a ref string into s, with
+// newline is a line, whole to a carriage return that ends it, and a
+// trailing newline does not make an empty one. A range over them yields each as a ref string into s, with
 // nothing copied but the slice of borrows itself.
 //
 //	for line := range text.Lines() { ... }
