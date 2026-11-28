@@ -104,6 +104,7 @@ func TestStringTextMethods(t *testing.T) {
 		{"TrimAny", "func(ref string) ref string"},
 		{"CutPrefix", "func(ref string) ref string?"},
 		{"CutSuffix", "func(ref string) ref string?"},
+		{"Bytes", "func() ref []byte"},
 	}
 	for _, tt := range tests {
 		sig := builtinMethod(Typ[String], tt.name)

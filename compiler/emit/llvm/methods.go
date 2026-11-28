@@ -305,6 +305,14 @@ func (e *Emitter) sliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *types.S
 	return unit
 }
 
+// byteView writes a string view as a view of its bytes: the pointer and
+// the length, with the cap that marks a view, so that it is never
+// freed or grown.
+func (e *Emitter) byteView(str value) value {
+	b := e.insert(value{"%sn_slice", "zeroinitializer"}, e.extract(str, 0, "ptr"), 0)
+	return e.insert(e.insert(b, e.extract(str, 1, "i64"), 1), value{"i64", snView}, 2)
+}
+
 // byteSliceMethod writes the searches, splits, trims, cuts and case a
 // []byte has from the string's, run on the bytes as a string view: a view
 // given back is a view of the bytes, a string made is taken as an
@@ -321,11 +329,7 @@ func (e *Emitter) byteSliceMethod(x *ast.CallExpr, sel *ast.SelectorExpr, t *typ
 		return e.insert(str, e.extract(b, 1, "i64"), 1)
 	}
 
-	view := func(str value) value { // a string view back as a view of the bytes, its cap the mark of a view
-		b := e.insert(value{"%sn_slice", "zeroinitializer"}, e.extract(str, 0, "ptr"), 0)
-		return e.insert(e.insert(b, e.extract(str, 1, "i64"), 1), value{"i64", snView}, 2)
-	}
-
+	view := e.byteView
 	s := asString(e.load("%sn_slice", p))
 	arg := func(i int) value { return asString(e.looked(x.Args[i], t)) }
 	pieces := func(fn string, args ...value) value {
@@ -1125,6 +1129,8 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) value {
 		return e.rt("sn_trim_right", "%sn_string", s, args[0])
 	case "TrimAny":
 		return e.rt("sn_trim_any", "%sn_string", s, args[0])
+	case "Bytes":
+		return e.byteView(s)
 	case "CutPrefix", "CutSuffix":
 		name := "sn_cut_prefix"
 		if sel.Sel.Name == "CutSuffix" {

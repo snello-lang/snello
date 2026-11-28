@@ -2,12 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package io has what reading and writing share: the Reader, Writer
-// and Seeker traits, which files implement and other sources and sinks
-// of bytes will, the Error a failed operation reports, Copy, which
-// moves everything a Reader has into a Writer, ReadAll and ReadFull,
-// which read a whole input and an exact count of bytes, and Discard, a
-// Writer that keeps nothing.
+// Package io has what reading and writing share: the Reader, Writer,
+// Seeker, ReaderAt and WriterAt traits, which files implement and other
+// sources and sinks of bytes will, the Error a failed operation
+// reports, Copy and CopyN, which move everything a Reader has, or a
+// count of bytes, into a Writer, ReadAll and ReadFull, which read a
+// whole input and an exact count of bytes, WriteString, which writes a
+// string to any Writer with no copy, LimitReader and ChainReader, which
+// bound a reader and read two as one, and Discard, a Writer that keeps
+// nothing.
 //
 // A function of this package or of os that can fail returns a
 // Result<T, Error>, never a value and an error side by side, so a
@@ -164,6 +167,29 @@ trait Seeker {
 	func (s mut Self) Seek(pos SeekFrom) Result<u64, Error>
 }
 
+// A ReaderAt is a source of bytes read at a position of the caller's
+// choosing, a file: ReadAt reads into buf from the offset off, counted
+// in bytes from the start, and returns how many bytes it read, fewer
+// than buf holds only at the end, and none at or past it, as Read
+// returns none at the end. It leaves the position Read and Write use
+// where it was, so two readers of one file read at once:
+//
+//	record := make([]byte, 64)
+//	n := f.ReadAt(mut record, 64 * i)?
+trait ReaderAt {
+	func (r ref Self) ReadAt(buf mut []byte, off u64) Result<int, Error>
+}
+
+// A WriterAt is a sink of bytes written at a position of the caller's
+// choosing, a file: WriteAt writes all of buf at the offset off, counted
+// in bytes from the start, and returns how many bytes it wrote, the
+// length of buf; one that cannot take them all fails with an Error
+// whose Written says how many it took. It leaves the position Read and
+// Write use where it was.
+trait WriterAt {
+	func (w mut Self) WriteAt(buf ref []byte, off u64) Result<int, Error>
+}
+
 // A SeekFrom says where Seek moves to: a position from the start, or an
 // offset from the current position or from the end, which may be
 // negative. A position from the start cannot be negative, so it is a
@@ -179,6 +205,34 @@ enum SeekFrom impl Copy, Clone, Eq {
 	// End is an offset from the end: End(0) is just past the last byte,
 	// and End(-2) the last byte but one.
 	End(i64)
+}
+
+// A LimitedReader reads from the reader under it at most n bytes in
+// all, then ends: what LimitReader returns, for reading one record or
+// one message out of a longer stream through what reads to the end,
+// ReadAll or a decoder:
+//
+//	head := io.ReadAll(mut io.LimitReader(mut f, 16))?
+//
+// It holds a mut borrow of the reader for as long as it lives, so the
+// reader stays its owner's and is read on from where the limit stopped
+// once the LimitedReader is gone.
+struct LimitedReader<R: Reader> impl Reader {
+	reader mut R
+	n      i64 // the bytes left to read
+}
+
+// A ChainedReader reads two readers it owns one after the other: the
+// first to its end, then the second, as if they were one stream. It is
+// what ChainReader returns, and takes the readers, since a value made
+// of two borrows could not say which it lives by; a third is read by a
+// chain of a chain and the third:
+//
+//	all := io.ReadAll(mut io.ChainReader(header, body))?
+struct ChainedReader<A: Reader, B: Reader> impl Reader {
+	first    A
+	second   B
+	onSecond bool // the first has ended
 }
 
 // A Discard is a Writer that takes every byte it is given and keeps
@@ -402,6 +456,91 @@ func ReadFull<R: Reader>(r mut R, buf mut []byte) Result<int, Error> {
 	}
 
 	return Ok(n)
+}
+
+// CopyN copies at most n bytes from src to dst, as Copy copies, and
+// returns how many it copied; an n of zero or less copies nothing. The
+// copy is n bytes long when src had them; a src that ends before n
+// bytes is an Error of Kind UnexpectedEOF, whose Written is the count
+// copied, as ReadFull reports an end partway. A failure of either side
+// ends the copy with its Error.
+//
+//	io.CopyN(mut out, mut in, size)?
+func CopyN<W: Writer, R: Reader>(dst mut W, src mut R, n i64) Result<i64, Error> {
+	limited := LimitReader(mut src, n)
+	written := Copy(mut dst, mut limited)?
+	if written < n {
+		return Err(NewError("", "", "unexpected EOF", UnexpectedEOF).WithWritten(int(written)))
+	}
+
+	return Ok(written)
+}
+
+// WriteString writes the bytes of s to w, as Write writes them, with no
+// copy of s: the slice w is handed is a view of the string. It returns
+// how many bytes it wrote, the length of s, and fails as Write fails.
+//
+//	io.WriteString(mut w, "HTTP/1.1 200 OK\r\n")?
+func WriteString<W: Writer>(w mut W, s ref string) Result<int, Error> {
+	return w.Write(s.Bytes())
+}
+
+// LimitReader returns a LimitedReader over r, which it borrows mut,
+// that ends after n bytes; an n of zero or less ends at once.
+func LimitReader<R: Reader>(r mut R, n i64) LimitedReader<R> {
+	return LimitedReader<R>{reader: r, n: n}
+}
+
+// Read reads from the reader under it into buf, at most as many bytes
+// as are left of the limit, and returns how many: zero once the limit
+// is reached or the reader has ended.
+func (l mut LimitedReader<R>) Read(buf mut []byte) Result<int, Error> {
+	if l.n <= 0 {
+		return Ok(0)
+	}
+
+	n := 0
+	if i64(len(buf)) > l.n {
+		n = l.reader.Read(mut buf[:int(l.n)])?
+	} else {
+		n = l.reader.Read(mut buf)?
+	}
+
+	l.n -= i64(n)
+	return Ok(n)
+}
+
+// Remaining returns how many bytes the limit still allows.
+func (l ref LimitedReader<R>) Remaining() i64 {
+	return l.n
+}
+
+// ChainReader returns a ChainedReader over a and b, which it takes,
+// read one after the other.
+func ChainReader<A: Reader, B: Reader>(a A, b B) ChainedReader<A, B> {
+	return ChainedReader<A, B>{first: a, second: b, onSecond: false}
+}
+
+// Read reads from the first reader until it ends, then from the second,
+// and returns how many bytes it read: zero once both have ended, and
+// zero for an empty buf, which asks the readers nothing. A read never
+// spans the two, so a record is cut where the readers meet, as one
+// stream's would not be.
+func (m mut ChainedReader<A, B>) Read(buf mut []byte) Result<int, Error> {
+	if len(buf) == 0 {
+		return Ok(0)
+	}
+
+	if !m.onSecond {
+		n := m.first.Read(mut buf)?
+		if n > 0 {
+			return Ok(n)
+		}
+
+		m.onSecond = true
+	}
+
+	return m.second.Read(mut buf)
 }
 
 // Write takes all of buf, keeps none of it, and returns its length; it

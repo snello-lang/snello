@@ -315,6 +315,8 @@ func stringMethod(name string) *Signature {
 		return reads([]*Var{param("cutset", ref(s))}, ref(s))
 	case "CutPrefix", "CutSuffix":
 		return reads([]*Var{param("p", ref(s))}, NewOption(ref(s)))
+	case "Bytes":
+		return reads(nil, ref(NewSlice(aliases[0])))
 	}
 
 	return nil

@@ -803,6 +803,8 @@ sn_string sn_expect_parts(void);
 int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n);
 int64_t sn_os_write(int64_t fd, sn_slice_u8 buf, int64_t *n);
 int64_t sn_os_writeString(int64_t fd, sn_string s, int64_t *n);
+int64_t sn_os_pread(int64_t fd, sn_slice_u8 *buf, uint64_t off, int64_t *n);
+int64_t sn_os_pwrite(int64_t fd, sn_slice_u8 buf, uint64_t off, int64_t *n);
 int64_t sn_os_syncFile(int64_t fd);
 int64_t sn_os_closeFile(int64_t fd);
 int64_t sn_os_seek(int64_t fd, int64_t whence, int64_t off, uint64_t *at);

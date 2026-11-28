@@ -726,6 +726,115 @@ SN_HELD int64_t sn_os_read(int64_t fd, sn_slice_u8 *buf, int64_t *n) {
     return 0;
 }
 
+// at_offset runs one ReadFile or WriteFile at the offset off of the
+// file h, which an OVERLAPPED carries to a synchronous handle, for at
+// most SN_IO_MAX bytes, and stores how many bytes moved: the end of the
+// file reads as zero. A synchronous handle moves its position with the
+// call, so the callers save the position first and put it back after.
+static int64_t at_offset(HANDLE h, bool write, uint8_t *p, int64_t len, uint64_t off, int64_t *moved) {
+    OVERLAPPED at = { 0 };
+    at.Offset = (DWORD)off;
+    at.OffsetHigh = (DWORD)(off >> 32);
+    DWORD count = 0, want = (DWORD)(len < (int64_t)SN_IO_MAX ? len : (int64_t)SN_IO_MAX);
+    BOOL ok = write ? WriteFile(h, p, want, &count, &at) : ReadFile(h, p, want, &count, &at);
+    if (!ok) {
+        DWORD failure = GetLastError();
+        if (!write && failure == ERROR_HANDLE_EOF) {
+            *moved = 0;
+            return 0;
+        }
+
+        return sn_errno_of(failure);
+    }
+
+    *moved = count;
+    return 0;
+}
+
+// position_of stores where the file h is, and restore_position puts it
+// back there: around a read or write at an offset, which moves a
+// synchronous handle's position as a plain one does. Two tasks reading
+// one file at offsets at once may thus see each other's position for a
+// moment, which the other systems' pread does not; a program that
+// shares a file between tasks reads at offsets alone.
+static bool position_of(HANDLE h, LARGE_INTEGER *at) {
+    LARGE_INTEGER zero = { 0 };
+    return SetFilePointerEx(h, zero, at, FILE_CURRENT);
+}
+
+static void restore_position(HANDLE h, LARGE_INTEGER at) { SetFilePointerEx(h, at, NULL, FILE_BEGIN); }
+
+// sn_os_pread fills buf from the file at the offset off, leaving the
+// file's position where it was, and stores how many bytes it read: the
+// system is asked as often as it takes to fill buf, so the count is
+// short only at the end of the file and zero at or past it.
+SN_HELD int64_t sn_os_pread(int64_t fd, sn_slice_u8 *buf, uint64_t off, int64_t *n) {
+    sn_check_slice((sn_slice *)buf);
+    *n = 0;
+    if (off > (uint64_t)INT64_MAX) {
+        return 0; // past the end of any file: nothing to read
+    }
+
+    HANDLE h = (HANDLE)_get_osfhandle((int)fd);
+    if (GetFileType(h) != FILE_TYPE_DISK) {
+        return ESPIPE; // a pipe or console has no offsets, as the other systems' pread says
+    }
+
+    LARGE_INTEGER was;
+    bool seekable = position_of(h, &was);
+    int64_t code = 0;
+    while (*n < buf->len) {
+        int64_t got;
+        code = at_offset(h, false, buf->ptr + *n, buf->len - *n, off + (uint64_t)*n, &got);
+        if (code != 0 || got == 0) {
+            break;
+        }
+
+        *n += got;
+    }
+
+    if (seekable) {
+        restore_position(h, was);
+    }
+
+    return code;
+}
+
+// sn_os_pwrite writes all of buf to the file at the offset off, leaving
+// the file's position where it was, and stores how many bytes it wrote,
+// all of them or those before a failure.
+SN_HELD int64_t sn_os_pwrite(int64_t fd, sn_slice_u8 buf, uint64_t off, int64_t *n) {
+    sn_check_slice((sn_slice *)&buf);
+    if (off > (uint64_t)INT64_MAX) {
+        return EINVAL;
+    }
+
+    HANDLE h = (HANDLE)_get_osfhandle((int)fd);
+    if (GetFileType(h) != FILE_TYPE_DISK) {
+        return ESPIPE;
+    }
+
+    LARGE_INTEGER was;
+    bool seekable = position_of(h, &was);
+    *n = 0;
+    int64_t code = 0;
+    while (*n < buf.len) {
+        int64_t wrote;
+        code = at_offset(h, true, buf.ptr + *n, buf.len - *n, off + (uint64_t)*n, &wrote);
+        if (code != 0) {
+            break;
+        }
+
+        *n += wrote;
+    }
+
+    if (seekable) {
+        restore_position(h, was);
+    }
+
+    return code;
+}
+
 SN_HELD int64_t sn_os_closeFile(int64_t fd) { return _close((int)fd) == 0 ? 0 : errno; }
 
 SN_HELD int64_t sn_os_syncFile(int64_t fd) { return _commit((int)fd) == 0 ? 0 : errno; }

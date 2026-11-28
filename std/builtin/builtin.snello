@@ -1167,6 +1167,14 @@ func (s ref string) CutPrefix(p ref string) ref string?
 // the string does not end with p.
 func (s ref string) CutSuffix(p ref string) ref string?
 
+// Bytes lends the bytes of the string as a slice, with nothing copied:
+// the view an io.Writer is handed, where []byte(s) makes a copy the
+// writer only reads. The borrow is the string's, so the slice cannot be
+// changed or kept past it.
+//
+//	w.Write(s.Bytes())?
+func (s ref string) Bytes() ref []byte
+
 // IsDigit reports whether the byte is an ASCII decimal digit, '0' to
 // '9'. A byte above 127 is no digit; text beyond ASCII is read by its
 // runes.

@@ -58,4 +58,7 @@ func main() {
 	if rest := "--flag".CutPrefix("--") {
 		fmt.Println(rest.Len(), rest)
 	}
+
+	view := "héllo".Bytes() // the string's bytes lent as a slice, nothing copied
+	fmt.Println(len(view), view[1], view[2:4].Equal(ref []byte("\xa9l")), string(view))
 }

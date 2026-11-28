@@ -69,7 +69,7 @@ struct Builder {
 //
 //	r := strings.NewReader("one\ntwo")
 //	sc := bufio.NewScanner(mut r)
-struct Reader impl io.Reader, io.Seeker {
+struct Reader impl io.Reader, io.Seeker, io.ReaderAt {
 	s             string
 	at            int // the bytes before at have been read; Seek may put it past the end
 	lastRuneWidth int // the width of the rune the last ReadRune returned, which UnreadRune steps back over, or nothingToUnread
@@ -309,6 +309,18 @@ func (r mut Reader) Seek(pos io.SeekFrom) Result<u64, io.Error> {
 	r.at = int(moved)
 	r.lastRuneWidth = nothingToUnread
 	return Ok(u64(moved))
+}
+
+// ReadAt copies into buf the bytes of the string from the offset off,
+// as many as fit, and returns how many: fewer than buf holds at the end
+// of the string, and none at or past it. The position the reads use
+// stays where it was. It is io.ReaderAt's method and never fails.
+func (r ref Reader) ReadAt(buf mut []byte, off u64) Result<int, io.Error> {
+	if off >= u64(len(r.s)) {
+		return Ok(0)
+	}
+
+	return Ok(copyString(mut buf, r.s[int(off):]))
 }
 
 // Len returns the number of bytes of the string not read yet: none

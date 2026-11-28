@@ -315,3 +315,16 @@ func TestReplacer() {
 	mixed := expect.IsSome(strings.NewReplacer("a", "xx", "a", "y", "b", "z")) // a losing pair of one byte for one does not change the kind
 	expect.Equal(ref mixed.Replace("abba"), "xxzzxx")
 }
+
+// ReadAt copies from an offset and leaves the position alone.
+func TestReaderReadAt() {
+	r := strings.NewReader("hello, world")
+	buf := make([]byte, 5)
+	expect.Equal(ref expect.IsOk(r.ReadAt(mut buf, 7)), ref 5)
+	expect.Equal(ref string(buf), "world")
+	expect.Equal(ref expect.IsOk(r.ReadAt(mut buf, 10)), ref 2) // short at the end
+	expect.Equal(ref expect.IsOk(r.ReadAt(mut buf, 12)), ref 0)
+	expect.Equal(ref expect.IsOk(r.ReadAt(mut buf, 18446744073709551615)), ref 0)
+	expect.Equal(ref r.Len(), ref 12) // nothing read from the position
+	expect.Equal(ref expect.IsSome(r.ReadByte()), ref byte('h'))
+}

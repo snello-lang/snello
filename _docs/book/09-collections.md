@@ -85,6 +85,7 @@ Operations on text are methods. Most return views into the string, which cost no
 | Method | Returns |
 |---|---|
 | `s.Len()` | The length in bytes, like `len(s)` |
+| `s.Bytes()` | The bytes as a `ref []byte`, a view with nothing copied: what an `io.Writer` is handed, where `[]byte(s)` copies |
 | `s.Trim()` | `s` without white space at either end, as a borrow: Go's `strings.TrimSpace` |
 | `s.Fields()` | The pieces between white space, each a borrow; use it in a `for` |
 | `s.Lines()` | The lines, without their newline or a carriage return before it, each a borrow; a last line without a newline counts, a trailing newline makes no empty one. Go's `strings.Lines` keeps each newline |

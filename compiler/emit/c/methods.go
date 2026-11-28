@@ -733,6 +733,8 @@ func (e *Emitter) stringMethod(x *ast.CallExpr, sel *ast.SelectorExpr) string {
 		return "sn_trim_right(" + s + ", " + args[0] + ")"
 	case "TrimAny":
 		return "sn_trim_any(" + s + ", " + args[0] + ")"
+	case "Bytes":
+		return "sn_bytes_view(" + s + ")"
 	case "CutPrefix", "CutSuffix":
 		fn := "sn_cut_prefix"
 		if sel.Sel.Name == "CutSuffix" {

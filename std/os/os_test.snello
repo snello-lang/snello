@@ -477,3 +477,35 @@ func BenchmarkReadDir() {
 		n += len(expect.IsOk(os.ReadDir(dir.Path())))
 	}
 }
+
+// ReadAt and WriteAt work at an offset and leave the position alone: a
+// read past the end gives nothing, a write past the end leaves zeros.
+func TestReadAtWriteAt() {
+	dir := testing.TempDir()
+	path := dir.Join("at.txt")
+	expect.IsOk(os.WriteString(ref path, "hello world"))
+	f := expect.IsOk(os.OpenFile(ref path, os.O_RDWR, 0o644))
+	buf := make([]byte, 5)
+	expect.Equal(ref expect.IsOk(f.ReadAt(mut buf, 6)), ref 5)
+	expect.True(buf.Equal(ref []byte("world")))
+	expect.Equal(ref expect.IsOk(f.Seek(io.Current(0))), ref u64(0)) // the position did not move
+	expect.Equal(ref expect.IsOk(f.ReadAt(mut buf, 9)), ref 2)       // short at the end
+	expect.Equal(ref expect.IsOk(f.ReadAt(mut buf, 11)), ref 0)      // at the end
+	expect.Equal(ref expect.IsOk(f.ReadAt(mut buf, 100)), ref 0)     // past it
+	expect.Equal(ref expect.IsOk(f.WriteAt(ref []byte("WORLD"), 6)), ref 5)
+	expect.Equal(ref expect.IsOk(f.WriteAt(ref []byte("!"), 13)), ref 1) // past the end: a gap of zeros
+	expect.Equal(ref expect.IsOk(f.Seek(io.Current(0))), ref u64(0))
+	all := expect.IsOk(io.ReadAll(mut f))
+	expect.Equal(ref len(all), ref 14)
+	expect.True(all[:11].Equal(ref []byte("hello WORLD")))
+	expect.Equal(ref all[11], ref byte(0))
+	expect.Equal(ref all[13], ref byte('!'))
+	expect.IsOk(f.Close())
+	appending := expect.IsOk(os.OpenFile(ref path, os.O_WRONLY|os.O_APPEND, 0o644))
+	refused := expect.IsErr(appending.WriteAt(ref []byte("x"), 0)) // every write of an appending file goes to the end: no offset
+	expect.Contains(ref refused.Error(), "O_APPEND")
+	expect.IsOk(appending.Close())
+	readOnly := expect.IsOk(os.Open(ref path))
+	e := expect.IsErr(readOnly.WriteAt(ref []byte("x"), 0))
+	expect.Contains(ref e.Error(), ref ("write " + path)) // the operation and the file, then the system's reason
+}
